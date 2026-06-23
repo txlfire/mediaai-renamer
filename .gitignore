@@ -1,0 +1,27 @@
+# Local secrets
+.env
+.env.*
+.ssh-github/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Local data
+*.sqlite3
+*.db
+data/
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
