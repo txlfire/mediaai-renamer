@@ -1,0 +1,26 @@
+{
+  "name": "mediaai-renamer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "frontend:dev": "vite --host 127.0.0.1 --port 5173 --config frontend/vite.config.ts",
+    "frontend:build": "vue-tsc --noEmit --project frontend/tsconfig.json && vite build frontend",
+    "frontend:test": "vitest run frontend/src/api/client.test.ts"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "axios": "^1.18.1",
+    "element-plus": "^2.8.8",
+    "pinia": "^2.2.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9",
+    "vue-tsc": "^3.3.5"
+  }
+}

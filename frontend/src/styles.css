@@ -1,0 +1,112 @@
+/*
+ * 全局样式。
+ *
+ * 当前只放应用级基础布局和 M0 首页样式；业务组件样式后续优先放回组件内。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+  color: #1f2937;
+  font-family:
+    Inter,
+    "Segoe UI",
+    "Microsoft YaHei",
+    Arial,
+    sans-serif;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.topbar p,
+.status-panel p,
+.workspace-grid p {
+  margin: 8px 0 0;
+  color: #64748b;
+}
+
+.status-panel,
+.workspace-grid article {
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+}
+
+.status-panel {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+
+.status-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 96px;
+  font-weight: 600;
+}
+
+.error-text {
+  color: #b42318;
+}
+
+.workspace-grid {
+  /* 使用固定响应式网格，避免卡片内容变化造成主布局跳动。 */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.workspace-grid article {
+  padding: 20px;
+}
+
+.workspace-grid .el-icon {
+  font-size: 28px;
+  color: #2563eb;
+}
+
+.workspace-grid h2 {
+  margin: 12px 0 0;
+  font-size: 18px;
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 20px;
+  }
+
+  .topbar,
+  .status-panel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}

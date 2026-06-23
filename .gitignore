@@ -13,11 +13,14 @@ venv/
 node_modules/
 dist/
 build/
+npm-cache/
+.npm-cache/
 
 # Local data
 *.sqlite3
 *.db
-data/
+data/*
+!data/.gitkeep
 logs/
 
 # OS / editor

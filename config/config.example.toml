@@ -1,0 +1,13 @@
+[server]
+host = "0.0.0.0"
+port = 8000
+
+[paths]
+data_dir = "/app/data"
+
+[logging]
+level = "INFO"
+log_dir = "/app/logs"
+max_size_mb = 10
+backup_count = 5
+console_output = true
