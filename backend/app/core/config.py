@@ -28,6 +28,27 @@ class LoggingSettings:
 
 
 @dataclass(frozen=True)
+class ScanSettings:
+    """扫描配置。
+
+    Attributes:
+        batch_size: 单批处理的文件数量。
+        batch_interval_seconds: 每批之间的等待秒数。
+    """
+
+    batch_size: int = 100
+    batch_interval_seconds: float = 1
+
+    def __post_init__(self):
+        """校验扫描配置，避免无效配置导致扫描任务失控。"""
+
+        if self.batch_size <= 0:
+            raise ValueError("扫描批大小必须大于 0")
+        if self.batch_interval_seconds < 0:
+            raise ValueError("扫描批间隔不得小于 0")
+
+
+@dataclass(frozen=True)
 class AppSettings:
     """应用运行配置。"""
 
@@ -36,6 +57,7 @@ class AppSettings:
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()
+    scan: ScanSettings = ScanSettings()
 
 
 def load_settings() -> AppSettings:

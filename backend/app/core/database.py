@@ -4,6 +4,7 @@
 """
 
 from pathlib import Path
+from contextlib import closing
 import sqlite3
 
 from app.core.config import AppSettings
@@ -24,10 +25,50 @@ def ensure_database(settings: AppSettings) -> Path:
 
     logger.info("开始检查数据库目录和基础表")
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(settings.database_path) as connection:
+    with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS app_meta "
             "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS media_sources "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "name TEXT NOT NULL, "
+            "path TEXT NOT NULL UNIQUE, "
+            "enabled INTEGER NOT NULL DEFAULT 1, "
+            "created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS scan_jobs "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "media_source_id INTEGER NOT NULL, "
+            "status TEXT NOT NULL, "
+            "batch_size INTEGER NOT NULL, "
+            "batch_interval_seconds REAL NOT NULL, "
+            "scanned_count INTEGER NOT NULL DEFAULT 0, "
+            "video_count INTEGER NOT NULL DEFAULT 0, "
+            "warning_count INTEGER NOT NULL DEFAULT 0, "
+            "error_message TEXT, "
+            "started_at TEXT, "
+            "ended_at TEXT, "
+            "created_at TEXT NOT NULL, "
+            "FOREIGN KEY(media_source_id) REFERENCES media_sources(id))"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS media_files "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "media_source_id INTEGER NOT NULL, "
+            "scan_job_id INTEGER NOT NULL, "
+            "file_path TEXT NOT NULL, "
+            "file_name TEXT NOT NULL, "
+            "extension TEXT NOT NULL, "
+            "file_size INTEGER NOT NULL, "
+            "modified_at TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, "
+            "FOREIGN KEY(media_source_id) REFERENCES media_sources(id), "
+            "FOREIGN KEY(scan_job_id) REFERENCES scan_jobs(id))"
+        )
+        connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
     return settings.database_path

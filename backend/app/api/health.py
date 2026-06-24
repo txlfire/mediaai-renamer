@@ -3,7 +3,7 @@
 用于前端和部署平台确认后端服务是否已经启动并可访问。
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.core.logger import get_logger
 
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 
 @router.get("/health")
-def health() -> dict[str, str]:
+def health(request: Request) -> dict[str, str]:
     """返回后端健康状态。
 
     Returns:
@@ -20,8 +20,9 @@ def health() -> dict[str, str]:
     """
 
     logger.debug("收到健康检查请求")
+    settings = request.app.state.settings
     return {
-        "app": "MediaAI Renamer",
-        "version": "0.1.0",
+        "app": settings.app_name,
+        "version": settings.version,
         "status": "ok",
     }

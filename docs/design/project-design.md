@@ -159,8 +159,8 @@ Nginx / Vite Dev Proxy
 
 Docker Compose 包含：
 
-- `backend`：FastAPI 服务，默认端口 `8000`。
-- `frontend`：Nginx 静态服务，默认端口 `8080`。
+- `backend`：FastAPI 服务，默认端口 `8970`。
+- `frontend`：Nginx 静态服务，对外默认端口 `8971`。
 - `data`：SQLite 和运行数据挂载目录。
 - `logs`：应用日志、错误日志、LLM 日志和批量任务日志挂载目录。
 - `config`：配置文件挂载目录。

@@ -29,7 +29,7 @@
 
 ```powershell
 $env:PYTHONPATH = "backend"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --app-dir backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8970 --reload --app-dir backend
 ```
 
 前端启动：
@@ -48,7 +48,7 @@ http://127.0.0.1:5173
 后端健康检查：
 
 ```text
-GET http://127.0.0.1:8000/api/health
+GET http://127.0.0.1:8970/api/health
 ```
 
 ## 3. Docker 启动
@@ -60,8 +60,8 @@ docker compose up --build
 默认地址：
 
 ```text
-Web: http://localhost:8080
-API: http://localhost:8000
+Web: http://localhost:8971
+API: http://localhost:8970
 ```
 
 ## 4. 测试命令
@@ -70,7 +70,7 @@ API: http://localhost:8000
 
 ```powershell
 $env:PYTHONPATH = "backend"
-.\.venv\Scripts\python.exe -m unittest backend.tests.test_health -v
+.\.venv\Scripts\python.exe -m unittest discover backend\tests -v
 ```
 
 前端测试：
@@ -92,6 +92,38 @@ npm audit --audit-level=moderate
 ```
 
 ## 5. 编码规范
+
+## 5. M1 API
+
+媒体源：
+
+- `GET /api/media-sources`
+- `POST /api/media-sources`
+
+扫描：
+
+- `POST /api/scan-jobs`
+- `GET /api/scan-jobs`
+- `GET /api/media-files`
+
+日志：
+
+- `GET /api/logs`
+- `GET /api/logs/export`
+
+## 6. 扫描配置
+
+配置示例：
+
+```toml
+[scan]
+batch_size = 100
+batch_interval_seconds = 1
+```
+
+扫描采用分批执行，默认每批 100 个文件，每批之间间隔 1 秒。
+
+## 7. 编码规范
 
 通用要求：
 
@@ -116,7 +148,7 @@ npm audit --audit-level=moderate
 - 状态放在 Pinia store。
 - 表单使用 Element Plus 校验。
 
-## 6. 注释要求
+## 8. 注释要求
 
 注释使用中文，命名保持英文。
 
@@ -139,7 +171,7 @@ npm audit --audit-level=moderate
 - 重复代码字面含义的说明。
 - 已经过期或与代码不一致的说明。
 
-## 7. 日志标准
+## 9. 日志标准
 
 日志配置位于后端 `LoggingSettings`，后续接入 `config.toml` 后由配置文件控制。
 
@@ -166,7 +198,7 @@ npm audit --audit-level=moderate
 
 Docker 部署时，`./logs` 会挂载到后端容器的 `/app/logs`，便于 NAS 页面查看和导出。
 
-## 8. 提交前检查
+## 10. 提交前检查
 
 提交前至少执行：
 
@@ -184,12 +216,13 @@ npm audit --audit-level=moderate
 docker compose up --build
 ```
 
-## 9. 文档更新
+## 11. 文档更新
 
 每次完成阶段性开发后，必须更新：
 
 - `docs/design/` 中的设计文档。
 - `docs/development/` 中的开发文档。
+- `docs/work-logs/` 中的工作日志、阶段复盘和验证记录。
 - README 中的启动和验证说明。
 
 API 稳定后，新增接口文档放入 `docs/api/`。
