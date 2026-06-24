@@ -4,7 +4,7 @@ export const PAGE_SIZE_ALL = 0;
 export const PAGE_SIZE_OPTIONS = [10, 50, PAGE_SIZE_ALL] as const;
 
 export type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
-export type PaginationKey = "media-sources" | "scan-jobs" | "scan-results";
+export type PaginationKey = "media-sources" | "scan-jobs" | "scan-results" | "rename-previews";
 
 type PaginationState = {
   currentPage: number;

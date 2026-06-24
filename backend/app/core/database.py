@@ -69,6 +69,24 @@ def ensure_database(settings: AppSettings) -> Path:
             "FOREIGN KEY(media_source_id) REFERENCES media_sources(id), "
             "FOREIGN KEY(scan_job_id) REFERENCES scan_jobs(id))"
         )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS rename_previews "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "media_file_id INTEGER NOT NULL UNIQUE, "
+            "media_type TEXT NOT NULL, "
+            "parsed_title TEXT NOT NULL, "
+            "parsed_year INTEGER, "
+            "season INTEGER, "
+            "episode INTEGER, "
+            "original_extension TEXT NOT NULL, "
+            "suggested_name TEXT NOT NULL, "
+            "edited_name TEXT, "
+            "status TEXT NOT NULL, "
+            "message TEXT, "
+            "created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, "
+            "FOREIGN KEY(media_file_id) REFERENCES media_files(id))"
+        )
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
     return settings.database_path

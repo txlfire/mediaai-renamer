@@ -13,8 +13,11 @@ import {
   fetchLogs,
   fetchMediaFiles,
   fetchMediaSources,
+  fetchRenamePreviews,
   fetchScanJobs,
+  generateRenamePreviews,
   getHealth,
+  updateRenamePreview,
   type ApiHttpClient,
 } from "./client";
 
@@ -102,6 +105,36 @@ describe("M1 API client", () => {
       "GET /scan-jobs",
       "GET /media-files",
       "GET /logs",
+    ]);
+  });
+});
+
+describe("M2 rename preview API client", () => {
+  it("uses rename preview endpoints", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return { data: [] as T };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        return { data: { generated_count: 1, needs_review_count: 0, edited_kept_count: 0 } as T };
+      },
+      put: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`PUT ${url}:${JSON.stringify(body)}`);
+        return { data: { id: 1, current_target_name: "Matrix.Custom.mkv" } as T };
+      },
+    };
+
+    await generateRenamePreviews({ scan_job_id: 1 }, httpClient);
+    await fetchRenamePreviews({ status: "generated", keyword: "Matrix" }, httpClient);
+    await updateRenamePreview(1, "Matrix.Custom", httpClient);
+
+    expect(calls).toEqual([
+      'POST /rename-previews/generate:{"scan_job_id":1}',
+      "GET /rename-previews?status=generated&keyword=Matrix",
+      'PUT /rename-previews/1:{"target_name":"Matrix.Custom"}',
     ]);
   });
 });

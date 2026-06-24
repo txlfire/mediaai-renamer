@@ -6,6 +6,7 @@
  */
 
 import {
+  EditPen,
   FolderOpened,
   Moon,
   Operation,
@@ -27,6 +28,7 @@ const menuItems = [
   { path: "/media-sources", label: "媒体源", icon: FolderOpened },
   { path: "/scan-jobs", label: "扫描任务", icon: Operation },
   { path: "/scan-results", label: "扫描结果", icon: VideoCamera },
+  { path: "/rename-previews", label: "命名预览", icon: EditPen },
 ];
 
 const isDarkTheme = computed(() => appStore.resolvedTheme === "dark");

@@ -23,6 +23,7 @@ export type HealthStatus = {
 export type ApiHttpClient = {
   get<T = unknown>(url: string): Promise<{ data: T }>;
   post?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
+  put?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
 };
 
 export type MediaSource = {
@@ -70,6 +71,45 @@ export type LogItem = {
   message: string;
 };
 
+export type RenamePreview = {
+  id: number;
+  media_file_id: number;
+  file_path: string;
+  file_name: string;
+  media_type: "movie" | "episode" | "unknown" | string;
+  parsed_title: string;
+  parsed_year: number | null;
+  season: number | null;
+  episode: number | null;
+  suggested_name: string;
+  edited_name: string | null;
+  current_target_name: string;
+  status: "generated" | "edited" | "needs_review" | string;
+  message: string | null;
+  updated_at: string;
+};
+
+export type RenamePreviewFilters = {
+  media_source_id?: number;
+  scan_job_id?: number;
+  status?: string;
+  media_type?: string;
+  keyword?: string;
+};
+
+export type GenerateRenamePreviewsPayload = {
+  media_source_id?: number;
+  scan_job_id?: number;
+  media_file_ids?: number[];
+  overwrite_edited?: boolean;
+};
+
+export type PreviewGenerationSummary = {
+  generated_count: number;
+  needs_review_count: number;
+  edited_kept_count: number;
+};
+
 // API 使用相对路径，确保 Docker、NAS 反向代理和本地开发环境都能复用同一套前端代码。
 export const apiClient = axios.create({
   baseURL: "/api",
@@ -96,6 +136,13 @@ function requirePost(httpClient: ApiHttpClient) {
     throw new Error("HTTP 客户端缺少 POST 能力");
   }
   return httpClient.post.bind(httpClient);
+}
+
+function requirePut(httpClient: ApiHttpClient) {
+  if (!httpClient.put) {
+    throw new Error("HTTP 瀹㈡埛绔己灏?PUT 鑳藉姏");
+  }
+  return httpClient.put.bind(httpClient);
 }
 
 export async function fetchMediaSources(
@@ -136,4 +183,42 @@ export async function fetchMediaFiles(httpClient: ApiHttpClient = apiClient): Pr
 export async function fetchLogs(httpClient: ApiHttpClient = apiClient): Promise<LogItem[]> {
   const response = await httpClient.get<{ items: LogItem[] }>("/logs");
   return response.data.items;
+}
+
+export async function generateRenamePreviews(
+  payload: GenerateRenamePreviewsPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<PreviewGenerationSummary> {
+  const post = requirePost(httpClient);
+  const response = await post<PreviewGenerationSummary>("/rename-previews/generate", payload);
+  return response.data;
+}
+
+export async function fetchRenamePreviews(
+  filters: RenamePreviewFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreview[]> {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  });
+  const query = params.toString();
+  const response = await httpClient.get<RenamePreview[]>(
+    query ? `/rename-previews?${query}` : "/rename-previews",
+  );
+  return response.data;
+}
+
+export async function updateRenamePreview(
+  previewId: number,
+  targetName: string,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreview> {
+  const put = requirePut(httpClient);
+  const response = await put<RenamePreview>(`/rename-previews/${previewId}`, {
+    target_name: targetName,
+  });
+  return response.data;
 }

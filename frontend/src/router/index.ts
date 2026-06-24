@@ -7,6 +7,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 import MediaSourcesView from "../views/MediaSourcesView.vue";
+import RenamePreviewsView from "../views/RenamePreviewsView.vue";
 import ScanJobsView from "../views/ScanJobsView.vue";
 import ScanResultsView from "../views/ScanResultsView.vue";
 
@@ -31,6 +32,11 @@ const router = createRouter({
       path: "/scan-results",
       name: "scan-results",
       component: ScanResultsView,
+    },
+    {
+      path: "/rename-previews",
+      name: "rename-previews",
+      component: RenamePreviewsView,
     },
   ],
 });
