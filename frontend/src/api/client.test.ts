@@ -10,6 +10,7 @@ import {
   apiClient,
   createMediaSource,
   createScanJob,
+  fetchLocalDirectories,
   fetchLogs,
   fetchMediaFiles,
   fetchMediaSources,
@@ -34,7 +35,7 @@ describe("getHealth", () => {
         return {
           data: {
             app: "MediaAI Renamer",
-            version: "0.1.0",
+            version: "0.2.0",
             status: "ok",
           } as T,
         };
@@ -43,7 +44,7 @@ describe("getHealth", () => {
 
     await expect(getHealth(httpClient)).resolves.toEqual({
       app: "MediaAI Renamer",
-      version: "0.1.0",
+      version: "0.2.0",
       status: "ok",
     });
   });
@@ -75,10 +76,12 @@ describe("M1 API client", () => {
 
     await fetchMediaSources(httpClient);
     await createMediaSource({ name: "电影", path: "D:/media", enabled: true }, httpClient);
+    await fetchLocalDirectories("D:/media", httpClient);
 
     expect(calls).toEqual([
       "GET /media-sources",
       'POST /media-sources:{"name":"电影","path":"D:/media","enabled":true}',
+      "GET /media-sources/local-directories?path=D%3A%2Fmedia",
     ]);
   });
 

@@ -1,14 +1,30 @@
+export function textByteLength(value: unknown): number {
+  return new TextEncoder().encode(String(value ?? "")).length;
+}
+
 export function truncateText(value: unknown, maxLength = 10): string {
   const text = String(value ?? "");
   if (maxLength <= 0) {
     return text;
   }
 
-  if (text.length <= maxLength) {
+  if (textByteLength(text) <= maxLength) {
     return text;
   }
 
-  return `${text.slice(0, maxLength)}...`;
+  let currentBytes = 0;
+  let result = "";
+
+  for (const char of Array.from(text)) {
+    const nextBytes = textByteLength(char);
+    if (currentBytes + nextBytes > maxLength) {
+      break;
+    }
+    currentBytes += nextBytes;
+    result += char;
+  }
+
+  return `${result}...`;
 }
 
 export function formatFileSize(value: unknown): string {

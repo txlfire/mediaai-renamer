@@ -7,9 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import closing
 import sqlite3
+import string
 
 from app.core.config import AppSettings
-from app.schema.media import MediaSource
+from app.schema.media import LocalDirectoryEntry, LocalDirectoryListing, MediaSource
 
 
 def _utc_now() -> str:
@@ -42,6 +43,53 @@ def _validate_media_source_path(path: Path) -> Path:
     if not resolved_path.is_dir():
         raise ValueError("媒体源路径必须是目录")
     return resolved_path
+
+
+def _windows_drive_entries() -> list[LocalDirectoryEntry]:
+    """返回当前 Windows 主机可访问的盘符列表。"""
+
+    entries: list[LocalDirectoryEntry] = []
+    for letter in string.ascii_uppercase:
+        drive_path = Path(f"{letter}:\\")
+        if drive_path.exists():
+            entries.append(
+                LocalDirectoryEntry(name=f"{letter}:", path=str(drive_path), is_directory=True)
+            )
+    return entries
+
+
+def list_local_directories(path: str | None = None) -> LocalDirectoryListing:
+    """列出本机目录，用于 Windows 服务端目录选择器。
+
+    path 为空时返回 Windows 盘符；path 存在时只返回其直接子目录。
+    """
+
+    if path is None or not path.strip():
+        return LocalDirectoryListing(
+            current_path=None,
+            parent_path=None,
+            entries=_windows_drive_entries(),
+        )
+
+    current_path = Path(path).expanduser().resolve()
+    if not current_path.exists():
+        raise ValueError("目录不存在")
+    if not current_path.is_dir():
+        raise ValueError("路径不是目录")
+
+    entries = [
+        LocalDirectoryEntry(name=item.name, path=str(item), is_directory=True)
+        for item in current_path.iterdir()
+        if item.is_dir()
+    ]
+    entries.sort(key=lambda item: item.name.lower())
+
+    parent_path = str(current_path.parent) if current_path.parent != current_path else None
+    return LocalDirectoryListing(
+        current_path=str(current_path),
+        parent_path=parent_path,
+        entries=entries,
+    )
 
 
 def create_media_source(

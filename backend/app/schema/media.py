@@ -16,6 +16,24 @@ class MediaSource:
 
 
 @dataclass(frozen=True)
+class LocalDirectoryEntry:
+    """本地目录浏览条目。"""
+
+    name: str
+    path: str
+    is_directory: bool
+
+
+@dataclass(frozen=True)
+class LocalDirectoryListing:
+    """本地目录浏览结果。"""
+
+    current_path: str | None
+    parent_path: str | None
+    entries: list[LocalDirectoryEntry]
+
+
+@dataclass(frozen=True)
 class ScanJob:
     """扫描任务。"""
 

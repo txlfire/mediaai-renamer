@@ -60,6 +60,23 @@ describe("table sort state", () => {
     ]);
   });
 
+  it("sorts file names in natural order", () => {
+    const store = useTableSortStore();
+    store.setSort("rename-previews", "file_name", "ascending");
+
+    const result = store.applySort("rename-previews", [
+      { file_name: "Movie 10.mkv" },
+      { file_name: "Movie 2.mkv" },
+      { file_name: "Movie 1.mkv" },
+    ]);
+
+    expect(result.map((item) => item.file_name)).toEqual([
+      "Movie 1.mkv",
+      "Movie 2.mkv",
+      "Movie 10.mkv",
+    ]);
+  });
+
   it("leaves items unchanged when sorting is cleared", () => {
     const store = useTableSortStore();
 

@@ -10,6 +10,7 @@ from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
 from app.service.media_source_service import (
     create_media_source,
+    list_local_directories,
     list_media_sources,
 )
 
@@ -74,6 +75,21 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertIn("media_sources", table_names)
             self.assertIn("scan_jobs", table_names)
             self.assertIn("media_files", table_names)
+
+    def test_list_local_directories_returns_only_child_directories(self):
+        """本地目录浏览只返回子目录，不返回普通文件。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Movies").mkdir()
+            (root / "Series").mkdir()
+            (root / "poster.jpg").write_text("poster", encoding="utf-8")
+
+            result = list_local_directories(str(root))
+
+            self.assertEqual(str(root.resolve()), result.current_path)
+            self.assertEqual(["Movies", "Series"], [item.name for item in result.entries])
+            self.assertTrue(all(item.is_directory for item in result.entries))
 
 
 if __name__ == "__main__":

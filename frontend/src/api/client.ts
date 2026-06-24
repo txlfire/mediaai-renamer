@@ -41,6 +41,18 @@ export type MediaSourceCreatePayload = {
   enabled: boolean;
 };
 
+export type LocalDirectoryEntry = {
+  name: string;
+  path: string;
+  is_directory: boolean;
+};
+
+export type LocalDirectoryListing = {
+  current_path: string | null;
+  parent_path: string | null;
+  entries: LocalDirectoryEntry[];
+};
+
 export type ScanJob = {
   id: number;
   media_source_id: number;
@@ -158,6 +170,21 @@ export async function createMediaSource(
 ): Promise<MediaSource> {
   const post = requirePost(httpClient);
   const response = await post<MediaSource>("/media-sources", payload);
+  return response.data;
+}
+
+export async function fetchLocalDirectories(
+  path = "",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<LocalDirectoryListing> {
+  const params = new URLSearchParams();
+  if (path.trim()) {
+    params.set("path", path);
+  }
+  const query = params.toString();
+  const response = await httpClient.get<LocalDirectoryListing>(
+    query ? `/media-sources/local-directories?${query}` : "/media-sources/local-directories",
+  );
   return response.data;
 }
 

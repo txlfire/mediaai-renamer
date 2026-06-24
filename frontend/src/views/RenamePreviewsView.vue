@@ -125,12 +125,6 @@ onMounted(async () => {
         <h1>命名预览</h1>
         <p>基于扫描结果生成标准文件名预览，可检查和编辑目标文件名。</p>
       </div>
-      <div class="page-actions">
-        <el-button :icon="Refresh" @click="refreshPreviews">刷新</el-button>
-        <el-button type="primary" :icon="MagicStick" :loading="previewStore.loading" @click="generatePreviews">
-          生成预览
-        </el-button>
-      </div>
     </div>
 
     <div class="preview-toolbar">
@@ -186,6 +180,12 @@ onMounted(async () => {
         @change="refreshPreviews"
         @clear="refreshPreviews"
       />
+      <div class="preview-toolbar-actions">
+        <el-button type="primary" :icon="MagicStick" :loading="previewStore.loading" @click="generatePreviews">
+          生成预览
+        </el-button>
+        <el-button :icon="Refresh" @click="refreshPreviews">刷新</el-button>
+      </div>
     </div>
 
     <div class="preview-stats">
@@ -193,15 +193,15 @@ onMounted(async () => {
         <span>总数</span>
         <strong>{{ previewStore.stats.total }}</strong>
       </div>
-      <div>
+      <div class="stat-generated">
         <span>可使用</span>
         <strong>{{ previewStore.stats.generated }}</strong>
       </div>
-      <div>
+      <div class="stat-review">
         <span>需检查</span>
         <strong>{{ previewStore.stats.needsReview }}</strong>
       </div>
-      <div>
+      <div class="stat-edited">
         <span>已编辑</span>
         <strong>{{ previewStore.stats.edited }}</strong>
       </div>
@@ -213,50 +213,61 @@ onMounted(async () => {
       :data="pagedPreviews"
       class="data-table"
       :default-sort="defaultSort"
+      max-height="62vh"
       @sort-change="handleSortChange"
     >
-      <el-table-column label="原文件名" min-width="280" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column label="类型" width="100" align="center" header-align="center">
-        <template #default="{ row }">{{ mediaTypeLabel(row.media_type) }}</template>
-      </el-table-column>
-      <el-table-column label="解析标题" min-width="180" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.mediaSourceNameMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column prop="parsed_year" label="年份" width="90" align="center" header-align="center" sortable="custom">
-        <template #default="{ row }">{{ row.parsed_year ?? "-" }}</template>
-      </el-table-column>
-      <el-table-column label="季集" width="110" align="center" header-align="center">
-        <template #default="{ row }">{{ seasonEpisode(row) }}</template>
-      </el-table-column>
-      <el-table-column label="目标文件名" min-width="300" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="100" align="center" header-align="center">
+      <el-table-column prop="status" label="状态" width="92" align="center" header-align="center" sortable="custom">
         <template #default="{ row }">
           <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column prop="file_name" label="原文件名" min-width="150" align="left" header-align="left" sortable="custom">
+        <template #default="{ row }">
+          <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+        </template>
+      </el-table-column>
+      <el-table-column
+        prop="current_target_name"
+        label="目标文件名"
+        min-width="150"
+        align="left"
+        header-align="left"
+        sortable="custom"
+      >
+        <template #default="{ row }">
+          <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+        </template>
+      </el-table-column>
+      <el-table-column label="解析标题" width="176" align="left" header-align="left">
+        <template #default="{ row }">
+          <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+        </template>
+      </el-table-column>
+      <el-table-column prop="media_type" label="类型" width="82" align="center" header-align="center" sortable="custom">
+        <template #default="{ row }">{{ mediaTypeLabel(row.media_type) }}</template>
+      </el-table-column>
+      <el-table-column prop="parsed_year" label="年份" width="76" align="center" header-align="center" sortable="custom">
+        <template #default="{ row }">{{ row.parsed_year ?? "-" }}</template>
+      </el-table-column>
+      <el-table-column label="季/集" width="82" align="center" header-align="center">
+        <template #default="{ row }">{{ seasonEpisode(row) }}</template>
+      </el-table-column>
       <el-table-column
         prop="updated_at"
         label="更新时间"
-        width="180"
+        width="168"
+        class-name="nowrap-column"
         align="center"
         header-align="center"
         sortable="custom"
       >
         <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="100" align="center" header-align="center">
+      <el-table-column label="操作" width="62" align="center" header-align="center" fixed="right">
         <template #default="{ row }">
-          <el-button :icon="Edit" text @click="openEditDialog(row)">编辑</el-button>
+          <el-tooltip content="编辑" placement="top">
+            <el-button class="table-action-button action-edit" :icon="Edit" text circle @click="openEditDialog(row)" />
+          </el-tooltip>
         </template>
       </el-table-column>
     </el-table>

@@ -49,6 +49,16 @@ class M1ApiTest(unittest.TestCase):
                 self.assertEqual(200, list_response.status_code)
                 self.assertEqual(1, len(list_response.json()))
 
+                directories_response = client.get(
+                    "/api/media-sources/local-directories",
+                    params={"path": str(root)},
+                )
+                self.assertEqual(200, directories_response.status_code)
+                directory_names = [
+                    item["name"] for item in directories_response.json()["entries"]
+                ]
+                self.assertIn("media", directory_names)
+
                 scan_response = client.post(
                     "/api/scan-jobs", json={"media_source_id": source_id}
                 )

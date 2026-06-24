@@ -19,6 +19,18 @@ describe("display format helpers", () => {
     expect(value).toBe('a<b>&"中文特殊字符');
   });
 
+  it("truncates text by bytes for mixed Chinese and ASCII content", () => {
+    expect(truncateText("中文ABCD", 8)).toBe("中文AB...");
+    expect(truncateText("中文ABCD", 10)).toBe("中文ABCD");
+  });
+
+  it("keeps text at the 50 byte table display standard", () => {
+    const value = "12345678901234567890123456789012345678901234567890";
+
+    expect(truncateText(value, 50)).toBe(value);
+    expect(truncateText(`${value}1`, 50)).toBe(`${value}...`);
+  });
+
   it("formats file sizes into natural units", () => {
     expect(formatFileSize(512)).toBe("512 B");
     expect(formatFileSize(1536)).toBe("1.5 KB");

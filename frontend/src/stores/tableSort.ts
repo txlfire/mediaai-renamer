@@ -15,6 +15,11 @@ const DEFAULT_SORTS: Partial<Record<PaginationKey, SortState>> = {
   "rename-previews": { prop: "updated_at", order: "descending" },
 };
 
+const naturalCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
 function normalizeValue(value: unknown): number | string {
   if (typeof value === "number") {
     return value;
@@ -50,6 +55,10 @@ export const useTableSortStore = defineStore("tableSort", {
       return [...items].sort((left, right) => {
         const leftValue = normalizeValue(left[sort.prop]);
         const rightValue = normalizeValue(right[sort.prop]);
+
+        if (typeof leftValue === "string" && typeof rightValue === "string") {
+          return naturalCollator.compare(leftValue, rightValue) * direction;
+        }
 
         if (leftValue < rightValue) {
           return -1 * direction;
