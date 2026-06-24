@@ -25,6 +25,7 @@ export const usePreviewStore = defineStore("preview", {
         generated: state.previews.filter((preview) => preview.status === "generated").length,
         needsReview: state.previews.filter((preview) => preview.status === "needs_review").length,
         edited: state.previews.filter((preview) => preview.status === "edited").length,
+        renamed: state.previews.filter((preview) => preview.status === "renamed").length,
       };
     },
   },

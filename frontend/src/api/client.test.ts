@@ -10,10 +10,13 @@ import {
   apiClient,
   createMediaSource,
   createScanJob,
+  createRenameDryRun,
+  executeRenameOperation,
   fetchLocalDirectories,
   fetchLogs,
   fetchMediaFiles,
   fetchMediaSources,
+  fetchRenameOperation,
   fetchRenamePreviews,
   fetchScanJobs,
   generateRenamePreviews,
@@ -99,14 +102,14 @@ describe("M1 API client", () => {
     };
 
     await createScanJob(1, httpClient);
-    await fetchScanJobs(httpClient);
-    await fetchMediaFiles(httpClient);
+    await fetchScanJobs({ media_source_id: 1 }, httpClient);
+    await fetchMediaFiles({ media_source_id: 1, scan_job_id: 2 }, httpClient);
     await fetchLogs(httpClient);
 
     expect(calls).toEqual([
       'POST /scan-jobs:{"media_source_id":1}',
-      "GET /scan-jobs",
-      "GET /media-files",
+      "GET /scan-jobs?media_source_id=1",
+      "GET /media-files?media_source_id=1&scan_job_id=2",
       "GET /logs",
     ]);
   });
@@ -138,6 +141,32 @@ describe("M2 rename preview API client", () => {
       'POST /rename-previews/generate:{"scan_job_id":1}',
       "GET /rename-previews?status=generated&keyword=Matrix",
       'PUT /rename-previews/1:{"target_name":"Matrix.Custom"}',
+    ]);
+  });
+});
+
+describe("M3 rename operation API client", () => {
+  it("uses rename operation endpoints", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return { data: { id: 10, items: [] } as T };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        return { data: { id: 10, items: [] } as T };
+      },
+    };
+
+    await createRenameDryRun([1, 2], httpClient);
+    await fetchRenameOperation(10, httpClient);
+    await executeRenameOperation(10, httpClient);
+
+    expect(calls).toEqual([
+      'POST /rename-operations/dry-run:{"rename_preview_ids":[1,2]}',
+      "GET /rename-operations/10",
+      "POST /rename-operations/10/execute:{}",
     ]);
   });
 });

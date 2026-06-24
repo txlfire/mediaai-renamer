@@ -25,14 +25,22 @@ def create_scan_job(payload: ScanJobCreateRequest, request: Request):
 
 
 @router.get("/scan-jobs")
-def get_scan_jobs(request: Request):
+def get_scan_jobs(request: Request, media_source_id: int | None = None):
     """查询扫描任务列表。"""
 
-    return list_scan_jobs(request.app.state.settings)
+    return list_scan_jobs(request.app.state.settings, media_source_id=media_source_id)
 
 
 @router.get("/media-files")
-def get_media_files(request: Request):
+def get_media_files(
+    request: Request,
+    media_source_id: int | None = None,
+    scan_job_id: int | None = None,
+):
     """查询扫描出的媒体文件。"""
 
-    return list_media_files(request.app.state.settings)
+    return list_media_files(
+        request.app.state.settings,
+        media_source_id=media_source_id,
+        scan_job_id=scan_job_id,
+    )

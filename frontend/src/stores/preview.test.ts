@@ -39,6 +39,23 @@ vi.mock("../api/client", () => ({
       message: "缺少年份或季集信息",
       updated_at: "2026-06-24T00:00:00Z",
     },
+    {
+      id: 3,
+      media_file_id: 3,
+      file_path: "D:/media/Renamed.Movie.mkv",
+      file_name: "Renamed.Movie.mkv",
+      media_type: "movie",
+      parsed_title: "Renamed Movie",
+      parsed_year: null,
+      season: null,
+      episode: null,
+      suggested_name: "Renamed.Movie.mkv",
+      edited_name: null,
+      current_target_name: "Renamed.Movie.mkv",
+      status: "renamed",
+      message: null,
+      updated_at: "2026-06-24T00:00:00Z",
+    },
   ]),
   generateRenamePreviews: vi.fn(async () => ({
     generated_count: 2,
@@ -62,11 +79,12 @@ describe("preview store", () => {
 
     await store.loadPreviews();
 
-    expect(store.previews).toHaveLength(2);
-    expect(store.stats.total).toBe(2);
+    expect(store.previews).toHaveLength(3);
+    expect(store.stats.total).toBe(3);
     expect(store.stats.generated).toBe(1);
     expect(store.stats.needsReview).toBe(1);
     expect(store.stats.edited).toBe(0);
+    expect(store.stats.renamed).toBe(1);
   });
 
   it("generates previews then refreshes list", async () => {
@@ -75,6 +93,6 @@ describe("preview store", () => {
     await store.generatePreviews();
 
     expect(store.generationSummary?.generated_count).toBe(2);
-    expect(store.previews).toHaveLength(2);
+    expect(store.previews).toHaveLength(3);
   });
 });

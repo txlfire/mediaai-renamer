@@ -5,8 +5,9 @@
  * 用于保存本地或已挂载媒体目录。
  */
 
-import { FolderAdd, FolderOpened, Refresh } from "@element-plus/icons-vue";
+import { FolderAdd, FolderOpened, List, Refresh } from "@element-plus/icons-vue";
 import { computed, onMounted, reactive } from "vue";
+import { useRouter } from "vue-router";
 
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
@@ -18,6 +19,7 @@ import { canGoToParentDirectory, parentDirectoryPath } from "../utils/localDirec
 
 const mediaStore = useMediaStore();
 const paginationStore = usePaginationStore();
+const router = useRouter();
 const form = reactive({
   name: "",
   path: "",
@@ -78,6 +80,10 @@ function confirmDirectorySelection() {
   directoryPicker.visible = false;
 }
 
+function viewScanJobs(mediaSourceId: number) {
+  void router.push({ name: "scan-jobs", query: { media_source_id: String(mediaSourceId) } });
+}
+
 onMounted(() => {
   void mediaStore.loadMediaSources();
 });
@@ -126,6 +132,19 @@ onMounted(() => {
           <el-tag :type="row.enabled ? 'success' : 'info'">
             {{ row.enabled ? "启用" : "停用" }}
           </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="86" align="center" header-align="center" fixed="right">
+        <template #default="{ row }">
+          <el-tooltip content="查看任务" placement="top">
+            <el-button
+              class="table-action-button action-view"
+              :icon="List"
+              text
+              circle
+              @click="viewScanJobs(row.id)"
+            />
+          </el-tooltip>
         </template>
       </el-table-column>
     </el-table>

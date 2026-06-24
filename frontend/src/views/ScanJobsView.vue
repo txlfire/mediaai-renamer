@@ -5,8 +5,9 @@
  * 用于选择媒体源并启动全量分批扫描。
  */
 
-import { Notebook, Refresh, VideoPlay } from "@element-plus/icons-vue";
+import { Files, MagicStick, Notebook, Refresh, Search, VideoPlay } from "@element-plus/icons-vue";
 import { computed, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
@@ -19,6 +20,8 @@ import { formatDateTime, formatScanJobStatus } from "../utils/displayFormat";
 const mediaStore = useMediaStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
+const route = useRoute();
+const router = useRouter();
 const selectedSourceId = ref<number>();
 const defaultSort = { prop: "id", order: "descending" as const };
 const pagedScanJobs = computed(() =>
@@ -44,8 +47,41 @@ async function startScan() {
   await mediaStore.startScan(selectedSourceId.value);
 }
 
+async function queryScanJobs() {
+  if (!selectedSourceId.value) {
+    mediaStore.scanJobs = [];
+    return;
+  }
+  await mediaStore.loadScanJobs({ media_source_id: selectedSourceId.value });
+}
+
+function viewScanResults(row: { id: number; media_source_id: number }) {
+  void router.push({
+    name: "scan-results",
+    query: {
+      media_source_id: String(row.media_source_id),
+      scan_job_id: String(row.id),
+    },
+  });
+}
+
+function viewRenamePreviews(row: { id: number; media_source_id: number }) {
+  void router.push({
+    name: "rename-previews",
+    query: {
+      media_source_id: String(row.media_source_id),
+      scan_job_id: String(row.id),
+    },
+  });
+}
+
 onMounted(async () => {
-  await Promise.all([mediaStore.loadMediaSources(), mediaStore.loadScanJobs()]);
+  await mediaStore.loadMediaSources();
+  const routeSourceId = Number(route.query.media_source_id);
+  if (Number.isFinite(routeSourceId) && routeSourceId > 0) {
+    selectedSourceId.value = routeSourceId;
+    await queryScanJobs();
+  }
 });
 </script>
 
@@ -58,7 +94,7 @@ onMounted(async () => {
       </div>
       <div class="page-actions">
         <el-button :icon="Notebook" @click="mediaStore.openLogDrawer">查看日志</el-button>
-        <el-button :icon="Refresh" @click="mediaStore.loadScanJobs">刷新</el-button>
+        <el-button :icon="Refresh" @click="queryScanJobs">刷新</el-button>
       </div>
     </div>
 
@@ -66,6 +102,7 @@ onMounted(async () => {
       <el-select v-model="selectedSourceId" placeholder="选择媒体源" class="source-select">
         <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
+      <el-button :icon="Search" :disabled="!selectedSourceId" @click="queryScanJobs">查询</el-button>
       <el-button type="primary" :icon="VideoPlay" :loading="mediaStore.loading" @click="startScan">
         开始全量扫描
       </el-button>
@@ -119,6 +156,30 @@ onMounted(async () => {
       >
         <template #default="{ row }">
           {{ formatDateTime(row.ended_at) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="112" align="center" header-align="center" fixed="right">
+        <template #default="{ row }">
+          <div class="table-actions">
+            <el-tooltip content="扫描结果" placement="top">
+              <el-button
+                class="table-action-button action-view"
+                :icon="Files"
+                text
+                circle
+                @click="viewScanResults(row)"
+              />
+            </el-tooltip>
+            <el-tooltip content="命名预览" placement="top">
+              <el-button
+                class="table-action-button action-magic"
+                :icon="MagicStick"
+                text
+                circle
+                @click="viewRenamePreviews(row)"
+              />
+            </el-tooltip>
+          </div>
         </template>
       </el-table-column>
     </el-table>

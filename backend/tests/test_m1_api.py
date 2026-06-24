@@ -70,6 +70,18 @@ class M1ApiTest(unittest.TestCase):
                 self.assertEqual(1, len(files_response.json()))
                 self.assertEqual("movie.mkv", files_response.json()[0]["file_name"])
 
+                filtered_jobs_response = client.get(
+                    "/api/scan-jobs", params={"media_source_id": source_id}
+                )
+                self.assertEqual(200, filtered_jobs_response.status_code)
+                self.assertEqual(1, len(filtered_jobs_response.json()))
+
+                filtered_files_response = client.get(
+                    "/api/media-files", params={"scan_job_id": scan_response.json()["id"]}
+                )
+                self.assertEqual(200, filtered_files_response.status_code)
+                self.assertEqual(1, len(filtered_files_response.json()))
+
                 logs_response = client.get("/api/logs")
                 self.assertEqual(200, logs_response.status_code)
                 self.assertIn("items", logs_response.json())

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Edit, MagicStick, Refresh } from "@element-plus/icons-vue";
+import { Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
 import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
 
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
@@ -8,17 +9,22 @@ import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { usePreviewStore } from "../stores/preview";
+import { useRenameOperationStore } from "../stores/renameOperation";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime } from "../utils/displayFormat";
 
 const mediaStore = useMediaStore();
 const previewStore = usePreviewStore();
+const renameOperationStore = useRenameOperationStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
+const route = useRoute();
 
 const editDialogVisible = ref(false);
+const operationDialogVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
 const editingTargetName = ref("");
+const selectedPreviewIds = ref<number[]>([]);
 const defaultSort = { prop: "updated_at", order: "descending" as const };
 
 const pagedPreviews = computed(() =>
@@ -56,6 +62,7 @@ function statusLabel(value: string) {
     generated: "可使用",
     edited: "已编辑",
     needs_review: "需检查",
+    renamed: "已重命名",
   };
   return labels[value] ?? value;
 }
@@ -67,8 +74,34 @@ function statusTagType(value: string) {
   if (value === "edited") {
     return "primary";
   }
+  if (value === "renamed") {
+    return "success";
+  }
   if (value === "needs_review") {
     return "warning";
+  }
+  return "info";
+}
+
+function operationStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    ready: "可执行",
+    conflict: "冲突",
+    renamed: "已重命名",
+    failed: "失败",
+  };
+  return labels[value] ?? value;
+}
+
+function operationStatusTagType(value: string) {
+  if (value === "ready" || value === "renamed") {
+    return "success";
+  }
+  if (value === "conflict") {
+    return "warning";
+  }
+  if (value === "failed") {
+    return "danger";
   }
   return "info";
 }
@@ -85,14 +118,48 @@ function handleSortChange(event: { prop: string; order: "ascending" | "descendin
 }
 
 async function refreshPreviews() {
+  if (!previewStore.filters.scan_job_id) {
+    previewStore.previews = [];
+    return;
+  }
   await previewStore.loadPreviews(previewStore.filters);
 }
 
 async function generatePreviews() {
+  if (!previewStore.filters.scan_job_id) {
+    return;
+  }
   await previewStore.generatePreviews({
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
+}
+
+async function loadScanJobsForSelectedSource() {
+  previewStore.filters.scan_job_id = undefined;
+  previewStore.previews = [];
+  if (!previewStore.filters.media_source_id) {
+    mediaStore.scanJobs = [];
+    return;
+  }
+  await mediaStore.loadScanJobs({ media_source_id: previewStore.filters.media_source_id });
+}
+
+function handleSelectionChange(rows: Array<{ id: number }>) {
+  selectedPreviewIds.value = rows.map((row) => row.id);
+}
+
+async function runRenameDryRun() {
+  if (selectedPreviewIds.value.length === 0) {
+    return;
+  }
+  await renameOperationStore.runDryRun(selectedPreviewIds.value);
+  operationDialogVisible.value = true;
+}
+
+async function executeRenameOperation() {
+  await renameOperationStore.executeCurrentOperation();
+  await refreshPreviews();
 }
 
 function openEditDialog(row: { id: number; current_target_name: string }) {
@@ -110,11 +177,17 @@ async function saveEdit() {
 }
 
 onMounted(async () => {
-  await Promise.all([
-    mediaStore.loadMediaSources(),
-    mediaStore.loadScanJobs(),
-    previewStore.loadPreviews(),
-  ]);
+  await mediaStore.loadMediaSources();
+  const routeSourceId = Number(route.query.media_source_id);
+  const routeScanJobId = Number(route.query.scan_job_id);
+  if (Number.isFinite(routeSourceId) && routeSourceId > 0) {
+    previewStore.filters.media_source_id = routeSourceId;
+    await mediaStore.loadScanJobs({ media_source_id: routeSourceId });
+  }
+  if (Number.isFinite(routeScanJobId) && routeScanJobId > 0) {
+    previewStore.filters.scan_job_id = routeScanJobId;
+    await refreshPreviews();
+  }
 });
 </script>
 
@@ -128,13 +201,14 @@ onMounted(async () => {
     </div>
 
     <div class="preview-toolbar">
+      <div class="preview-filter-group">
       <el-select
         v-model="previewStore.filters.media_source_id"
         placeholder="媒体源"
         clearable
         class="filter-select"
-        @change="refreshPreviews"
-        @clear="refreshPreviews"
+        @change="loadScanJobsForSelectedSource"
+        @clear="loadScanJobsForSelectedSource"
       >
         <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
@@ -143,8 +217,6 @@ onMounted(async () => {
         placeholder="扫描任务"
         clearable
         class="filter-select"
-        @change="refreshPreviews"
-        @clear="refreshPreviews"
       >
         <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
@@ -153,8 +225,6 @@ onMounted(async () => {
         placeholder="状态"
         clearable
         class="filter-select"
-        @change="refreshPreviews"
-        @clear="refreshPreviews"
       >
         <el-option label="可使用" value="generated" />
         <el-option label="已编辑" value="edited" />
@@ -165,8 +235,6 @@ onMounted(async () => {
         placeholder="类型"
         clearable
         class="filter-select"
-        @change="refreshPreviews"
-        @clear="refreshPreviews"
       >
         <el-option label="电影" value="movie" />
         <el-option label="剧集" value="episode" />
@@ -177,10 +245,21 @@ onMounted(async () => {
         placeholder="搜索文件名或标题"
         clearable
         class="preview-keyword"
-        @change="refreshPreviews"
-        @clear="refreshPreviews"
       />
+      </div>
       <div class="preview-toolbar-actions">
+        <el-button :icon="Search" :disabled="!previewStore.filters.scan_job_id" @click="refreshPreviews">
+          查询
+        </el-button>
+        <el-button
+          type="success"
+          :icon="Select"
+          :disabled="selectedPreviewIds.length === 0"
+          :loading="renameOperationStore.loading"
+          @click="runRenameDryRun"
+        >
+          冲突检测
+        </el-button>
         <el-button type="primary" :icon="MagicStick" :loading="previewStore.loading" @click="generatePreviews">
           生成预览
         </el-button>
@@ -205,6 +284,10 @@ onMounted(async () => {
         <span>已编辑</span>
         <strong>{{ previewStore.stats.edited }}</strong>
       </div>
+      <div class="stat-renamed">
+        <span>已重命名</span>
+        <strong>{{ previewStore.stats.renamed }}</strong>
+      </div>
     </div>
 
     <el-alert v-if="previewStore.errorMessage" type="error" :title="previewStore.errorMessage" show-icon />
@@ -214,8 +297,10 @@ onMounted(async () => {
       class="data-table"
       :default-sort="defaultSort"
       max-height="62vh"
+      @selection-change="handleSelectionChange"
       @sort-change="handleSortChange"
     >
+      <el-table-column type="selection" width="44" align="center" />
       <el-table-column prop="status" label="状态" width="92" align="center" header-align="center" sortable="custom">
         <template #default="{ row }">
           <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag>
@@ -279,6 +364,75 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="editDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="saveEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="operationDialogVisible" title="重命名冲突检测" width="860px">
+      <div class="rename-operation-dialog">
+        <el-alert
+          v-if="renameOperationStore.errorMessage"
+          :title="renameOperationStore.errorMessage"
+          type="error"
+          show-icon
+        />
+        <div v-if="renameOperationStore.currentOperation" class="preview-stats operation-stats">
+          <div>
+            <span>总数</span>
+            <strong>{{ renameOperationStore.currentOperation.total_count }}</strong>
+          </div>
+          <div class="stat-generated">
+            <span>可执行</span>
+            <strong>{{ renameOperationStore.currentOperation.ready_count }}</strong>
+          </div>
+          <div class="stat-review">
+            <span>冲突</span>
+            <strong>{{ renameOperationStore.currentOperation.conflict_count }}</strong>
+          </div>
+          <div class="stat-edited">
+            <span>已重命名</span>
+            <strong>{{ renameOperationStore.currentOperation.renamed_count }}</strong>
+          </div>
+        </div>
+        <el-table
+          v-if="renameOperationStore.currentOperation"
+          :data="renameOperationStore.currentOperation.items"
+          class="data-table"
+          max-height="420"
+        >
+          <el-table-column label="状态" width="110" align="center" header-align="center">
+            <template #default="{ row }">
+              <el-tag :type="operationStatusTagType(row.status)" effect="light">
+                {{ operationStatusLabel(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="源路径" min-width="220" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="row.source_path" :max-length="tableDisplayConfig.pathMaxLength" />
+            </template>
+          </el-table-column>
+          <el-table-column label="目标路径" min-width="220" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="row.target_path" :max-length="tableDisplayConfig.pathMaxLength" />
+            </template>
+          </el-table-column>
+          <el-table-column label="原因" min-width="160" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="row.message || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="operationDialogVisible = false">关闭</el-button>
+        <el-button
+          type="danger"
+          :disabled="!renameOperationStore.canExecute"
+          :loading="renameOperationStore.loading"
+          @click="executeRenameOperation"
+        >
+          确认重命名
+        </el-button>
       </template>
     </el-dialog>
   </section>

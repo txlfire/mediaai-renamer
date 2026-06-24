@@ -87,6 +87,33 @@ def ensure_database(settings: AppSettings) -> Path:
             "updated_at TEXT NOT NULL, "
             "FOREIGN KEY(media_file_id) REFERENCES media_files(id))"
         )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS rename_operations "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "status TEXT NOT NULL, "
+            "mode TEXT NOT NULL, "
+            "total_count INTEGER NOT NULL DEFAULT 0, "
+            "ready_count INTEGER NOT NULL DEFAULT 0, "
+            "conflict_count INTEGER NOT NULL DEFAULT 0, "
+            "renamed_count INTEGER NOT NULL DEFAULT 0, "
+            "failed_count INTEGER NOT NULL DEFAULT 0, "
+            "created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS rename_operation_items "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "operation_id INTEGER NOT NULL, "
+            "rename_preview_id INTEGER NOT NULL, "
+            "source_path TEXT NOT NULL, "
+            "target_path TEXT NOT NULL, "
+            "status TEXT NOT NULL, "
+            "message TEXT, "
+            "created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, "
+            "FOREIGN KEY(operation_id) REFERENCES rename_operations(id), "
+            "FOREIGN KEY(rename_preview_id) REFERENCES rename_previews(id))"
+        )
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
     return settings.database_path

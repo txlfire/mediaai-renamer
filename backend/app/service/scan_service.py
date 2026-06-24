@@ -177,7 +177,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
         return _fetch_scan_job(connection, job_id)
 
 
-def list_scan_jobs(settings: AppSettings) -> list[ScanJob]:
+def _list_scan_jobs_unfiltered(settings: AppSettings) -> list[ScanJob]:
     """查询全部扫描任务。"""
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -190,7 +190,7 @@ def list_scan_jobs(settings: AppSettings) -> list[ScanJob]:
     return [_row_to_scan_job(row) for row in rows]
 
 
-def list_media_files(settings: AppSettings) -> list[MediaFile]:
+def _list_media_files_unfiltered(settings: AppSettings) -> list[MediaFile]:
     """查询全部媒体文件扫描结果。"""
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -199,5 +199,54 @@ def list_media_files(settings: AppSettings) -> list[MediaFile]:
             "SELECT id, media_source_id, scan_job_id, file_path, file_name, "
             "extension, file_size, modified_at, created_at "
             "FROM media_files ORDER BY id"
+        ).fetchall()
+    return [_row_to_media_file(row) for row in rows]
+
+
+def list_scan_jobs(settings: AppSettings, media_source_id: int | None = None) -> list[ScanJob]:
+    """List scan jobs, optionally limited to one media source."""
+
+    conditions: list[str] = []
+    params: list[object] = []
+    if media_source_id is not None:
+        conditions.append("media_source_id = ?")
+        params.append(media_source_id)
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT id, media_source_id, status, batch_size, batch_interval_seconds, "
+            "scanned_count, video_count, warning_count, error_message, started_at, "
+            f"ended_at, created_at FROM scan_jobs{where_clause} ORDER BY id",
+            params,
+        ).fetchall()
+    return [_row_to_scan_job(row) for row in rows]
+
+
+def list_media_files(
+    settings: AppSettings,
+    media_source_id: int | None = None,
+    scan_job_id: int | None = None,
+) -> list[MediaFile]:
+    """List scanned media files, optionally limited by source or scan job."""
+
+    conditions: list[str] = []
+    params: list[object] = []
+    if media_source_id is not None:
+        conditions.append("media_source_id = ?")
+        params.append(media_source_id)
+    if scan_job_id is not None:
+        conditions.append("scan_job_id = ?")
+        params.append(scan_job_id)
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT id, media_source_id, scan_job_id, file_path, file_name, "
+            "extension, file_size, modified_at, created_at "
+            f"FROM media_files{where_clause} ORDER BY id",
+            params,
         ).fetchall()
     return [_row_to_media_file(row) for row in rows]

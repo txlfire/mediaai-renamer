@@ -67,6 +67,10 @@ export type ScanJob = {
   ended_at?: string | null;
 };
 
+export type ScanJobFilters = {
+  media_source_id?: number;
+};
+
 export type MediaFile = {
   id: number;
   media_source_id: number;
@@ -120,6 +124,37 @@ export type PreviewGenerationSummary = {
   generated_count: number;
   needs_review_count: number;
   edited_kept_count: number;
+};
+
+export type MediaFileFilters = {
+  media_source_id?: number;
+  scan_job_id?: number;
+};
+
+export type RenameOperationItem = {
+  id: number;
+  operation_id: number;
+  rename_preview_id: number;
+  source_path: string;
+  target_path: string;
+  status: "ready" | "conflict" | "renamed" | "failed" | string;
+  message: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type RenameOperation = {
+  id: number;
+  status: "dry_run" | "completed" | "partial_failed" | "failed" | string;
+  mode: string;
+  total_count: number;
+  ready_count: number;
+  conflict_count: number;
+  renamed_count: number;
+  failed_count: number;
+  created_at?: string;
+  updated_at?: string;
+  items: RenameOperationItem[];
 };
 
 // API 使用相对路径，确保 Docker、NAS 反向代理和本地开发环境都能复用同一套前端代码。
@@ -197,13 +232,31 @@ export async function createScanJob(
   return response.data;
 }
 
-export async function fetchScanJobs(httpClient: ApiHttpClient = apiClient): Promise<ScanJob[]> {
-  const response = await httpClient.get<ScanJob[]>("/scan-jobs");
+function buildQueryString(filters: Record<string, unknown>) {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  });
+  return params.toString();
+}
+
+export async function fetchScanJobs(
+  filters: ScanJobFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ScanJob[]> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<ScanJob[]>(query ? `/scan-jobs?${query}` : "/scan-jobs");
   return response.data;
 }
 
-export async function fetchMediaFiles(httpClient: ApiHttpClient = apiClient): Promise<MediaFile[]> {
-  const response = await httpClient.get<MediaFile[]>("/media-files");
+export async function fetchMediaFiles(
+  filters: MediaFileFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MediaFile[]> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<MediaFile[]>(query ? `/media-files?${query}` : "/media-files");
   return response.data;
 }
 
@@ -225,13 +278,7 @@ export async function fetchRenamePreviews(
   filters: RenamePreviewFilters = {},
   httpClient: ApiHttpClient = apiClient,
 ): Promise<RenamePreview[]> {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      params.set(key, String(value));
-    }
-  });
-  const query = params.toString();
+  const query = buildQueryString(filters);
   const response = await httpClient.get<RenamePreview[]>(
     query ? `/rename-previews?${query}` : "/rename-previews",
   );
@@ -247,5 +294,33 @@ export async function updateRenamePreview(
   const response = await put<RenamePreview>(`/rename-previews/${previewId}`, {
     target_name: targetName,
   });
+  return response.data;
+}
+
+export async function createRenameDryRun(
+  renamePreviewIds: number[],
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameOperation> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameOperation>("/rename-operations/dry-run", {
+    rename_preview_ids: renamePreviewIds,
+  });
+  return response.data;
+}
+
+export async function fetchRenameOperation(
+  operationId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameOperation> {
+  const response = await httpClient.get<RenameOperation>(`/rename-operations/${operationId}`);
+  return response.data;
+}
+
+export async function executeRenameOperation(
+  operationId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameOperation> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameOperation>(`/rename-operations/${operationId}/execute`, {});
   return response.data;
 }

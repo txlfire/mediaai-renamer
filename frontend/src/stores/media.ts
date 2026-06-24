@@ -15,9 +15,11 @@ import {
   fetchScanJobs,
   type LogItem,
   type MediaFile,
+  type MediaFileFilters,
   type MediaSource,
   type MediaSourceCreatePayload,
   type ScanJob,
+  type ScanJobFilters,
 } from "../api/client";
 
 export const useMediaStore = defineStore("media", {
@@ -40,8 +42,8 @@ export const useMediaStore = defineStore("media", {
       await this.loadMediaSources();
     },
 
-    async loadScanJobs() {
-      this.scanJobs = await fetchScanJobs();
+    async loadScanJobs(filters: ScanJobFilters = {}) {
+      this.scanJobs = await fetchScanJobs(filters);
     },
 
     async startScan(mediaSourceId: number) {
@@ -49,7 +51,10 @@ export const useMediaStore = defineStore("media", {
       this.errorMessage = "";
       try {
         await createScanJob(mediaSourceId);
-        await Promise.all([this.loadScanJobs(), this.loadMediaFiles(), this.loadLogs()]);
+        await Promise.all([
+          this.loadScanJobs({ media_source_id: mediaSourceId }),
+          this.loadLogs(),
+        ]);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : "扫描任务失败";
       } finally {
@@ -57,8 +62,8 @@ export const useMediaStore = defineStore("media", {
       }
     },
 
-    async loadMediaFiles() {
-      this.mediaFiles = await fetchMediaFiles();
+    async loadMediaFiles(filters: MediaFileFilters = {}) {
+      this.mediaFiles = await fetchMediaFiles(filters);
     },
 
     async loadLogs() {

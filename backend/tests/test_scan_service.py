@@ -54,6 +54,31 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(1, len(jobs))
             self.assertEqual({"a.mkv", "b.MP4", "c.rmvb"}, {file.file_name for file in files})
 
+    def test_list_scan_jobs_and_media_files_support_filters(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first_dir = root / "first"
+            second_dir = root / "second"
+            first_dir.mkdir()
+            second_dir.mkdir()
+            (first_dir / "first.mkv").write_text("first", encoding="utf-8")
+            (second_dir / "second.mkv").write_text("second", encoding="utf-8")
+
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            first_source = create_media_source(settings, "first", first_dir, True)
+            second_source = create_media_source(settings, "second", second_dir, True)
+            first_job = run_full_scan(settings, first_source.id)
+            second_job = run_full_scan(settings, second_source.id)
+
+            first_source_jobs = list_scan_jobs(settings, media_source_id=first_source.id)
+            second_job_files = list_media_files(settings, scan_job_id=second_job.id)
+            first_source_files = list_media_files(settings, media_source_id=first_source.id)
+
+            self.assertEqual([first_job.id], [job.id for job in first_source_jobs])
+            self.assertEqual(["second.mkv"], [file.file_name for file in second_job_files])
+            self.assertEqual(["first.mkv"], [file.file_name for file in first_source_files])
+
 
 if __name__ == "__main__":
     unittest.main()

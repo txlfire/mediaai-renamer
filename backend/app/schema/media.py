@@ -108,3 +108,35 @@ class PreviewGenerationSummary:
     generated_count: int
     needs_review_count: int
     edited_kept_count: int
+
+
+@dataclass(frozen=True)
+class RenameOperationItem:
+    """One item in a safe rename operation."""
+
+    id: int
+    operation_id: int
+    rename_preview_id: int
+    source_path: str
+    target_path: str
+    status: str
+    message: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class RenameOperation:
+    """Safe rename operation with item results."""
+
+    id: int
+    status: str
+    mode: str
+    total_count: int
+    ready_count: int
+    conflict_count: int
+    renamed_count: int
+    failed_count: int
+    created_at: str
+    updated_at: str
+    items: list[RenameOperationItem]
