@@ -14,7 +14,11 @@ export const useRenameOperationStore = defineStore("renameOperation", {
   }),
   getters: {
     canExecute(state) {
-      return Boolean(state.currentOperation && state.currentOperation.ready_count > 0);
+      return Boolean(
+        state.currentOperation &&
+          state.currentOperation.status === "dry_run" &&
+          state.currentOperation.ready_count > 0,
+      );
     },
   },
   actions: {

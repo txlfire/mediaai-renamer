@@ -749,6 +749,10 @@ body {
   color: #0ea5e9;
 }
 
+.preview-stats .stat-failed strong {
+  color: #dc2626;
+}
+
 .data-table {
   overflow: hidden;
   width: 100%;

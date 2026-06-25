@@ -89,6 +89,22 @@ class RenameOperationDryRunTest(unittest.TestCase):
             )
             connection.commit()
 
+    def _insert_additional_media_file(self, media_file_id: int, file_path: Path):
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    media_file_id,
+                    str(file_path),
+                    file_path.name,
+                    file_path.suffix.lower(),
+                    file_path.stat().st_size,
+                ),
+            )
+            connection.commit()
+
     def test_dry_run_detects_existing_target_without_renaming(self):
         generate_rename_previews(self.settings)
         preview = list_rename_previews(self.settings)[0]
@@ -110,6 +126,7 @@ class RenameOperationDryRunTest(unittest.TestCase):
         executed = execute_rename_operation(self.settings, operation.id)
 
         self.assertEqual(1, executed.renamed_count)
+        self.assertEqual(0, executed.ready_count)
         self.assertEqual("completed", executed.status)
         self.assertFalse(self.source.exists())
         self.assertTrue((self.media_dir / "Movie.Safe.mkv").exists())
@@ -136,6 +153,37 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual("completed", second_execution.status)
         self.assertEqual(1, second_execution.renamed_count)
         self.assertEqual(0, second_execution.failed_count)
+
+    def test_dry_run_marks_duplicate_targets_as_conflict(self):
+        second_source = self.media_dir / "Movie.2025.2160p.mkv"
+        second_source.write_text("movie-2", encoding="utf-8")
+        self._insert_additional_media_file(2, second_source)
+        generate_rename_previews(self.settings)
+        previews = list_rename_previews(self.settings)
+
+        update_rename_preview(self.settings, previews[0].id, "Shared.Name")
+        update_rename_preview(self.settings, previews[1].id, "Shared.Name")
+
+        operation = create_rename_dry_run(self.settings, [preview.id for preview in previews])
+
+        self.assertEqual(0, operation.ready_count)
+        self.assertEqual(2, operation.conflict_count)
+        self.assertTrue(all(item.status == "conflict" for item in operation.items))
+
+    def test_execute_marks_missing_source_as_failed(self):
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+        update_rename_preview(self.settings, preview.id, "Movie.Missing")
+        operation = create_rename_dry_run(self.settings, [preview.id])
+        self.source.unlink()
+
+        executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", executed.status)
+        self.assertEqual(0, executed.ready_count)
+        self.assertEqual(0, executed.renamed_count)
+        self.assertEqual(1, executed.failed_count)
+        self.assertEqual("failed", executed.items[0].status)
 
     def test_rename_operation_api_dry_run_and_execute(self):
         generate_rename_previews(self.settings)

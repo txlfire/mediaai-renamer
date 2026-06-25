@@ -216,18 +216,40 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                 )
                 failed_count += 1
 
-        existing_conflicts = operation.conflict_count
+        item_counts = {
+            "ready": 0,
+            "conflict": 0,
+            "renamed": 0,
+            "failed": 0,
+        }
+        count_rows = connection.execute(
+            "SELECT status, COUNT(*) AS item_count "
+            "FROM rename_operation_items WHERE operation_id = ? GROUP BY status",
+            (operation_id,),
+        ).fetchall()
+        for row in count_rows:
+            status = str(row["status"])
+            if status in item_counts:
+                item_counts[status] = int(row["item_count"])
+
         final_status = "completed"
-        if failed_count:
-            final_status = "partial_failed" if renamed_count else "failed"
+        if item_counts["failed"]:
+            final_status = "partial_failed" if item_counts["renamed"] else "failed"
         connection.execute(
-            "UPDATE rename_operations SET status = ?, renamed_count = ?, failed_count = ?, updated_at = ? "
+            "UPDATE rename_operations "
+            "SET status = ?, ready_count = ?, conflict_count = ?, renamed_count = ?, failed_count = ?, updated_at = ? "
             "WHERE id = ?",
-            (final_status, renamed_count, failed_count, now, operation_id),
+            (
+                final_status,
+                item_counts["ready"],
+                item_counts["conflict"],
+                item_counts["renamed"],
+                item_counts["failed"],
+                now,
+                operation_id,
+            ),
         )
         connection.commit()
 
     updated = get_rename_operation(settings, operation_id)
-    if existing_conflicts and updated.renamed_count == 0 and updated.failed_count == 0:
-        return updated
     return updated

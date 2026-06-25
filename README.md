@@ -59,6 +59,36 @@ npm run frontend:dev
 http://127.0.0.1:5173
 ```
 
+## 手动启动与停止
+
+建议在两个独立终端窗口中分别启动后端和前端。
+
+手动启动后端：
+
+```powershell
+$env:PYTHONPATH = "backend"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8970 --reload --app-dir backend
+```
+
+手动启动前端：
+
+```powershell
+npm install
+npm run frontend:dev
+```
+
+启动后可用以下地址检查：
+
+```text
+后端健康检查：http://127.0.0.1:8970/api/health
+前端页面：http://127.0.0.1:5173
+```
+
+手动停止服务：
+
+- 如果服务在当前终端前台运行，直接在对应终端按 `Ctrl + C`。
+- 如果服务以后台进程启动，结束占用 `8970` 或 `5173` 端口的进程即可。
+
 ## Docker 启动
 
 ```powershell

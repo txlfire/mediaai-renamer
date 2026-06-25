@@ -32,7 +32,7 @@ vi.mock("../api/client", () => ({
     id: 10,
     status: "completed",
     total_count: 2,
-    ready_count: 1,
+    ready_count: 0,
     conflict_count: 1,
     renamed_count: 1,
     failed_count: 0,
@@ -55,6 +55,23 @@ describe("rename operation store", () => {
     expect(store.currentOperation?.conflict_count).toBe(1);
   });
 
+  it("does not expose executable state after operation completes", async () => {
+    const store = useRenameOperationStore();
+    store.currentOperation = {
+      id: 10,
+      status: "completed",
+      mode: "safe_rename",
+      total_count: 2,
+      ready_count: 1,
+      conflict_count: 1,
+      renamed_count: 1,
+      failed_count: 0,
+      items: [],
+    };
+
+    expect(store.canExecute).toBe(false);
+  });
+
   it("executes the current operation", async () => {
     const store = useRenameOperationStore();
     await store.runDryRun([1, 2]);
@@ -62,6 +79,7 @@ describe("rename operation store", () => {
     await store.executeCurrentOperation();
 
     expect(store.currentOperation?.renamed_count).toBe(1);
+    expect(store.canExecute).toBe(false);
     expect(store.currentOperation?.status).toBe("completed");
   });
 });

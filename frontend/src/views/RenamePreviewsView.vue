@@ -392,6 +392,10 @@ onMounted(async () => {
             <span>已重命名</span>
             <strong>{{ renameOperationStore.currentOperation.renamed_count }}</strong>
           </div>
+          <div class="stat-failed">
+            <span>澶辫触</span>
+            <strong>{{ renameOperationStore.currentOperation.failed_count }}</strong>
+          </div>
         </div>
         <el-table
           v-if="renameOperationStore.currentOperation"
