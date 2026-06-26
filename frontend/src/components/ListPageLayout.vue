@@ -25,6 +25,7 @@ const hasStats = computed(() => Boolean(slots.stats));
 const hasFilters = computed(() => Boolean(slots.filters || slots.queryAction || slots.filterActions));
 const hasSummary = computed(() => Boolean(slots.stats || slots.actions || slots.moreActions));
 const hasMoreActions = computed(() => Boolean(slots.moreActions));
+const hasTable = computed(() => Boolean(slots.table || slots.pagination));
 
 function toggleFilters() {
   filtersExpanded.value = !filtersExpanded.value;
@@ -99,7 +100,7 @@ function toggleFilters() {
 
     <slot />
 
-    <el-card class="list-table-card" shadow="never">
+    <el-card v-if="hasTable" class="list-table-card" shadow="never">
       <slot name="table" />
       <slot name="pagination" />
     </el-card>

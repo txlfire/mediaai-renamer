@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "frontend:dev": "vite --host 127.0.0.1 --port 5173 --config frontend/vite.config.ts",
-    "frontend:dev:lan": "vite --host 0.0.0.0 --port 5173 --config frontend/vite.config.ts",
+    "frontend:dev": "powershell -ExecutionPolicy Bypass -File scripts/start-frontend-dev.ps1 -HostName 127.0.0.1 -Port 5173",
+    "frontend:dev:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-frontend-dev.ps1 -HostName 0.0.0.0 -Port 5173",
+    "dev:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-dev-lan.ps1",
     "backend:dev:lan": "powershell -ExecutionPolicy Bypass -Command \"$env:PYTHONPATH='backend'; .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8970 --reload --app-dir backend\"",
     "frontend:build": "vue-tsc --noEmit --project frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
     "frontend:test": "vitest run frontend/src/api/client.test.ts",

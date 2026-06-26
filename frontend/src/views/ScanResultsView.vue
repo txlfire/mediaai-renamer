@@ -136,16 +136,16 @@ onMounted(async () => {
       <el-select v-model="selectedScanJobId" :placeholder="messages.scanResults.selectScanJob" clearable>
         <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-    </template>
-
-    <template #queryAction>
       <el-button :icon="Search" :disabled="!selectedScanJobId" @click="queryMediaFiles">
         {{ messages.common.query }}
       </el-button>
-      <el-button :icon="Refresh" :disabled="!selectedScanJobId" @click="queryMediaFiles">
+      <el-button @click="resetScanResults">{{ messages.common.reset }}</el-button>
+    </template>
+
+    <template #filterActions>
+      <el-button class="scan-results-refresh-action" :icon="Refresh" :disabled="!selectedScanJobId" @click="queryMediaFiles">
         {{ messages.common.refresh }}
       </el-button>
-      <el-button @click="resetScanResults">{{ messages.common.reset }}</el-button>
     </template>
 
     <template #table>
@@ -218,7 +218,7 @@ onMounted(async () => {
     </template>
 
     <el-dialog v-model="detailDialogVisible" :title="messages.scanResults.detailTitle" width="720px">
-      <div class="detail-panel">
+      <div class="detail-panel scan-result-detail-panel">
         <div v-for="item in detailRows" :key="item.label" class="detail-item">
           <span>{{ item.label }}</span>
           <strong>{{ item.value ?? "-" }}</strong>

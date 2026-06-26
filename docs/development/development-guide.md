@@ -39,6 +39,14 @@ npm install
 npm run frontend:dev
 ```
 
+局域网可访问的一键启动：
+
+```powershell
+npm run dev:lan
+```
+
+该命令会后台启动前后端，并将日志写入 `.codex/run-logs/`。如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，脚本会在当前进程内临时规整，避免 Windows 后台启动报重复键错误。
+
 访问地址：
 
 ```text

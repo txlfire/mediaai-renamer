@@ -1,10 +1,14 @@
 import { defineStore } from "pinia";
 
 import {
+  applyRenamePreviewMetadataCandidate,
+  fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   generateRenamePreviews,
+  matchRenamePreviewMetadata,
   updateRenamePreview,
   type GenerateRenamePreviewsPayload,
+  type MetadataMatchResult,
   type PreviewGenerationSummary,
   type RenamePreview,
   type RenamePreviewFilters,
@@ -51,10 +55,39 @@ export const usePreviewStore = defineStore("preview", {
 
     async updatePreview(previewId: number, targetName: string) {
       const updated = await updateRenamePreview(previewId, targetName);
-      const index = this.previews.findIndex((preview) => preview.id === previewId);
+      this.replacePreview(updated);
+      return updated;
+    },
+
+    replacePreview(updated: RenamePreview) {
+      const index = this.previews.findIndex((preview) => preview.id === updated.id);
       if (index >= 0) {
         this.previews[index] = { ...this.previews[index], ...updated };
       }
+    },
+
+    async matchMetadata(previewId: number) {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const updated = await matchRenamePreviewMetadata(previewId);
+        this.replacePreview(updated);
+        return updated;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadMetadataCandidates(previewId: number): Promise<MetadataMatchResult[]> {
+      return fetchRenamePreviewMetadataCandidates(previewId);
+    },
+
+    async applyMetadataCandidate(previewId: number, match: MetadataMatchResult) {
+      const updated = await applyRenamePreviewMetadataCandidate(previewId, match);
+      this.replacePreview(updated);
       return updated;
     },
   },

@@ -138,6 +138,7 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual(200, list_response.status_code)
         self.assertEqual(2, len(list_response.json()))
         self.assertIn("current_target_name", list_response.json()[0])
+        self.assertIn("metadata_match_score", list_response.json()[0])
 
     def test_update_preview_api(self):
         app = create_app(self.settings)
@@ -152,6 +153,35 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual("Matrix.Custom.mkv", response.json()["current_target_name"])
+
+    def test_manual_metadata_candidate_api(self):
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        preview_id = client.get("/api/rename-previews").json()[0]["id"]
+
+        response = client.post(
+            f"/api/rename-previews/{preview_id}/metadata-candidate",
+            json={
+                "score": 91,
+                "candidate": {
+                    "provider": "TMDB",
+                    "provider_id": "603",
+                    "media_type": "movie",
+                    "title": "黑客帝国",
+                    "original_title": "The Matrix",
+                    "year": 1999,
+                    "season": None,
+                    "episode": None,
+                    "overview": "",
+                },
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("tmdb_selected", response.json()["status"])
+        self.assertEqual("TMDB", response.json()["metadata_source"])
+        self.assertEqual(91, response.json()["metadata_match_score"])
 
 
 if __name__ == "__main__":

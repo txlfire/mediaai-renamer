@@ -12,6 +12,101 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+CURRENT_SCHEMA_VERSION = 5
+
+
+def _table_names(connection: sqlite3.Connection) -> set[str]:
+    return {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+
+
+def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})")}
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    if column_name not in _column_names(connection, table_name):
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def _schema_version(connection: sqlite3.Connection) -> int:
+    row = connection.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_schema_version(connection: sqlite3.Connection, version: int) -> None:
+    connection.execute(
+        "INSERT INTO app_meta (key, value) VALUES ('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(version),),
+    )
+
+
+def _ensure_system_settings_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS system_settings "
+        "(key TEXT PRIMARY KEY, "
+        "category TEXT NOT NULL, "
+        "value TEXT NOT NULL, "
+        "description TEXT, "
+        "sensitive INTEGER NOT NULL DEFAULT 0, "
+        "operator TEXT NOT NULL DEFAULT 'system', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+
+
+def _ensure_rename_preview_metadata_columns(connection: sqlite3.Connection) -> None:
+    if "rename_previews" not in _table_names(connection):
+        return
+    _ensure_column(connection, "rename_previews", "metadata_source", "TEXT")
+    _ensure_column(connection, "rename_previews", "metadata_match_status", "TEXT")
+    _ensure_column(connection, "rename_previews", "metadata_match_score", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "rename_previews", "metadata_message", "TEXT")
+
+
+def _ensure_pending_files_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS pending_files "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "media_source_id INTEGER NOT NULL, "
+        "scan_job_id INTEGER NOT NULL, "
+        "file_path TEXT NOT NULL, "
+        "file_name TEXT NOT NULL, "
+        "extension TEXT NOT NULL, "
+        "file_size INTEGER NOT NULL, "
+        "reason TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "created_at TEXT NOT NULL, "
+        "FOREIGN KEY(media_source_id) REFERENCES media_sources(id), "
+        "FOREIGN KEY(scan_job_id) REFERENCES scan_jobs(id))"
+    )
+
+
+def _run_migrations(connection: sqlite3.Connection) -> None:
+    version = _schema_version(connection)
+
+    if version < 4:
+        _ensure_system_settings_table(connection)
+        _ensure_rename_preview_metadata_columns(connection)
+        _set_schema_version(connection, 4)
+
+    if version < 5:
+        _ensure_pending_files_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -30,6 +125,7 @@ def ensure_database(settings: AppSettings) -> Path:
             "CREATE TABLE IF NOT EXISTS app_meta "
             "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
+        _ensure_system_settings_table(connection)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS media_sources "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -81,6 +177,10 @@ def ensure_database(settings: AppSettings) -> Path:
             "original_extension TEXT NOT NULL, "
             "suggested_name TEXT NOT NULL, "
             "edited_name TEXT, "
+            "metadata_source TEXT, "
+            "metadata_match_status TEXT, "
+            "metadata_match_score INTEGER NOT NULL DEFAULT 0, "
+            "metadata_message TEXT, "
             "status TEXT NOT NULL, "
             "message TEXT, "
             "created_at TEXT NOT NULL, "
@@ -114,6 +214,8 @@ def ensure_database(settings: AppSettings) -> Path:
             "FOREIGN KEY(operation_id) REFERENCES rename_operations(id), "
             "FOREIGN KEY(rename_preview_id) REFERENCES rename_previews(id))"
         )
+        _ensure_pending_files_table(connection)
+        _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
     return settings.database_path

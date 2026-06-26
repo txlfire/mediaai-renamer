@@ -2,22 +2,32 @@ import { describe, expect, it } from "vitest";
 
 import {
   apiClient,
+  applyRenamePreviewMetadataCandidate,
   bulkDeleteMediaSources,
+  clearPendingFiles,
   createMediaSource,
   createRenameDryRun,
   createScanJob,
   deleteMediaSource,
   executeRenameOperation,
+  fetchSettings,
   fetchLocalDirectories,
   fetchLogs,
   fetchMediaFiles,
   fetchMediaSources,
+  fetchPendingFiles,
   fetchRenameOperation,
+  fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   fetchScanJobs,
   generateRenamePreviews,
   getHealth,
+  matchRenamePreviewMetadata,
+  movePendingFiles,
+  removePendingFile,
   setMediaSourceEnabled,
+  testTmdbSettings,
+  updateSettings,
   updateMediaSource,
   updateRenamePreview,
   type ApiHttpClient,
@@ -174,11 +184,35 @@ describe("rename preview API client", () => {
     await generateRenamePreviews({ scan_job_id: 1 }, httpClient);
     await fetchRenamePreviews({ status: "generated", keyword: "Matrix" }, httpClient);
     await updateRenamePreview(1, "Matrix.Custom", httpClient);
+    await matchRenamePreviewMetadata(1, httpClient);
+    await fetchRenamePreviewMetadataCandidates(1, httpClient);
+    await applyRenamePreviewMetadataCandidate(
+      1,
+      {
+        score: 91,
+        status: "high_confidence",
+        candidate: {
+          provider: "TMDB",
+          provider_id: "603",
+          media_type: "movie",
+          title: "黑客帝国",
+          original_title: "The Matrix",
+          year: 1999,
+          season: null,
+          episode: null,
+          overview: "",
+        },
+      },
+      httpClient,
+    );
 
     expect(calls).toEqual([
       'POST /rename-previews/generate:{"scan_job_id":1}',
       "GET /rename-previews?status=generated&keyword=Matrix",
       'PUT /rename-previews/1:{"target_name":"Matrix.Custom"}',
+      "POST /rename-previews/1/metadata-match:{}",
+      "GET /rename-previews/1/metadata-candidates",
+      'POST /rename-previews/1/metadata-candidate:{"candidate":{"provider":"TMDB","provider_id":"603","media_type":"movie","title":"黑客帝国","original_title":"The Matrix","year":1999,"season":null,"episode":null,"overview":""},"score":91}',
     ]);
   });
 });
@@ -205,6 +239,87 @@ describe("rename operation API client", () => {
       'POST /rename-operations/dry-run:{"rename_preview_ids":[1,2]}',
       "GET /rename-operations/10",
       "POST /rename-operations/10/execute:{}",
+    ]);
+  });
+});
+
+describe("settings API client", () => {
+  it("uses settings endpoints", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return { data: [] as T };
+      },
+      put: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`PUT ${url}:${JSON.stringify(body)}`);
+        return { data: [] as T };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        return { data: { success: true, message: "连接成功！信息有效！" } as T };
+      },
+    };
+
+    await fetchSettings(httpClient);
+    await updateSettings({ "tmdb.timeout_ms": 12000 }, httpClient);
+    await testTmdbSettings(httpClient);
+
+    expect(calls).toEqual([
+      "GET /settings",
+      'PUT /settings:{"values":{"tmdb.timeout_ms":12000}}',
+      "POST /settings/tmdb/test:{}",
+    ]);
+  });
+
+  it("uses backend Chinese detail for TMDB connection failures", async () => {
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(): Promise<{ data: T }> => ({ data: [] as T }),
+      post: async () => {
+        throw {
+          response: {
+            data: {
+              detail: "TMDB 连接失败：未配置 API Key。请先填写并保存 TMDB API Key。",
+            },
+          },
+        };
+      },
+    };
+
+    await expect(testTmdbSettings(httpClient)).rejects.toThrow(
+      "TMDB 连接失败：未配置 API Key。请先填写并保存 TMDB API Key。",
+    );
+  });
+});
+
+describe("pending file API client", () => {
+  it("uses pending file endpoints", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return { data: [] as T };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        return { data: (url.startsWith("/pending-files/clear") ? { removed_count: 2 } : []) as T };
+      },
+      delete: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`DELETE ${url}`);
+        return { data: { id: 1 } as T };
+      },
+    };
+
+    await fetchPendingFiles({ scan_job_id: 2 }, httpClient);
+    await removePendingFile(1, httpClient);
+    await clearPendingFiles({ scan_job_id: 2 }, httpClient);
+    await movePendingFiles([1, 2], "D:/pending", httpClient);
+
+    expect(calls).toEqual([
+      "GET /pending-files?scan_job_id=2",
+      "DELETE /pending-files/1",
+      "POST /pending-files/clear?scan_job_id=2:{}",
+      'POST /pending-files/move:{"ids":[1,2],"target_directory":"D:/pending"}',
     ]);
   });
 });

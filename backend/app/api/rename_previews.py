@@ -3,9 +3,13 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.schema.metadata import MetadataCandidate
 from app.service.preview_service import (
+    apply_metadata_candidate,
     generate_rename_previews,
+    list_metadata_candidates,
     list_rename_previews,
+    match_rename_preview_metadata,
     update_rename_preview,
 )
 
@@ -25,6 +29,13 @@ class UpdateRenamePreviewRequest(BaseModel):
     """Rename preview edit request."""
 
     target_name: str
+
+
+class ApplyMetadataCandidateRequest(BaseModel):
+    """Manual metadata candidate selection request."""
+
+    candidate: MetadataCandidate
+    score: int
 
 
 @router.post("/generate")
@@ -70,6 +81,45 @@ def update_preview(preview_id: int, payload: UpdateRenamePreviewRequest, request
             request.app.state.settings,
             preview_id,
             payload.target_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{preview_id}/metadata-match")
+def match_preview_metadata(preview_id: int, request: Request):
+    """Run TMDB metadata matching for one preview."""
+
+    try:
+        return match_rename_preview_metadata(request.app.state.settings, preview_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{preview_id}/metadata-candidates")
+def get_preview_metadata_candidates(preview_id: int, request: Request):
+    """List sorted metadata candidates for one preview."""
+
+    try:
+        return list_metadata_candidates(request.app.state.settings, preview_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{preview_id}/metadata-candidate")
+def select_preview_metadata_candidate(
+    preview_id: int,
+    payload: ApplyMetadataCandidateRequest,
+    request: Request,
+):
+    """Apply a manually selected metadata candidate."""
+
+    try:
+        return apply_metadata_candidate(
+            request.app.state.settings,
+            preview_id,
+            payload.candidate,
+            payload.score,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

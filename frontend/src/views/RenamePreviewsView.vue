@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
+import { Connection, Delete, Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
-import type { RenamePreview } from "../api/client";
+import type { MetadataMatchResult, RenamePreview } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
 import TablePagination from "../components/TablePagination.vue";
@@ -13,10 +13,12 @@ import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
+import { usePendingFileStore } from "../stores/pendingFiles";
 import { usePreviewStore } from "../stores/preview";
 import { useRenameOperationStore } from "../stores/renameOperation";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime } from "../utils/displayFormat";
+import { formatFileSize } from "../utils/displayFormat";
 import {
   canPrepareRename,
   findEmptyTargetNamePreviews,
@@ -26,6 +28,7 @@ import {
 
 const mediaStore = useMediaStore();
 const previewStore = usePreviewStore();
+const pendingFileStore = usePendingFileStore();
 const renameOperationStore = useRenameOperationStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
@@ -35,12 +38,19 @@ const editDialogVisible = ref(false);
 const operationDialogVisible = ref(false);
 const emptyTargetDialogVisible = ref(false);
 const detailDialogVisible = ref(false);
+const metadataDialogVisible = ref(false);
+const pendingMoveDialogVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
 const selectedDetailRow = ref<RenamePreview | null>(null);
+const metadataPreviewId = ref<number | null>(null);
 const editingTargetName = ref("");
 const selectedPreviewIds = ref<number[]>([]);
 const selectedPreviewRows = ref<RenamePreview[]>([]);
+const selectedPendingFileIds = ref<number[]>([]);
 const pendingRenamePreviews = ref<RenamePreview[]>([]);
+const metadataCandidates = ref<MetadataMatchResult[]>([]);
+const pendingMoveTargetDirectory = ref("");
+const activePreviewTab = ref("previews");
 const defaultSort = { prop: "updated_at", order: "descending" as const };
 const previewTableTopScroll = ref<HTMLElement | null>(null);
 const previewTable = ref();
@@ -140,6 +150,8 @@ function statusLabel(value: string) {
     edited: messages.status.edited,
     needs_review: messages.status.needsReview,
     renamed: messages.status.renamed,
+    tmdb_matched: messages.renamePreviews.metadataStatuses.high_confidence,
+    tmdb_selected: messages.renamePreviews.metadataStatuses.manual_selected,
   };
   return labels[value] ?? value;
 }
@@ -180,6 +192,32 @@ function operationStatusTagType(value: string) {
   return "info";
 }
 
+function pendingReasonLabel(value: string) {
+  const labels: Record<string, string> = messages.renamePreviews.pendingFiles.reasons;
+  return labels[value] ?? value;
+}
+
+function metadataStatusLabel(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+  const labels: Record<string, string> = messages.renamePreviews.metadataStatuses;
+  return labels[value] ?? value;
+}
+
+function metadataStatusTagType(value: string | null) {
+  if (value === "high_confidence" || value === "manual_selected") {
+    return "success";
+  }
+  if (value === "low_confidence") {
+    return "warning";
+  }
+  if (value === "failed") {
+    return "danger";
+  }
+  return "info";
+}
+
 function seasonEpisode(row: { season: number | null; episode: number | null }) {
   if (!row.season && !row.episode) {
     return "-";
@@ -206,6 +244,9 @@ const detailRows = computed(() => {
     { label: messages.renamePreviews.columns.originalName, value: row.file_name },
     { label: messages.renamePreviews.columns.targetName, value: row.current_target_name },
     { label: messages.renamePreviews.columns.parsedTitle, value: row.parsed_title },
+    { label: messages.renamePreviews.columns.metadataSource, value: row.metadata_source ?? "-" },
+    { label: messages.renamePreviews.columns.metadataScore, value: `${row.metadata_match_score ?? 0}%` },
+    { label: messages.renamePreviews.columns.metadata, value: metadataStatusLabel(row.metadata_match_status) },
     { label: messages.renamePreviews.type, value: mediaTypeLabel(row.media_type) },
     { label: messages.renamePreviews.columns.year, value: row.parsed_year ?? "-" },
     { label: messages.renamePreviews.columns.seasonEpisode, value: seasonEpisode(row) },
@@ -217,10 +258,15 @@ const detailRows = computed(() => {
 async function refreshPreviews() {
   if (!previewStore.filters.scan_job_id) {
     previewStore.previews = [];
+    pendingFileStore.pendingFiles = [];
     await syncPreviewTopScrollWidth();
     return;
   }
   await previewStore.loadPreviews(previewStore.filters);
+  await pendingFileStore.loadPendingFiles({
+    media_source_id: previewStore.filters.media_source_id,
+    scan_job_id: previewStore.filters.scan_job_id,
+  });
   await syncPreviewTopScrollWidth();
 }
 
@@ -238,6 +284,7 @@ async function generatePreviews() {
 async function loadScanJobsForSelectedSource() {
   previewStore.filters.scan_job_id = undefined;
   previewStore.previews = [];
+  pendingFileStore.pendingFiles = [];
   await syncPreviewTopScrollWidth();
   if (!previewStore.filters.media_source_id) {
     mediaStore.scanJobs = [];
@@ -249,6 +296,7 @@ async function loadScanJobsForSelectedSource() {
 async function resetRenamePreviews() {
   previewStore.filters = {};
   previewStore.previews = [];
+  pendingFileStore.pendingFiles = [];
   selectedPreviewIds.value = [];
   selectedPreviewRows.value = [];
   await syncPreviewTopScrollWidth();
@@ -258,6 +306,10 @@ async function resetRenamePreviews() {
 function handleSelectionChange(rows: RenamePreview[]) {
   selectedPreviewRows.value = rows;
   selectedPreviewIds.value = rows.map((row) => row.id);
+}
+
+function handlePendingSelectionChange(rows: Array<{ id: number }>) {
+  selectedPendingFileIds.value = rows.map((row) => row.id);
 }
 
 async function runRenameDryRun() {
@@ -296,6 +348,60 @@ async function executeAllPreviews() {
 
 async function executeSinglePreview(row: RenamePreview) {
   await runRenameDryRunForPreviews([row]);
+}
+
+async function matchMetadata(row: RenamePreview) {
+  metadataPreviewId.value = row.id;
+  const updated = await previewStore.matchMetadata(row.id);
+  if (updated.metadata_match_status === "low_confidence") {
+    metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id);
+    metadataDialogVisible.value = true;
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.metadataDialog.matched);
+}
+
+async function applyMetadataCandidate(match: MetadataMatchResult) {
+  if (!metadataPreviewId.value) {
+    return;
+  }
+  await previewStore.applyMetadataCandidate(metadataPreviewId.value, match);
+  metadataDialogVisible.value = false;
+  metadataCandidates.value = [];
+  ElMessage.success(messages.renamePreviews.metadataDialog.selectSuccess);
+}
+
+async function removePendingFile(row: { id: number }) {
+  await pendingFileStore.removePendingFile(row.id);
+  ElMessage.success(messages.renamePreviews.pendingFiles.removed);
+}
+
+async function clearPendingFiles() {
+  await pendingFileStore.clearPendingFiles({
+    media_source_id: previewStore.filters.media_source_id,
+    scan_job_id: previewStore.filters.scan_job_id,
+  });
+  ElMessage.success(messages.renamePreviews.pendingFiles.cleared);
+}
+
+function openPendingMoveDialog() {
+  if (selectedPendingFileIds.value.length === 0) {
+    ElMessage.warning(messages.renamePreviews.pendingFiles.selectFirst);
+    return;
+  }
+  pendingMoveTargetDirectory.value = "";
+  pendingMoveDialogVisible.value = true;
+}
+
+async function moveSelectedPendingFiles() {
+  if (!pendingMoveTargetDirectory.value.trim()) {
+    ElMessage.warning(messages.renamePreviews.pendingFiles.targetDirectoryPlaceholder);
+    return;
+  }
+  await pendingFileStore.movePendingFiles(selectedPendingFileIds.value, pendingMoveTargetDirectory.value.trim());
+  selectedPendingFileIds.value = [];
+  pendingMoveDialogVisible.value = false;
+  ElMessage.success(messages.renamePreviews.pendingFiles.moved);
 }
 
 async function continueWithoutEmptyTargets() {
@@ -351,10 +457,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <ListPageLayout :title="messages.renamePreviews.title" :description="messages.renamePreviews.description">
+  <ListPageLayout class="rename-preview-page" :title="messages.renamePreviews.title" :description="messages.renamePreviews.description">
     <template #filters>
       <el-select
         v-model="previewStore.filters.media_source_id"
+        class="rename-filter-select"
         :placeholder="messages.renamePreviews.mediaSource"
         clearable
         @change="loadScanJobsForSelectedSource"
@@ -362,20 +469,20 @@ onMounted(async () => {
       >
         <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="previewStore.filters.scan_job_id" :placeholder="messages.renamePreviews.scanJob" clearable>
+      <el-select v-model="previewStore.filters.scan_job_id" class="rename-filter-select" :placeholder="messages.renamePreviews.scanJob" clearable>
         <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="previewStore.filters.status" :placeholder="messages.renamePreviews.status" clearable>
+      <el-select v-model="previewStore.filters.status" class="rename-filter-select" :placeholder="messages.renamePreviews.status" clearable>
         <el-option :label="messages.status.generated" value="generated" />
         <el-option :label="messages.status.edited" value="edited" />
         <el-option :label="messages.status.needsReview" value="needs_review" />
       </el-select>
-      <el-select v-model="previewStore.filters.media_type" :placeholder="messages.renamePreviews.type" clearable>
+      <el-select v-model="previewStore.filters.media_type" class="rename-filter-select" :placeholder="messages.renamePreviews.type" clearable>
         <el-option :label="messages.renamePreviews.mediaTypes.movie" value="movie" />
         <el-option :label="messages.renamePreviews.mediaTypes.episode" value="episode" />
         <el-option :label="messages.renamePreviews.mediaTypes.unknown" value="unknown" />
       </el-select>
-      <el-input v-model="previewStore.filters.keyword" :placeholder="messages.renamePreviews.keywordPlaceholder" clearable />
+      <el-input v-model="previewStore.filters.keyword" class="rename-keyword-input" :placeholder="messages.renamePreviews.keywordPlaceholder" clearable />
     </template>
 
     <template #queryAction>
@@ -421,21 +528,23 @@ onMounted(async () => {
     <el-alert v-if="previewStore.errorMessage" type="error" :title="previewStore.errorMessage" show-icon />
 
     <template #table>
-      <div v-show="previewTopScrollVisible" ref="previewTableTopScroll" class="table-top-scroll" @scroll="handleTopPreviewScroll">
-        <div class="table-top-scroll-track" :style="{ width: `${previewTopScrollWidth}px` }" />
-      </div>
-      <el-table
-        ref="previewTable"
-        :data="pagedPreviews"
-        class="data-table rename-previews-table"
-        table-layout="auto"
-        :default-sort="defaultSort"
-        @row-click="openDetailDialog"
-        @selection-change="handleSelectionChange"
-        @sort-change="handleSortChange"
-      >
-        <el-table-column type="selection" width="44" align="center" />
-        <el-table-column
+      <el-tabs v-model="activePreviewTab" class="rename-preview-tabs">
+        <el-tab-pane :label="messages.renamePreviews.tabs.previews" name="previews">
+          <div v-show="previewTopScrollVisible" ref="previewTableTopScroll" class="table-top-scroll" @scroll="handleTopPreviewScroll">
+          <div class="table-top-scroll-track" :style="{ width: `${previewTopScrollWidth}px` }" />
+          </div>
+          <el-table
+          ref="previewTable"
+          :data="pagedPreviews"
+          class="data-table rename-previews-table"
+          table-layout="auto"
+          :default-sort="defaultSort"
+          @row-click="openDetailDialog"
+          @selection-change="handleSelectionChange"
+          @sort-change="handleSortChange"
+          >
+          <el-table-column type="selection" width="44" align="center" />
+          <el-table-column
           prop="status"
           :label="messages.common.status"
           width="96"
@@ -443,34 +552,59 @@ onMounted(async () => {
           align="center"
           header-align="center"
           sortable="custom"
-        >
+          >
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag>
+          <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="file_name" :label="messages.renamePreviews.columns.originalName" min-width="150" align="left" header-align="left" sortable="custom">
+          </el-table-column>
+          <el-table-column prop="file_name" :label="messages.renamePreviews.columns.originalName" min-width="150" align="left" header-align="left" sortable="custom">
           <template #default="{ row }">
-            <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
           </template>
-        </el-table-column>
-        <el-table-column
+          </el-table-column>
+          <el-table-column
           prop="current_target_name"
           :label="messages.renamePreviews.columns.targetName"
           min-width="150"
           align="left"
           header-align="left"
           sortable="custom"
-        >
+          >
           <template #default="{ row }">
-            <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
           </template>
-        </el-table-column>
-        <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="176" align="left" header-align="left">
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="176" align="left" header-align="left">
           <template #default="{ row }">
-            <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
           </template>
-        </el-table-column>
-        <el-table-column
+          </el-table-column>
+          <el-table-column
+          :label="messages.renamePreviews.columns.metadata"
+          width="128"
+          class-name="nowrap-column"
+          align="center"
+          header-align="center"
+          >
+          <template #default="{ row }">
+          <el-tag :type="metadataStatusTagType(row.metadata_match_status)" effect="light">
+          {{ metadataStatusLabel(row.metadata_match_status) }}
+          </el-tag>
+          </template>
+          </el-table-column>
+          <el-table-column
+          prop="metadata_match_score"
+          :label="messages.renamePreviews.columns.metadataScore"
+          width="112"
+          class-name="metadata-score-column"
+          header-class-name="metadata-score-column"
+          align="center"
+          header-align="center"
+          sortable="custom"
+          >
+          <template #default="{ row }">{{ row.metadata_match_score ?? 0 }}%</template>
+          </el-table-column>
+          <el-table-column
           prop="media_type"
           :label="messages.renamePreviews.type"
           width="96"
@@ -478,10 +612,10 @@ onMounted(async () => {
           align="center"
           header-align="center"
           sortable="custom"
-        >
+          >
           <template #default="{ row }">{{ mediaTypeLabel(row.media_type) }}</template>
-        </el-table-column>
-        <el-table-column
+          </el-table-column>
+          <el-table-column
           prop="parsed_year"
           :label="messages.renamePreviews.columns.year"
           width="92"
@@ -489,19 +623,19 @@ onMounted(async () => {
           align="center"
           header-align="center"
           sortable="custom"
-        >
+          >
           <template #default="{ row }">{{ row.parsed_year ?? "-" }}</template>
-        </el-table-column>
-        <el-table-column
+          </el-table-column>
+          <el-table-column
           :label="messages.renamePreviews.columns.seasonEpisode"
           width="104"
           class-name="preview-season-episode-column"
           align="center"
           header-align="center"
-        >
+          >
           <template #default="{ row }">{{ seasonEpisode(row) }}</template>
-        </el-table-column>
-        <el-table-column
+          </el-table-column>
+          <el-table-column
           prop="updated_at"
           :label="messages.renamePreviews.columns.updatedAt"
           width="168"
@@ -509,33 +643,125 @@ onMounted(async () => {
           align="center"
           header-align="center"
           sortable="custom"
-        >
+          >
           <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
-        </el-table-column>
-        <el-table-column :label="messages.common.actions" width="96" align="center" header-align="center" fixed="right">
+          </el-table-column>
+          <el-table-column :label="messages.common.actions" width="128" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
-            <div class="table-actions">
-              <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
-                <el-button class="table-action-button action-edit" :icon="Edit" text circle @click="openEditDialog(row)" />
-              </el-tooltip>
-              <el-tooltip :content="messages.renamePreviews.actions.execute" placement="top">
-                <el-button
-                  class="table-action-button action-run"
-                  :icon="Select"
-                  text
-                  circle
-                  @click="executeSinglePreview(row)"
-                />
-              </el-tooltip>
-            </div>
+          <div class="table-actions">
+          <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
+          <el-button
+          class="table-action-button action-sync"
+          :icon="Connection"
+          text
+          circle
+          @click.stop="matchMetadata(row)"
+          />
+          </el-tooltip>
+          <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
+          <el-button class="table-action-button action-edit" :icon="Edit" text circle @click.stop="openEditDialog(row)" />
+          </el-tooltip>
+          <el-tooltip :content="messages.renamePreviews.actions.execute" placement="top">
+          <el-button
+          class="table-action-button action-run"
+          :icon="Select"
+          text
+          circle
+          @click.stop="executeSinglePreview(row)"
+          />
+          </el-tooltip>
+          </div>
           </template>
-        </el-table-column>
-      </el-table>
+          </el-table-column>
+          </el-table>
+          <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" />
+        </el-tab-pane>
+
+        <el-tab-pane :label="messages.renamePreviews.tabs.pendingFiles" name="pending">
+          <div class="subsection-header">
+          <div>
+          <h2>{{ messages.renamePreviews.pendingFiles.title }}</h2>
+          <p>{{ messages.renamePreviews.pendingFiles.description }}</p>
+          </div>
+          <div class="subsection-actions">
+          <el-button
+          :icon="Select"
+          :disabled="selectedPendingFileIds.length === 0"
+          @click="openPendingMoveDialog"
+          >
+          {{ messages.renamePreviews.pendingFiles.move }}
+          </el-button>
+          <el-button
+          :icon="Delete"
+          :disabled="pendingFileStore.pendingFiles.length === 0"
+          @click="clearPendingFiles"
+          >
+          {{ messages.renamePreviews.pendingFiles.clear }}
+          </el-button>
+          </div>
+          </div>
+          <el-table
+          :data="pendingFileStore.pendingFiles"
+          class="data-table"
+          table-layout="auto"
+          @selection-change="handlePendingSelectionChange"
+          >
+          <el-table-column type="selection" width="44" align="center" />
+          <el-table-column :label="messages.renamePreviews.pendingFiles.columns.reason" width="108" align="center" header-align="center">
+          <template #default="{ row }">
+          <el-tag type="warning" effect="light">{{ pendingReasonLabel(row.reason) }}</el-tag>
+          </template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.pendingFiles.columns.fileName" min-width="220" align="left" header-align="left">
+          <template #default="{ row }">
+          <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          </template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.pendingFiles.columns.path" min-width="280" align="left" header-align="left">
+          <template #default="{ row }">
+          <TextCell :value="row.file_path" :max-length="tableDisplayConfig.pathMaxLength" />
+          </template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.pendingFiles.columns.size" width="104" align="center" header-align="center">
+          <template #default="{ row }">{{ formatFileSize(row.file_size) }}</template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.pendingFiles.columns.scanTime" width="168" align="center" header-align="center">
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column :label="messages.common.actions" width="96" align="center" header-align="center" fixed="right">
+          <template #default="{ row }">
+          <el-tooltip :content="messages.renamePreviews.pendingFiles.remove" placement="top">
+          <el-button
+          class="table-action-button action-delete"
+          :icon="Delete"
+          text
+          circle
+          @click="removePendingFile(row)"
+          />
+          </el-tooltip>
+          </template>
+          </el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
     </template>
 
-    <template #pagination>
-      <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" />
-    </template>
+    <el-dialog v-model="pendingMoveDialogVisible" :title="messages.renamePreviews.pendingFiles.moveDialog.title" width="560px">
+      <el-form label-position="top">
+        <el-form-item :label="messages.renamePreviews.pendingFiles.targetDirectory">
+          <el-input
+            v-model="pendingMoveTargetDirectory"
+            :placeholder="messages.renamePreviews.pendingFiles.targetDirectoryPlaceholder"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pendingMoveDialogVisible = false">{{ messages.common.cancel }}</el-button>
+        <el-button type="primary" @click="moveSelectedPendingFiles">
+          {{ messages.renamePreviews.pendingFiles.moveDialog.confirm }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="detailDialogVisible" :title="messages.renamePreviews.detailTitle" width="760px">
       <div class="detail-panel">
@@ -554,6 +780,45 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="editDialogVisible = false">{{ messages.common.cancel }}</el-button>
         <el-button type="primary" @click="saveEdit">{{ messages.common.save }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="metadataDialogVisible" :title="messages.renamePreviews.metadataDialog.title" width="860px">
+      <el-empty v-if="metadataCandidates.length === 0" :description="messages.renamePreviews.metadataDialog.empty" />
+      <el-table v-else :data="metadataCandidates" class="data-table" table-layout="auto">
+        <el-table-column :label="messages.renamePreviews.columns.metadataScore" width="96" align="center" header-align="center">
+          <template #default="{ row }">{{ row.score }}%</template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.columns.metadata" width="110" align="center" header-align="center">
+          <template #default="{ row }">
+            <el-tag :type="metadataStatusTagType(row.status)" effect="light">
+              {{ metadataStatusLabel(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="180" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="row.candidate.title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.columns.targetName" min-width="180" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="row.candidate.original_title || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.columns.year" width="84" align="center" header-align="center">
+          <template #default="{ row }">{{ row.candidate.year ?? "-" }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.common.actions" width="96" align="center" header-align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" @click="applyMetadataCandidate(row)">
+              {{ messages.renamePreviews.metadataDialog.apply }}
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="metadataDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>
     </el-dialog>
 

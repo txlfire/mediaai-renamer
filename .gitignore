@@ -22,6 +22,11 @@ npm-cache/
 data/*
 !data/.gitkeep
 logs/
+releases/
+
+# Local agent/runtime artifacts
+.codex/
+.planning/
 
 # OS / editor
 .DS_Store

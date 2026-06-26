@@ -12,6 +12,8 @@ import time
 from app.core.config import AppSettings
 from app.schema.media import MediaFile, ScanJob
 from app.service.media_source_service import get_media_source
+from app.service.pending_file_service import add_pending_file
+from app.service.settings_service import get_effective_settings
 from app.utils.media_file import is_video_file
 
 
@@ -86,6 +88,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
         raise ValueError("媒体源已停用，无法发起扫描")
     source_path = Path(source.path)
     created_at = _utc_now()
+    minimum_file_size = int(get_effective_settings(settings).get("scan.minimum_file_size") or 0)
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
@@ -116,6 +119,17 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                 scanned_count += 1
                 if is_video_file(file_path):
                     stat = file_path.stat()
+                    if stat.st_size < minimum_file_size:
+                        add_pending_file(
+                            connection,
+                            media_source_id,
+                            job_id,
+                            file_path,
+                            stat.st_size,
+                            "size_filtered",
+                        )
+                        warning_count += 1
+                        continue
                     now = _utc_now()
                     connection.execute(
                         "INSERT INTO media_files "

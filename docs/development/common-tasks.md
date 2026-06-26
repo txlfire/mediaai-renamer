@@ -29,6 +29,18 @@ npm run backend:dev:lan
 npm run frontend:dev:lan
 ```
 
+一键启动局域网可访问的前后端：
+
+```powershell
+npm run dev:lan
+```
+
+说明：
+
+- `npm run frontend:dev` 和 `npm run frontend:dev:lan` 适合在独立终端中前台运行。
+- `npm run dev:lan` 会后台启动前后端，并将日志写入 `.codex/run-logs/`。
+- 如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，启动脚本会只在当前进程内临时规整，避免 Windows `Start-Process` 报重复键错误。
+
 局域网内其他机器访问：
 
 ```text

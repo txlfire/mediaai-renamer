@@ -8,9 +8,11 @@ from fastapi import FastAPI
 from app.api.health import router as health_router
 from app.api.logs import router as logs_router
 from app.api.media_sources import router as media_sources_router
+from app.api.pending_files import router as pending_files_router
 from app.api.rename_operations import router as rename_operations_router
 from app.api.rename_previews import router as rename_previews_router
 from app.api.scan_jobs import router as scan_jobs_router
+from app.api.settings import router as settings_router
 from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
@@ -39,7 +41,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(scan_jobs_router)
     app.include_router(rename_previews_router)
     app.include_router(rename_operations_router)
+    app.include_router(pending_files_router)
     app.include_router(logs_router)
+    app.include_router(settings_router)
     logger.info("FastAPI 应用创建完成")
     return app
 

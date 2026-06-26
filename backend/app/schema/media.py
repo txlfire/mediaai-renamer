@@ -95,6 +95,10 @@ class RenamePreview:
     suggested_name: str
     edited_name: str | None
     current_target_name: str
+    metadata_source: str | None
+    metadata_match_status: str | None
+    metadata_match_score: int
+    metadata_message: str | None
     status: str
     message: str | None
     created_at: str

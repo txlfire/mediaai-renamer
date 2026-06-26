@@ -6,7 +6,10 @@ from pathlib import PurePath
 import sqlite3
 
 from app.core.config import AppSettings
-from app.schema.media import PreviewGenerationSummary, RenamePreview
+from app.schema.media import ParsedMediaName, PreviewGenerationSummary, RenamePreview
+from app.schema.metadata import MetadataCandidate, MetadataMatchResult
+from app.service.metadata_matcher import MATCH_STATUS_HIGH
+from app.service.metadata_service import MetadataProvider, match_metadata_candidates
 from app.utils.filename_parser import parse_media_filename
 from app.utils.naming_template import build_preview_name
 
@@ -32,6 +35,10 @@ def _row_to_preview(row: sqlite3.Row) -> RenamePreview:
         suggested_name=suggested_name,
         edited_name=edited_name,
         current_target_name=edited_name or suggested_name,
+        metadata_source=row["metadata_source"],
+        metadata_match_status=row["metadata_match_status"],
+        metadata_match_score=int(row["metadata_match_score"] or 0),
+        metadata_message=row["metadata_message"],
         status=str(row["status"]),
         message=row["message"],
         created_at=str(row["created_at"]),
@@ -178,7 +185,9 @@ def list_rename_previews(
         rows = connection.execute(
             "SELECT rp.id, rp.media_file_id, mf.file_path, mf.file_name, rp.media_type, "
             "rp.parsed_title, rp.parsed_year, rp.season, rp.episode, rp.original_extension, "
-            "rp.suggested_name, rp.edited_name, rp.status, rp.message, rp.created_at, rp.updated_at "
+            "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
+            "rp.metadata_match_score, rp.metadata_message, rp.status, rp.message, "
+            "rp.created_at, rp.updated_at "
             "FROM rename_previews rp "
             "JOIN media_files mf ON mf.id = rp.media_file_id"
             f"{where_clause} ORDER BY rp.id",
@@ -225,3 +234,165 @@ def update_rename_preview(
         if preview.id == preview_id:
             return preview
     raise ValueError("命名预览不存在")
+
+
+def _get_preview_row(connection: sqlite3.Connection, preview_id: int) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT rp.id, rp.media_file_id, mf.file_path, mf.file_name, rp.media_type, "
+        "rp.parsed_title, rp.parsed_year, rp.season, rp.episode, rp.original_extension, "
+        "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
+        "rp.metadata_match_score, rp.metadata_message, rp.status, rp.message, "
+        "rp.created_at, rp.updated_at "
+        "FROM rename_previews rp "
+        "JOIN media_files mf ON mf.id = rp.media_file_id "
+        "WHERE rp.id = ?",
+        (preview_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("命名预览不存在")
+    return row
+
+
+def _parsed_from_preview(row: sqlite3.Row) -> ParsedMediaName:
+    return ParsedMediaName(
+        media_type=str(row["media_type"]),
+        title=str(row["parsed_title"]),
+        year=row["parsed_year"],
+        season=row["season"],
+        episode=row["episode"],
+        message=row["message"],
+    )
+
+
+def _preview_by_id(settings: AppSettings, preview_id: int) -> RenamePreview:
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        return _row_to_preview(_get_preview_row(connection, preview_id))
+
+
+def _candidate_preview_name(candidate: MetadataCandidate, extension: str) -> str:
+    parsed = ParsedMediaName(
+        media_type=candidate.media_type,
+        title=candidate.title or candidate.original_title,
+        year=candidate.year,
+        season=candidate.season,
+        episode=candidate.episode,
+    )
+    return build_preview_name(parsed, extension)
+
+
+def _update_preview_metadata(
+    settings: AppSettings,
+    preview_id: int,
+    candidate: MetadataCandidate | None,
+    match_status: str,
+    score: int,
+    message: str | None,
+    auto_backfill: bool,
+    preview_status: str,
+) -> RenamePreview:
+    now = _utc_now()
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _get_preview_row(connection, preview_id)
+        suggested_name = row["suggested_name"]
+        if candidate is not None and auto_backfill:
+            suggested_name = _candidate_preview_name(candidate, str(row["original_extension"]))
+
+        connection.execute(
+            "UPDATE rename_previews SET "
+            "suggested_name = ?, "
+            "metadata_source = ?, "
+            "metadata_match_status = ?, "
+            "metadata_match_score = ?, "
+            "metadata_message = ?, "
+            "status = ?, "
+            "message = ?, "
+            "updated_at = ? "
+            "WHERE id = ?",
+            (
+                suggested_name,
+                candidate.provider if candidate else None,
+                match_status,
+                score,
+                message,
+                preview_status,
+                message,
+                now,
+                preview_id,
+            ),
+        )
+        connection.commit()
+
+    return _preview_by_id(settings, preview_id)
+
+
+def list_metadata_candidates(
+    settings: AppSettings,
+    preview_id: int,
+    provider: MetadataProvider | None = None,
+) -> list[MetadataMatchResult]:
+    """Return sorted metadata candidates for one rename preview."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _get_preview_row(connection, preview_id)
+    result = match_metadata_candidates(settings, _parsed_from_preview(row), provider=provider)
+    return result.matches
+
+
+def match_rename_preview_metadata(
+    settings: AppSettings,
+    preview_id: int,
+    provider: MetadataProvider | None = None,
+) -> RenamePreview:
+    """Match one preview against TMDB and auto-backfill high confidence results."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _get_preview_row(connection, preview_id)
+    result = match_metadata_candidates(settings, _parsed_from_preview(row), provider=provider)
+    if not result.matches:
+        return _update_preview_metadata(
+            settings,
+            preview_id,
+            None,
+            result.status,
+            0,
+            result.message,
+            auto_backfill=False,
+            preview_status="needs_review",
+        )
+
+    best = result.matches[0]
+    is_high_confidence = best.status == MATCH_STATUS_HIGH
+    return _update_preview_metadata(
+        settings,
+        preview_id,
+        best.candidate,
+        best.status,
+        best.score,
+        result.message,
+        auto_backfill=is_high_confidence,
+        preview_status="tmdb_matched" if is_high_confidence else "needs_review",
+    )
+
+
+def apply_metadata_candidate(
+    settings: AppSettings,
+    preview_id: int,
+    candidate: MetadataCandidate,
+    score: int,
+) -> RenamePreview:
+    """Apply a user-selected metadata candidate to one preview."""
+
+    return _update_preview_metadata(
+        settings,
+        preview_id,
+        candidate,
+        "manual_selected",
+        score,
+        None,
+        auto_backfill=True,
+        preview_status="tmdb_selected",
+    )

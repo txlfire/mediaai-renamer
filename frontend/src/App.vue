@@ -5,6 +5,7 @@ import {
   Moon,
   Operation,
   Search,
+  Setting,
   SwitchButton,
   Sunny,
   VideoCamera,
@@ -24,6 +25,7 @@ const menuItems = [
   { path: "/scan-jobs", label: messages.app.menu.scanJobs, icon: Operation },
   { path: "/scan-results", label: messages.app.menu.scanResults, icon: VideoCamera },
   { path: "/rename-previews", label: messages.app.menu.renamePreviews, icon: EditPen },
+  { path: "/settings", label: messages.app.menu.settings, icon: Setting },
 ];
 
 const isDarkTheme = computed(() => appStore.resolvedTheme === "dark");

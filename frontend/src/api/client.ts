@@ -109,8 +109,30 @@ export type RenamePreview = {
   edited_name: string | null;
   current_target_name: string;
   status: "generated" | "edited" | "needs_review" | string;
+  metadata_source: string | null;
+  metadata_match_status: string | null;
+  metadata_match_score: number;
+  metadata_message: string | null;
   message: string | null;
   updated_at: string;
+};
+
+export type MetadataCandidate = {
+  provider: string;
+  provider_id: string;
+  media_type: string;
+  title: string;
+  original_title: string;
+  year: number | null;
+  season: number | null;
+  episode: number | null;
+  overview: string;
+};
+
+export type MetadataMatchResult = {
+  candidate: MetadataCandidate;
+  score: number;
+  status: string;
 };
 
 export type RenamePreviewFilters = {
@@ -165,6 +187,39 @@ export type RenameOperation = {
   items: RenameOperationItem[];
 };
 
+export type SystemSetting = {
+  key: string;
+  category: string;
+  value: string | number | boolean;
+  description: string;
+  sensitive: boolean;
+  source: string;
+  updated_at: string | null;
+};
+
+export type TmdbConnectionTestResult = {
+  success: boolean;
+  message: string;
+};
+
+export type PendingFile = {
+  id: number;
+  media_source_id: number;
+  scan_job_id: number;
+  file_path: string;
+  file_name: string;
+  extension: string;
+  file_size: number;
+  reason: string;
+  status: string;
+  created_at: string;
+};
+
+export type PendingFileFilters = {
+  media_source_id?: number;
+  scan_job_id?: number;
+};
+
 export const apiClient = axios.create({
   baseURL: "/api",
   timeout: 15000,
@@ -206,6 +261,16 @@ function requireDelete(httpClient: ApiHttpClient) {
     throw new Error(messages.errors.missingDelete);
   }
   return httpClient.delete.bind(httpClient);
+}
+
+function apiErrorMessage(error: unknown) {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const response = (error as { response?: { data?: { detail?: unknown } } }).response;
+    if (typeof response?.data?.detail === "string" && response.data.detail.trim()) {
+      return response.data.detail;
+    }
+  }
+  return error instanceof Error ? error.message : messages.errors.unknown;
 }
 
 export async function fetchMediaSources(
@@ -378,5 +443,111 @@ export async function executeRenameOperation(
 ): Promise<RenameOperation> {
   const post = requirePost(httpClient);
   const response = await post<RenameOperation>(`/rename-operations/${operationId}/execute`, {});
+  return response.data;
+}
+
+export async function matchRenamePreviewMetadata(
+  previewId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreview> {
+  const post = requirePost(httpClient);
+  const response = await post<RenamePreview>(`/rename-previews/${previewId}/metadata-match`, {});
+  return response.data;
+}
+
+export async function fetchRenamePreviewMetadataCandidates(
+  previewId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MetadataMatchResult[]> {
+  const response = await httpClient.get<MetadataMatchResult[]>(
+    `/rename-previews/${previewId}/metadata-candidates`,
+  );
+  return response.data;
+}
+
+export async function applyRenamePreviewMetadataCandidate(
+  previewId: number,
+  match: MetadataMatchResult,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreview> {
+  const post = requirePost(httpClient);
+  const response = await post<RenamePreview>(`/rename-previews/${previewId}/metadata-candidate`, {
+    candidate: match.candidate,
+    score: match.score,
+  });
+  return response.data;
+}
+
+export async function fetchSettings(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<SystemSetting[]> {
+  const response = await httpClient.get<SystemSetting[]>("/settings");
+  return response.data;
+}
+
+export async function updateSettings(
+  values: Record<string, string | number | boolean>,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<SystemSetting[]> {
+  const put = requirePut(httpClient);
+  const response = await put<SystemSetting[]>("/settings", { values });
+  return response.data;
+}
+
+export async function testTmdbSettings(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TmdbConnectionTestResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<TmdbConnectionTestResult>("/settings/tmdb/test", {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function fetchPendingFiles(
+  filters: PendingFileFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<PendingFile[]> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<PendingFile[]>(
+    query ? `/pending-files?${query}` : "/pending-files",
+  );
+  return response.data;
+}
+
+export async function removePendingFile(
+  pendingFileId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<PendingFile> {
+  const remove = requireDelete(httpClient);
+  const response = await remove<PendingFile>(`/pending-files/${pendingFileId}`);
+  return response.data;
+}
+
+export async function clearPendingFiles(
+  filters: PendingFileFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<{ removed_count: number }> {
+  const post = requirePost(httpClient);
+  const query = buildQueryString(filters);
+  const response = await post<{ removed_count: number }>(
+    query ? `/pending-files/clear?${query}` : "/pending-files/clear",
+    {},
+  );
+  return response.data;
+}
+
+export async function movePendingFiles(
+  ids: number[],
+  targetDirectory: string,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<PendingFile[]> {
+  const post = requirePost(httpClient);
+  const response = await post<PendingFile[]>("/pending-files/move", {
+    ids,
+    target_directory: targetDirectory,
+  });
   return response.data;
 }

@@ -157,7 +157,9 @@ onMounted(async () => {
         <el-table-column
           prop="batch_interval_seconds"
           :label="messages.scanJobs.columns.interval"
-          min-width="76"
+          width="64"
+          class-name="interval-column"
+          header-class-name="interval-column"
           align="center"
           header-align="center"
           sortable="custom"
