@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
@@ -11,7 +12,14 @@ import { usePaginationStore } from "../stores/pagination";
 import { usePreviewStore } from "../stores/preview";
 import { useRenameOperationStore } from "../stores/renameOperation";
 import { useTableSortStore } from "../stores/tableSort";
+import type { RenamePreview } from "../api/client";
 import { formatDateTime } from "../utils/displayFormat";
+import {
+  canPrepareRename,
+  findEmptyTargetNamePreviews,
+  getRenameablePreviewIds,
+  removeEmptyTargetNamePreviews,
+} from "../utils/renameSelection";
 
 const mediaStore = useMediaStore();
 const previewStore = usePreviewStore();
@@ -22,9 +30,12 @@ const route = useRoute();
 
 const editDialogVisible = ref(false);
 const operationDialogVisible = ref(false);
+const emptyTargetDialogVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
 const editingTargetName = ref("");
 const selectedPreviewIds = ref<number[]>([]);
+const selectedPreviewRows = ref<RenamePreview[]>([]);
+const pendingRenamePreviews = ref<RenamePreview[]>([]);
 const defaultSort = { prop: "updated_at", order: "descending" as const };
 
 const pagedPreviews = computed(() =>
@@ -146,6 +157,7 @@ async function loadScanJobsForSelectedSource() {
 }
 
 function handleSelectionChange(rows: Array<{ id: number }>) {
+  selectedPreviewRows.value = rows as RenamePreview[];
   selectedPreviewIds.value = rows.map((row) => row.id);
 }
 
@@ -155,6 +167,50 @@ async function runRenameDryRun() {
   }
   await renameOperationStore.runDryRun(selectedPreviewIds.value);
   operationDialogVisible.value = true;
+}
+
+async function runRenameDryRunForPreviews(previews: RenamePreview[]) {
+  const renameablePreviews = previews.filter(canPrepareRename);
+  if (renameablePreviews.length === 0) {
+    ElMessage.warning("没有可执行重命名的预览记录");
+    return;
+  }
+
+  pendingRenamePreviews.value = renameablePreviews;
+  if (findEmptyTargetNamePreviews(renameablePreviews).length > 0) {
+    emptyTargetDialogVisible.value = true;
+    return;
+  }
+
+  selectedPreviewIds.value = renameablePreviews.map((preview) => preview.id);
+  await runRenameDryRun();
+}
+
+async function executeSelectedPreviews() {
+  await runRenameDryRunForPreviews(selectedPreviewRows.value);
+}
+
+async function executeAllPreviews() {
+  const renameableIds = new Set(getRenameablePreviewIds(previewStore.previews));
+  await runRenameDryRunForPreviews(previewStore.previews.filter((preview) => renameableIds.has(preview.id)));
+}
+
+async function executeSinglePreview(row: RenamePreview) {
+  await runRenameDryRunForPreviews([row]);
+}
+
+async function continueWithoutEmptyTargets() {
+  const filteredPreviews = removeEmptyTargetNamePreviews(pendingRenamePreviews.value);
+  emptyTargetDialogVisible.value = false;
+  pendingRenamePreviews.value = [];
+
+  if (filteredPreviews.length === 0) {
+    ElMessage.warning("剔除空名条目后没有可执行条目");
+    return;
+  }
+
+  selectedPreviewIds.value = filteredPreviews.map((preview) => preview.id);
+  await runRenameDryRun();
 }
 
 async function executeRenameOperation() {
@@ -256,12 +312,21 @@ onMounted(async () => {
           :icon="Select"
           :disabled="selectedPreviewIds.length === 0"
           :loading="renameOperationStore.loading"
-          @click="runRenameDryRun"
+          @click="executeSelectedPreviews"
         >
-          冲突检测
+          执行重命名
         </el-button>
         <el-button type="primary" :icon="MagicStick" :loading="previewStore.loading" @click="generatePreviews">
           生成预览
+        </el-button>
+        <el-button
+          type="warning"
+          :icon="Select"
+          :disabled="previewStore.previews.length === 0"
+          :loading="renameOperationStore.loading"
+          @click="executeAllPreviews"
+        >
+          全部重命名
         </el-button>
         <el-button :icon="Refresh" @click="refreshPreviews">刷新</el-button>
       </div>
@@ -348,10 +413,19 @@ onMounted(async () => {
       >
         <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="62" align="center" header-align="center" fixed="right">
+      <el-table-column label="操作" width="96" align="center" header-align="center" fixed="right">
         <template #default="{ row }">
           <el-tooltip content="编辑" placement="top">
             <el-button class="table-action-button action-edit" :icon="Edit" text circle @click="openEditDialog(row)" />
+          </el-tooltip>
+          <el-tooltip content="执行重命名" placement="top">
+            <el-button
+              class="table-action-button action-run"
+              :icon="Select"
+              text
+              circle
+              @click="executeSinglePreview(row)"
+            />
           </el-tooltip>
         </template>
       </el-table-column>
@@ -367,7 +441,38 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="operationDialogVisible" title="重命名冲突检测" width="860px">
+    <el-dialog v-model="emptyTargetDialogVisible" title="发现空目标文件名" width="760px">
+      <el-alert
+        title="以下条目的目标文件名为空，不能执行重命名。可以返回编辑，也可以一键剔除这些条目后继续。"
+        type="warning"
+        show-icon
+      />
+      <el-table :data="findEmptyTargetNamePreviews(pendingRenamePreviews)" class="data-table" max-height="360">
+        <el-table-column prop="file_name" label="原文件名" min-width="220">
+          <template #default="{ row }">
+            <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="parsed_title" label="解析标题" min-width="160">
+          <template #default="{ row }">
+            <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100" align="center" header-align="center">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="emptyTargetDialogVisible = false">返回编辑</el-button>
+        <el-button type="warning" :loading="renameOperationStore.loading" @click="continueWithoutEmptyTargets">
+          剔除空名条目并继续
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="operationDialogVisible" title="确认重命名" width="860px">
       <div class="rename-operation-dialog">
         <el-alert
           v-if="renameOperationStore.errorMessage"

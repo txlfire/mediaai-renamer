@@ -87,7 +87,7 @@ def _update_successful_media_record(
 def _build_item_plan(row: sqlite3.Row, duplicate_targets: Counter[str]) -> tuple[str, str, str, str | None]:
     source_path = Path(str(row["file_path"]))
     target_name = str(row["edited_name"] or row["suggested_name"])
-    target_path = source_path.with_name(target_name)
+    target_path = source_path.parent / target_name
     status = "ready"
     message = None
 
@@ -118,10 +118,11 @@ def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int]) 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = _query_previews(connection, preview_ids)
-        target_paths = [
-            str(Path(str(row["file_path"])).with_name(str(row["edited_name"] or row["suggested_name"])))
-            for row in rows
-        ]
+        target_paths = []
+        for row in rows:
+            source_path = Path(str(row["file_path"]))
+            target_name = str(row["edited_name"] or row["suggested_name"])
+            target_paths.append(str(source_path.parent / target_name))
         duplicate_targets = Counter(target_paths)
 
         item_plans = [

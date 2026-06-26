@@ -19,16 +19,20 @@ Complete these steps first:
 3. Generate naming previews.
 4. Review or edit target file names.
 
-## 3. Run Conflict Detection
+## 3. Execute Rename
 
 On the Naming Preview page:
 
 1. Select a media source and scan task.
 2. Click Query to load previews for the task.
-3. Select the rows to process.
-4. Click Conflict Detection.
+3. Use one of the rename entry points:
+   - Select rows and click Execute Rename to process selected items.
+   - Click Rename All to process all renameable items in the current query result.
+   - Click the row action icon to process a single item.
 
-The result dialog shows total, ready, conflict, renamed, and failed counts.
+The system checks empty target names before the dry-run. If empty target names exist, a dialog lists those rows. You can return to edit them, or click Remove Empty-Name Items and Continue to exclude them from the current operation.
+
+After that, the system runs the dry-run conflict check and opens the confirmation dialog. The dialog shows total, ready, conflict, renamed, and failed counts.
 
 ## 4. Conflict Reasons
 
@@ -43,7 +47,7 @@ Common conflict reasons include:
 
 Conflict items are not executed. Fix the target name or rescan the source files before retrying.
 
-## 5. Execute Rename
+## 5. Confirm Rename
 
 If the dry-run result contains ready items, click Confirm Rename.
 

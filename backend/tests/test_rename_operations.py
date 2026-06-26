@@ -170,6 +170,22 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual(2, operation.conflict_count)
         self.assertTrue(all(item.status == "conflict" for item in operation.items))
 
+    def test_dry_run_marks_empty_target_name_as_conflict(self):
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET suggested_name = '', edited_name = '' WHERE id = ?",
+                (preview.id,),
+            )
+            connection.commit()
+
+        operation = create_rename_dry_run(self.settings, [preview.id])
+
+        self.assertEqual(0, operation.ready_count)
+        self.assertEqual(1, operation.conflict_count)
+        self.assertEqual("conflict", operation.items[0].status)
+
     def test_execute_marks_missing_source_as_failed(self):
         generate_rename_previews(self.settings)
         preview = list_rename_previews(self.settings)[0]
