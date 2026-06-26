@@ -2,8 +2,8 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与重命名工具。项目目标是先安全整理本地或已挂载目录中的媒体文件，再逐步接入智能解析、命名规则和批量重命名能力。
 
-当前版本：`0.2.0`  
-当前开发阶段：M3 安全重命名流程开发中
+当前版本：`0.3.0`  
+当前开发阶段：M3 安全重命名已发布
 
 ## 当前能力
 
@@ -161,6 +161,8 @@ npm run frontend:build
 - 用户手册：[docs/manuals/](docs/manuals/)
 - M3 设计规格：[docs/superpowers/specs/2026-06-24-m3-safe-rename-design.md](docs/superpowers/specs/2026-06-24-m3-safe-rename-design.md)
 - M3 实现计划：[docs/superpowers/plans/2026-06-24-m3-safe-rename-implementation.md](docs/superpowers/plans/2026-06-24-m3-safe-rename-implementation.md)
+- M3 设计手册：[docs/design/M3-design-manual.md](docs/design/M3-design-manual.md)
+- M3 用户手册：[docs/manuals/M3-user-manual-cn.md](docs/manuals/M3-user-manual-cn.md)
 
 ## Git 分支约定
 

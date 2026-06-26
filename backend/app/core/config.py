@@ -53,7 +53,7 @@ class AppSettings:
     """应用运行配置。"""
 
     app_name: str = "MediaAI Renamer"
-    version: str = "0.2.0"
+    version: str = "0.3.0"
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()
