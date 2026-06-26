@@ -17,6 +17,26 @@ $env:PYTHONPATH = "backend"
 npm run frontend:dev
 ```
 
+局域网可访问方式启动后端：
+
+```powershell
+npm run backend:dev:lan
+```
+
+局域网可访问方式启动前端：
+
+```powershell
+npm run frontend:dev:lan
+```
+
+局域网内其他机器访问：
+
+```text
+http://本机局域网IP:5173
+```
+
+如果其他机器无法访问，请检查 Windows 防火墙是否放行 `5173` 和 `8970` 端口。
+
 访问地址：
 
 ```text

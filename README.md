@@ -77,6 +77,19 @@ npm install
 npm run frontend:dev
 ```
 
+局域网可访问启动：
+
+```powershell
+npm run backend:dev:lan
+npm run frontend:dev:lan
+```
+
+局域网访问地址：
+
+```text
+http://本机局域网IP:5173
+```
+
 启动后可用以下地址检查：
 
 ```text
