@@ -6,7 +6,10 @@
   "scripts": {
     "frontend:dev": "vite --host 127.0.0.1 --port 5173 --config frontend/vite.config.ts",
     "frontend:build": "vue-tsc --noEmit --project frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
-    "frontend:test": "vitest run frontend/src/api/client.test.ts"
+    "frontend:test": "vitest run frontend/src/api/client.test.ts",
+    "backend:test": "powershell -ExecutionPolicy Bypass -File scripts/run-backend-tests.ps1",
+    "release:package": "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1",
+    "release:publish": "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Publish"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",

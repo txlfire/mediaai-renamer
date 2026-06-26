@@ -159,6 +159,7 @@ npm run frontend:build
 - 工作日志：[docs/work-logs/](docs/work-logs/)
 - M1 设计手册：[docs/design/](docs/design/)
 - 用户手册：[docs/manuals/](docs/manuals/)
+- 常用脚本和任务：[docs/development/common-tasks.md](docs/development/common-tasks.md)
 - M3 设计规格：[docs/superpowers/specs/2026-06-24-m3-safe-rename-design.md](docs/superpowers/specs/2026-06-24-m3-safe-rename-design.md)
 - M3 实现计划：[docs/superpowers/plans/2026-06-24-m3-safe-rename-implementation.md](docs/superpowers/plans/2026-06-24-m3-safe-rename-implementation.md)
 - M3 设计手册：[docs/design/M3-design-manual.md](docs/design/M3-design-manual.md)
