@@ -79,6 +79,21 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(["second.mkv"], [file.file_name for file in second_job_files])
             self.assertEqual(["first.mkv"], [file.file_name for file in first_source_files])
 
+    def test_run_full_scan_rejects_disabled_media_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            (media_dir / "movie.mkv").write_text("movie", encoding="utf-8")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "disabled", media_dir, False)
+
+            with self.assertRaises(ValueError):
+                run_full_scan(settings, source.id)
+
+            self.assertEqual([], list_scan_jobs(settings))
+
 
 if __name__ == "__main__":
     unittest.main()

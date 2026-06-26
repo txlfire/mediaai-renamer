@@ -82,6 +82,8 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
     """
 
     source = get_media_source(settings, media_source_id)
+    if not source.enabled:
+        raise ValueError("媒体源已停用，无法发起扫描")
     source_path = Path(source.path)
     created_at = _utc_now()
 

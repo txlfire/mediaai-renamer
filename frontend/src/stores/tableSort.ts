@@ -53,6 +53,10 @@ export const useTableSortStore = defineStore("tableSort", {
 
       const direction = sort.order === "ascending" ? 1 : -1;
       return [...items].sort((left, right) => {
+        if (sort.prop === "__sequence") {
+          return direction;
+        }
+
         const leftValue = normalizeValue(left[sort.prop]);
         const rightValue = normalizeValue(right[sort.prop]);
 

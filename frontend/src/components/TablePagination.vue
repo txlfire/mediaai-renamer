@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import {
   PAGE_SIZE_ALL,
   usePaginationStore,
@@ -18,16 +19,16 @@ const pagination = computed(() => paginationStore.getState(props.paginationKey))
 
 <template>
   <div class="table-pagination">
-    <span class="pagination-total">共 {{ total }} 条</span>
+    <span class="pagination-total">{{ formatMessage(messages.common.totalRows, { total }) }}</span>
     <el-select
       :model-value="pagination.pageSize"
       class="page-size-select"
       size="small"
       @change="(size: number) => paginationStore.setPageSize(paginationKey, size)"
     >
-      <el-option label="10 条/页" :value="10" />
-      <el-option label="50 条/页" :value="50" />
-      <el-option label="全部" :value="PAGE_SIZE_ALL" />
+      <el-option :label="messages.common.pageSize10" :value="10" />
+      <el-option :label="messages.common.pageSize50" :value="50" />
+      <el-option :label="messages.common.all" :value="PAGE_SIZE_ALL" />
     </el-select>
     <el-pagination
       v-if="pagination.pageSize !== PAGE_SIZE_ALL"

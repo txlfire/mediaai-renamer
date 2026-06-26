@@ -1,3 +1,5 @@
+import { zhCnMessages as messages } from "../locales/zh-CN";
+
 export function textByteLength(value: unknown): number {
   return new TextEncoder().encode(String(value ?? "")).length;
 }
@@ -68,10 +70,10 @@ export function formatDateTime(value: unknown): string {
 export function formatScanJobStatus(value: unknown): string {
   const status = String(value ?? "");
   const labels: Record<string, string> = {
-    pending: "等待中",
-    running: "扫描中",
-    completed: "已完成",
-    failed: "失败",
+    pending: messages.status.pending,
+    running: messages.status.running,
+    completed: messages.status.completed,
+    failed: messages.status.failed,
   };
 
   return labels[status] ?? status;

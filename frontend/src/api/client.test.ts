@@ -1,16 +1,12 @@
-/**
- * API 客户端测试。
- *
- * 锁定前端必须通过 Axios 相对路径访问后端，避免后续误改成硬编码地址。
- */
-
 import { describe, expect, it } from "vitest";
 
 import {
   apiClient,
+  bulkDeleteMediaSources,
   createMediaSource,
-  createScanJob,
   createRenameDryRun,
+  createScanJob,
+  deleteMediaSource,
   executeRenameOperation,
   fetchLocalDirectories,
   fetchLogs,
@@ -21,6 +17,8 @@ import {
   fetchScanJobs,
   generateRenamePreviews,
   getHealth,
+  setMediaSourceEnabled,
+  updateMediaSource,
   updateRenamePreview,
   type ApiHttpClient,
 } from "./client";
@@ -34,7 +32,6 @@ describe("getHealth", () => {
     const httpClient: ApiHttpClient = {
       get: async <T = unknown>(url: string): Promise<{ data: T }> => {
         expect(url).toBe("/health");
-
         return {
           data: {
             app: "MediaAI Renamer",
@@ -59,13 +56,20 @@ describe("getHealth", () => {
       },
     };
 
-    await expect(getHealth(httpClient)).rejects.toThrow("后端健康检查失败");
+    await expect(getHealth(httpClient)).rejects.toThrow("network down");
   });
 });
 
-describe("M1 API client", () => {
+describe("media source API client", () => {
   it("uses media source endpoints", async () => {
     const calls: string[] = [];
+    const cleanup_summary = {
+      rename_operation_items: 0,
+      rename_operations: 0,
+      rename_previews: 0,
+      media_files: 0,
+      scan_jobs: 0,
+    };
     const httpClient: ApiHttpClient = {
       get: async <T = unknown>(url: string): Promise<{ data: T }> => {
         calls.push(`GET ${url}`);
@@ -73,17 +77,51 @@ describe("M1 API client", () => {
       },
       post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
         calls.push(`POST ${url}:${JSON.stringify(body)}`);
-        return { data: { id: 1, name: "电影", path: "D:/media", enabled: true } as T };
+        return { data: { id: 1, name: "movie", path: "D:/media", enabled: true } as T };
+      },
+      put: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`PUT ${url}:${JSON.stringify(body)}`);
+        return {
+          data: {
+            source: { id: 1, name: "movie", path: "D:/new", enabled: true },
+            cleanup_summary,
+          } as T,
+        };
+      },
+      patch: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`PATCH ${url}:${JSON.stringify(body)}`);
+        return { data: { id: 1, name: "movie", path: "D:/media", enabled: false } as T };
+      },
+      delete: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`DELETE ${url}`);
+        return { data: { deleted_ids: [1], cleanup_summary } as T };
       },
     };
 
     await fetchMediaSources(httpClient);
-    await createMediaSource({ name: "电影", path: "D:/media", enabled: true }, httpClient);
+    await createMediaSource({ name: "movie", path: "D:/media", enabled: true }, httpClient);
+    await updateMediaSource(
+      1,
+      {
+        name: "movie",
+        path: "D:/new",
+        enabled: true,
+        clear_history_on_path_change: true,
+      },
+      httpClient,
+    );
+    await setMediaSourceEnabled(1, false, httpClient);
+    await deleteMediaSource(1, httpClient);
+    await bulkDeleteMediaSources([1, 2], httpClient);
     await fetchLocalDirectories("D:/media", httpClient);
 
     expect(calls).toEqual([
       "GET /media-sources",
-      'POST /media-sources:{"name":"电影","path":"D:/media","enabled":true}',
+      'POST /media-sources:{"name":"movie","path":"D:/media","enabled":true}',
+      'PUT /media-sources/1:{"name":"movie","path":"D:/new","enabled":true,"clear_history_on_path_change":true}',
+      'PATCH /media-sources/1/enabled:{"enabled":false}',
+      "DELETE /media-sources/1",
+      'POST /media-sources/bulk-delete:{"ids":[1,2]}',
       "GET /media-sources/local-directories?path=D%3A%2Fmedia",
     ]);
   });
@@ -115,7 +153,7 @@ describe("M1 API client", () => {
   });
 });
 
-describe("M2 rename preview API client", () => {
+describe("rename preview API client", () => {
   it("uses rename preview endpoints", async () => {
     const calls: string[] = [];
     const httpClient: ApiHttpClient = {
@@ -145,7 +183,7 @@ describe("M2 rename preview API client", () => {
   });
 });
 
-describe("M3 rename operation API client", () => {
+describe("rename operation API client", () => {
   it("uses rename operation endpoints", async () => {
     const calls: string[] = [];
     const httpClient: ApiHttpClient = {

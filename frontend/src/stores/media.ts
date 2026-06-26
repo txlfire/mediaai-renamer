@@ -1,26 +1,28 @@
-/**
- * 媒体扫描状态。
- *
- * 保存 M1 阶段媒体源、扫描任务、扫描结果和日志抽屉状态。
- */
-
 import { defineStore } from "pinia";
 
 import {
+  bulkDeleteMediaSources,
   createMediaSource,
   createScanJob,
+  deleteMediaSource,
   fetchLogs,
   fetchMediaFiles,
   fetchMediaSources,
   fetchScanJobs,
+  setMediaSourceEnabled,
+  updateMediaSource,
+  type CleanupSummary,
   type LogItem,
   type MediaFile,
   type MediaFileFilters,
   type MediaSource,
   type MediaSourceCreatePayload,
+  type MediaSourceMutationResult,
+  type MediaSourceUpdatePayload,
   type ScanJob,
   type ScanJobFilters,
 } from "../api/client";
+import { zhCnMessages as messages } from "../locales/zh-CN";
 
 export const useMediaStore = defineStore("media", {
   state: () => ({
@@ -42,6 +44,36 @@ export const useMediaStore = defineStore("media", {
       await this.loadMediaSources();
     },
 
+    async editMediaSource(
+      sourceId: number,
+      payload: MediaSourceUpdatePayload,
+    ): Promise<MediaSourceMutationResult> {
+      const result = await updateMediaSource(sourceId, payload);
+      await this.loadMediaSources();
+      return result;
+    },
+
+    async toggleMediaSource(sourceId: number, enabled: boolean) {
+      await setMediaSourceEnabled(sourceId, enabled);
+      await this.loadMediaSources();
+    },
+
+    async removeMediaSource(sourceId: number): Promise<MediaSourceMutationResult> {
+      const result = await deleteMediaSource(sourceId);
+      await this.loadMediaSources();
+      return result;
+    },
+
+    async removeMediaSources(sourceIds: number[]): Promise<MediaSourceMutationResult> {
+      const result = await bulkDeleteMediaSources(sourceIds);
+      await this.loadMediaSources();
+      return result;
+    },
+
+    cleanupTotal(summary: CleanupSummary) {
+      return Object.values(summary).reduce((total, count) => total + count, 0);
+    },
+
     async loadScanJobs(filters: ScanJobFilters = {}) {
       this.scanJobs = await fetchScanJobs(filters);
     },
@@ -56,7 +88,7 @@ export const useMediaStore = defineStore("media", {
           this.loadLogs(),
         ]);
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "扫描任务失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.scanJobFailed;
       } finally {
         this.loading = false;
       }

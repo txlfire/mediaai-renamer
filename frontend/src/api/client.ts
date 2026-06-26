@@ -1,29 +1,19 @@
-/**
- * 后端 API 客户端模块。
- *
- * 统一维护 Axios 实例和基础接口封装，页面和 store 不直接访问裸 Axios。
- */
-
 import axios from "axios";
 
-/**
- * 后端健康检查响应。
- */
+import { zhCnMessages as messages } from "../locales/zh-CN";
+
 export type HealthStatus = {
   app: string;
   version: string;
   status: "ok" | string;
 };
 
-/**
- * 当前健康检查接口需要的最小 HTTP 客户端能力。
- *
- * 保持窄接口可以降低测试 mock 的复杂度，后续业务接口可按模块扩展自己的客户端类型。
- */
 export type ApiHttpClient = {
   get<T = unknown>(url: string): Promise<{ data: T }>;
   post?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
   put?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
+  patch?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
+  delete?<T = unknown>(url: string): Promise<{ data: T }>;
 };
 
 export type MediaSource = {
@@ -39,6 +29,24 @@ export type MediaSourceCreatePayload = {
   name: string;
   path: string;
   enabled: boolean;
+};
+
+export type CleanupSummary = {
+  rename_operation_items: number;
+  rename_operations: number;
+  rename_previews: number;
+  media_files: number;
+  scan_jobs: number;
+};
+
+export type MediaSourceUpdatePayload = MediaSourceCreatePayload & {
+  clear_history_on_path_change?: boolean;
+};
+
+export type MediaSourceMutationResult = {
+  source?: MediaSource;
+  deleted_ids?: number[];
+  cleanup_summary: CleanupSummary;
 };
 
 export type LocalDirectoryEntry = {
@@ -157,39 +165,47 @@ export type RenameOperation = {
   items: RenameOperationItem[];
 };
 
-// API 使用相对路径，确保 Docker、NAS 反向代理和本地开发环境都能复用同一套前端代码。
 export const apiClient = axios.create({
   baseURL: "/api",
   timeout: 15000,
 });
 
-/**
- * 获取后端健康状态，用于判断前端是否已经连通 API 服务。
- */
 export async function getHealth(httpClient: ApiHttpClient = apiClient): Promise<HealthStatus> {
   try {
     const response = await httpClient.get<HealthStatus>("/health");
-
     return response.data;
   } catch (error) {
-    // 对外抛出中文错误，方便页面直接展示给用户。
-    const reason = error instanceof Error ? error.message : "未知错误";
-    throw new Error(`后端健康检查失败：${reason}`);
+    const reason = error instanceof Error ? error.message : messages.errors.unknown;
+    throw new Error(`${messages.errors.healthCheckFailed}：${reason}`);
   }
 }
 
 function requirePost(httpClient: ApiHttpClient) {
   if (!httpClient.post) {
-    throw new Error("HTTP 客户端缺少 POST 能力");
+    throw new Error(messages.errors.missingPost);
   }
   return httpClient.post.bind(httpClient);
 }
 
 function requirePut(httpClient: ApiHttpClient) {
   if (!httpClient.put) {
-    throw new Error("HTTP 瀹㈡埛绔己灏?PUT 鑳藉姏");
+    throw new Error(messages.errors.missingPut);
   }
   return httpClient.put.bind(httpClient);
+}
+
+function requirePatch(httpClient: ApiHttpClient) {
+  if (!httpClient.patch) {
+    throw new Error(messages.errors.missingPatch);
+  }
+  return httpClient.patch.bind(httpClient);
+}
+
+function requireDelete(httpClient: ApiHttpClient) {
+  if (!httpClient.delete) {
+    throw new Error(messages.errors.missingDelete);
+  }
+  return httpClient.delete.bind(httpClient);
 }
 
 export async function fetchMediaSources(
@@ -205,6 +221,46 @@ export async function createMediaSource(
 ): Promise<MediaSource> {
   const post = requirePost(httpClient);
   const response = await post<MediaSource>("/media-sources", payload);
+  return response.data;
+}
+
+export async function updateMediaSource(
+  sourceId: number,
+  payload: MediaSourceUpdatePayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MediaSourceMutationResult> {
+  const put = requirePut(httpClient);
+  const response = await put<MediaSourceMutationResult>(`/media-sources/${sourceId}`, payload);
+  return response.data;
+}
+
+export async function setMediaSourceEnabled(
+  sourceId: number,
+  enabled: boolean,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MediaSource> {
+  const patch = requirePatch(httpClient);
+  const response = await patch<MediaSource>(`/media-sources/${sourceId}/enabled`, { enabled });
+  return response.data;
+}
+
+export async function deleteMediaSource(
+  sourceId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MediaSourceMutationResult> {
+  const remove = requireDelete(httpClient);
+  const response = await remove<MediaSourceMutationResult>(`/media-sources/${sourceId}`);
+  return response.data;
+}
+
+export async function bulkDeleteMediaSources(
+  sourceIds: number[],
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MediaSourceMutationResult> {
+  const post = requirePost(httpClient);
+  const response = await post<MediaSourceMutationResult>("/media-sources/bulk-delete", {
+    ids: sourceIds,
+  });
   return response.data;
 }
 

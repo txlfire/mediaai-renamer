@@ -1,17 +1,13 @@
 <script setup lang="ts">
-/**
- * 扫描结果页面。
- *
- * 展示 M1 识别到的视频文件，不提供预览和重命名操作。
- */
-
 import { Refresh, Search } from "@element-plus/icons-vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
+import ListPageLayout from "../components/ListPageLayout.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
+import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
@@ -23,13 +19,17 @@ const tableSortStore = useTableSortStore();
 const route = useRoute();
 const selectedSourceId = ref<number>();
 const selectedScanJobId = ref<number>();
+const detailDialogVisible = ref(false);
+const selectedDetailRow = ref<Record<string, unknown> | null>(null);
 const defaultSort = { prop: "modified_at", order: "descending" as const };
+
 const pagedMediaFiles = computed(() =>
   paginationStore.paginate(
     "scan-results",
     tableSortStore.applySort("scan-results", mediaStore.mediaFiles),
   ),
 );
+const scanResultsPagination = computed(() => paginationStore.getState("scan-results"));
 
 const sourceOptions = computed(() =>
   mediaStore.mediaSources.map((source) => ({
@@ -40,7 +40,7 @@ const sourceOptions = computed(() =>
 
 const scanJobOptions = computed(() =>
   mediaStore.scanJobs.map((job) => ({
-    label: `任务 ${job.id}`,
+    label: `${messages.common.taskLabel} ${job.id}`,
     value: job.id,
   })),
 );
@@ -48,6 +48,34 @@ const scanJobOptions = computed(() =>
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
   tableSortStore.setSort("scan-results", event.prop, event.order);
 }
+
+function sequenceNumber(index: number) {
+  const state = scanResultsPagination.value;
+  if (state.pageSize === 0) {
+    return index + 1;
+  }
+  return (state.currentPage - 1) * state.pageSize + index + 1;
+}
+
+function handleRowClick(row: Record<string, unknown>) {
+  selectedDetailRow.value = row;
+  detailDialogVisible.value = true;
+}
+
+const detailRows = computed(() => {
+  const row = selectedDetailRow.value;
+  if (!row) {
+    return [];
+  }
+  return [
+    { label: messages.scanResults.columns.fileName, value: row.file_name },
+    { label: messages.scanResults.columns.format, value: row.extension },
+    { label: messages.scanResults.columns.size, value: formatFileSize(row.file_size) },
+    { label: messages.scanResults.columns.taskId, value: row.scan_job_id },
+    { label: messages.scanResults.columns.path, value: row.file_path },
+    { label: messages.scanResults.columns.modifiedAt, value: formatDateTime(row.modified_at) },
+  ];
+});
 
 async function queryMediaFiles() {
   if (!selectedScanJobId.value) {
@@ -70,6 +98,14 @@ async function queryScanJobsForSource() {
   await mediaStore.loadScanJobs({ media_source_id: selectedSourceId.value });
 }
 
+async function resetScanResults() {
+  selectedSourceId.value = undefined;
+  selectedScanJobId.value = undefined;
+  mediaStore.scanJobs = [];
+  mediaStore.mediaFiles = [];
+  await mediaStore.loadMediaSources();
+}
+
 onMounted(async () => {
   await mediaStore.loadMediaSources();
   const routeSourceId = Number(route.query.media_source_id);
@@ -86,80 +122,111 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="workspace-page">
-    <div class="page-header">
-      <div>
-        <h1>扫描结果</h1>
-        <p>查看当前已识别的视频文件列表。命名预览和重命名会在后续阶段加入。</p>
-      </div>
-      <el-button :icon="Refresh" @click="queryMediaFiles">刷新</el-button>
-    </div>
-
-    <div class="scan-toolbar">
+  <ListPageLayout :title="messages.scanResults.title" :description="messages.scanResults.description">
+    <template #filters>
       <el-select
         v-model="selectedSourceId"
-        placeholder="选择媒体源"
+        :placeholder="messages.scanResults.selectMediaSource"
         clearable
-        class="source-select"
         @change="queryScanJobsForSource"
         @clear="queryScanJobsForSource"
       >
         <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="selectedScanJobId" placeholder="选择扫描任务" clearable class="source-select">
+      <el-select v-model="selectedScanJobId" :placeholder="messages.scanResults.selectScanJob" clearable>
         <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-button :icon="Search" :disabled="!selectedScanJobId" @click="queryMediaFiles">查询</el-button>
-    </div>
+    </template>
 
-    <el-table
-      :data="pagedMediaFiles"
-      class="data-table"
-      :default-sort="defaultSort"
-      @sort-change="handleSortChange"
-    >
-      <el-table-column label="文件名" min-width="320" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column label="格式" width="100" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="row.extension" :max-length="tableDisplayConfig.extensionMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column
-        prop="file_size"
-        label="大小"
-        width="130"
-        align="center"
-        header-align="center"
-        sortable="custom"
-      >
-        <template #default="{ row }">
-          {{ formatFileSize(row.file_size) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="scan_job_id" label="任务 ID" width="100" align="center" header-align="center" />
-      <el-table-column label="路径" min-width="460" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="row.file_path" :max-length="tableDisplayConfig.pathMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column
-        prop="modified_at"
-        label="修改时间"
-        min-width="180"
-        align="center"
-        header-align="center"
-        sortable="custom"
-      >
-        <template #default="{ row }">
-          {{ formatDateTime(row.modified_at) }}
-        </template>
-      </el-table-column>
-    </el-table>
+    <template #queryAction>
+      <el-button :icon="Search" :disabled="!selectedScanJobId" @click="queryMediaFiles">
+        {{ messages.common.query }}
+      </el-button>
+      <el-button :icon="Refresh" :disabled="!selectedScanJobId" @click="queryMediaFiles">
+        {{ messages.common.refresh }}
+      </el-button>
+      <el-button @click="resetScanResults">{{ messages.common.reset }}</el-button>
+    </template>
 
-    <TablePagination pagination-key="scan-results" :total="mediaStore.mediaFiles.length" />
-  </section>
+    <template #table>
+      <el-table
+        :data="pagedMediaFiles"
+        class="data-table scan-results-table"
+        table-layout="auto"
+        :default-sort="defaultSort"
+        @row-click="handleRowClick"
+        @sort-change="handleSortChange"
+      >
+        <el-table-column
+          prop="__sequence"
+          :label="messages.common.sequence"
+          width="76"
+          align="center"
+          header-align="center"
+          sortable="custom"
+        >
+          <template #default="{ $index }">
+            {{ sequenceNumber($index) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.scanResults.columns.fileName" min-width="280" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.scanResults.columns.format" width="72" align="center" header-align="center">
+          <template #default="{ row }">
+            <TextCell :value="row.extension" :max-length="6" />
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="file_size"
+          :label="messages.scanResults.columns.size"
+          width="112"
+          align="center"
+          header-align="center"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            {{ formatFileSize(row.file_size) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="scan_job_id" :label="messages.scanResults.columns.taskId" width="96" align="center" header-align="center" />
+        <el-table-column :label="messages.scanResults.columns.path" min-width="360" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="row.file_path" :max-length="tableDisplayConfig.pathMaxLength" />
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="modified_at"
+          :label="messages.scanResults.columns.modifiedAt"
+          width="168"
+          class-name="nowrap-column"
+          align="center"
+          header-align="center"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            {{ formatDateTime(row.modified_at) }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
+
+    <template #pagination>
+      <TablePagination pagination-key="scan-results" :total="mediaStore.mediaFiles.length" />
+    </template>
+
+    <el-dialog v-model="detailDialogVisible" :title="messages.scanResults.detailTitle" width="720px">
+      <div class="detail-panel">
+        <div v-for="item in detailRows" :key="item.label" class="detail-item">
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value ?? "-" }}</strong>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="detailDialogVisible = false">{{ messages.common.close }}</el-button>
+      </template>
+    </el-dialog>
+  </ListPageLayout>
 </template>

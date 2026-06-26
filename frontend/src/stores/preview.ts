@@ -9,6 +9,7 @@ import {
   type RenamePreview,
   type RenamePreviewFilters,
 } from "../api/client";
+import { zhCnMessages as messages } from "../locales/zh-CN";
 
 export const usePreviewStore = defineStore("preview", {
   state: () => ({
@@ -42,7 +43,7 @@ export const usePreviewStore = defineStore("preview", {
         this.generationSummary = await generateRenamePreviews(payload);
         await this.loadPreviews();
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "生成命名预览失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.previewGenerationFailed;
       } finally {
         this.loading = false;
       }

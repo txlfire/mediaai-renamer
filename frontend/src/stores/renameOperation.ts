@@ -5,6 +5,7 @@ import {
   executeRenameOperation,
   type RenameOperation,
 } from "../api/client";
+import { zhCnMessages as messages } from "../locales/zh-CN";
 
 export const useRenameOperationStore = defineStore("renameOperation", {
   state: () => ({
@@ -28,7 +29,7 @@ export const useRenameOperationStore = defineStore("renameOperation", {
       try {
         this.currentOperation = await createRenameDryRun(renamePreviewIds);
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "冲突检测失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.renameConflictFailed;
       } finally {
         this.loading = false;
       }
@@ -43,7 +44,7 @@ export const useRenameOperationStore = defineStore("renameOperation", {
       try {
         this.currentOperation = await executeRenameOperation(this.currentOperation.id);
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "执行重命名失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.renameExecutionFailed;
       } finally {
         this.loading = false;
       }

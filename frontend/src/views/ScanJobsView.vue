@@ -1,17 +1,14 @@
 <script setup lang="ts">
-/**
- * 扫描任务页面。
- *
- * 用于选择媒体源并启动全量分批扫描。
- */
-
 import { Files, MagicStick, Notebook, Refresh, Search, VideoPlay } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import ListPageLayout from "../components/ListPageLayout.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
+import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
@@ -24,16 +21,24 @@ const route = useRoute();
 const router = useRouter();
 const selectedSourceId = ref<number>();
 const defaultSort = { prop: "id", order: "descending" as const };
+const pageText = messages.scanJobs;
+
 const pagedScanJobs = computed(() =>
   paginationStore.paginate("scan-jobs", tableSortStore.applySort("scan-jobs", mediaStore.scanJobs)),
 );
 
 const sourceOptions = computed(() =>
-  mediaStore.mediaSources.map((source) => ({
-    label: source.name,
-    value: source.id,
-  })),
+  mediaStore.mediaSources
+    .filter((source) => source.enabled)
+    .map((source) => ({
+      label: source.name,
+      value: source.id,
+    })),
 );
+const selectedSource = computed(() =>
+  mediaStore.mediaSources.find((source) => source.id === selectedSourceId.value),
+);
+const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled));
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
   tableSortStore.setSort("scan-jobs", event.prop, event.order);
@@ -41,6 +46,10 @@ function handleSortChange(event: { prop: string; order: "ascending" | "descendin
 
 async function startScan() {
   if (!selectedSourceId.value) {
+    return;
+  }
+  if (!selectedSource.value?.enabled) {
+    ElMessage.warning(pageText.disabledSource);
     return;
   }
 
@@ -53,6 +62,11 @@ async function queryScanJobs() {
     return;
   }
   await mediaStore.loadScanJobs({ media_source_id: selectedSourceId.value });
+}
+
+async function resetScanJobs() {
+  selectedSourceId.value = undefined;
+  mediaStore.scanJobs = [];
 }
 
 function viewScanResults(row: { id: number; media_source_id: number }) {
@@ -86,104 +100,123 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="workspace-page">
-    <div class="page-header">
-      <div>
-        <h1>扫描任务</h1>
-        <p>选择媒体源后启动全量扫描。M1 使用分批扫描，默认每批 100 个文件、间隔 1 秒。</p>
-      </div>
-      <div class="page-actions">
-        <el-button :icon="Notebook" @click="mediaStore.openLogDrawer">查看日志</el-button>
-        <el-button :icon="Refresh" @click="queryScanJobs">刷新</el-button>
-      </div>
-    </div>
-
-    <div class="scan-toolbar">
-      <el-select v-model="selectedSourceId" placeholder="选择媒体源" class="source-select">
-        <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
+  <ListPageLayout :title="messages.scanJobs.title" :description="messages.scanJobs.description">
+    <template #filters>
+      <el-select
+        v-model="selectedSourceId"
+        class="source-select scan-job-source-select tall-select"
+        popper-class="tall-select-dropdown"
+        :placeholder="messages.scanJobs.selectMediaSource"
+        clearable
+      >
+        <el-option
+          v-for="item in sourceOptions"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        />
       </el-select>
-      <el-button :icon="Search" :disabled="!selectedSourceId" @click="queryScanJobs">查询</el-button>
-      <el-button type="primary" :icon="VideoPlay" :loading="mediaStore.loading" @click="startScan">
-        开始全量扫描
+      <el-button :icon="Search" :disabled="!selectedSourceId" @click="queryScanJobs">{{ messages.common.query }}</el-button>
+      <el-button @click="resetScanJobs">{{ messages.common.reset }}</el-button>
+    </template>
+
+    <template #filterActions>
+      <el-button
+        type="primary"
+        :icon="VideoPlay"
+        :disabled="!canStartScan"
+        :loading="mediaStore.loading"
+        @click="startScan"
+      >
+        {{ messages.scanJobs.startScan }}
       </el-button>
-    </div>
+      <el-button :icon="Refresh" :disabled="!selectedSourceId" @click="queryScanJobs">{{ messages.common.refresh }}</el-button>
+      <el-button :icon="Notebook" @click="mediaStore.openLogDrawer">{{ messages.scanJobs.viewLogs }}</el-button>
+    </template>
 
     <el-alert v-if="mediaStore.errorMessage" type="error" :title="mediaStore.errorMessage" show-icon />
 
-    <el-table
-      :data="pagedScanJobs"
-      class="data-table"
-      :default-sort="defaultSort"
-      @sort-change="handleSortChange"
-    >
-      <el-table-column prop="id" label="任务 ID" width="110" align="center" header-align="center" sortable="custom" />
-      <el-table-column label="状态" width="120" align="left" header-align="left">
-        <template #default="{ row }">
-          <TextCell :value="formatScanJobStatus(row.status)" :max-length="tableDisplayConfig.statusMaxLength" />
-        </template>
-      </el-table-column>
-      <el-table-column prop="scanned_count" label="已扫描" width="120" align="center" header-align="center" sortable="custom" />
-      <el-table-column prop="video_count" label="视频文件" width="120" align="center" header-align="center" sortable="custom" />
-      <el-table-column prop="warning_count" label="警告" width="100" align="center" header-align="center" sortable="custom" />
-      <el-table-column prop="batch_size" label="批大小" width="100" align="center" header-align="center" sortable="custom" />
-      <el-table-column
-        prop="batch_interval_seconds"
-        label="批间隔"
-        width="100"
-        align="center"
-        header-align="center"
-        sortable="custom"
-      />
-      <el-table-column
-        prop="started_at"
-        label="开始时间"
-        min-width="180"
-        align="center"
-        header-align="center"
-        sortable="custom"
+    <template #table>
+      <el-table
+        :data="pagedScanJobs"
+        class="data-table scan-jobs-table"
+        table-layout="auto"
+        :default-sort="defaultSort"
+        @sort-change="handleSortChange"
       >
-        <template #default="{ row }">
-          {{ formatDateTime(row.started_at) }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        prop="ended_at"
-        label="结束时间"
-        min-width="180"
-        align="center"
-        header-align="center"
-        sortable="custom"
-      >
-        <template #default="{ row }">
-          {{ formatDateTime(row.ended_at) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="112" align="center" header-align="center" fixed="right">
-        <template #default="{ row }">
-          <div class="table-actions">
-            <el-tooltip content="扫描结果" placement="top">
-              <el-button
-                class="table-action-button action-view"
-                :icon="Files"
-                text
-                circle
-                @click="viewScanResults(row)"
-              />
-            </el-tooltip>
-            <el-tooltip content="命名预览" placement="top">
-              <el-button
-                class="table-action-button action-magic"
-                :icon="MagicStick"
-                text
-                circle
-                @click="viewRenamePreviews(row)"
-              />
-            </el-tooltip>
-          </div>
-        </template>
-      </el-table-column>
-    </el-table>
+        <el-table-column prop="id" :label="messages.scanJobs.columns.taskId" min-width="92" align="center" header-align="center" sortable="custom" />
+        <el-table-column :label="messages.common.status" min-width="88" align="center" header-align="center">
+          <template #default="{ row }">
+            <TextCell :value="formatScanJobStatus(row.status)" :max-length="tableDisplayConfig.statusMaxLength" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="scanned_count" :label="messages.scanJobs.columns.scanned" min-width="90" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="video_count" :label="messages.scanJobs.columns.videos" min-width="76" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="warning_count" :label="messages.scanJobs.columns.warnings" min-width="76" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="batch_size" :label="messages.scanJobs.columns.batchSize" min-width="100" align="center" header-align="center" sortable="custom" />
+        <el-table-column
+          prop="batch_interval_seconds"
+          :label="messages.scanJobs.columns.interval"
+          min-width="76"
+          align="center"
+          header-align="center"
+          sortable="custom"
+        />
+        <el-table-column
+          prop="started_at"
+          :label="messages.scanJobs.columns.startedAt"
+          min-width="156"
+          class-name="nowrap-column"
+          align="center"
+          header-align="center"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            {{ formatDateTime(row.started_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="ended_at"
+          :label="messages.scanJobs.columns.endedAt"
+          min-width="156"
+          class-name="nowrap-column"
+          align="center"
+          header-align="center"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            {{ formatDateTime(row.ended_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.common.actions" min-width="96" align="center" header-align="center" fixed="right">
+          <template #default="{ row }">
+            <div class="table-actions">
+              <el-tooltip :content="messages.scanJobs.viewResults" placement="top">
+                <el-button
+                  class="table-action-button action-view"
+                  :icon="Files"
+                  text
+                  circle
+                  @click="viewScanResults(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="messages.scanJobs.viewPreviews" placement="top">
+                <el-button
+                  class="table-action-button action-magic"
+                  :icon="MagicStick"
+                  text
+                  circle
+                  @click="viewRenamePreviews(row)"
+                />
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
 
-    <TablePagination pagination-key="scan-jobs" :total="mediaStore.scanJobs.length" />
-  </section>
+    <template #pagination>
+      <TablePagination pagination-key="scan-jobs" :total="mediaStore.scanJobs.length" />
+    </template>
+  </ListPageLayout>
 </template>
