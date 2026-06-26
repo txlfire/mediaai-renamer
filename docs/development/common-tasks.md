@@ -43,6 +43,12 @@ Get-NetTCPConnection -LocalPort 8970,5173 -ErrorAction SilentlyContinue | Select
 npm run backend:test
 ```
 
+Linux / macOS 后端完整测试：
+
+```bash
+npm run backend:test:linux
+```
+
 前端 API 测试：
 
 ```powershell
@@ -69,10 +75,22 @@ npm run frontend:build
 npm run release:package
 ```
 
+Linux / macOS 按当前版本打包：
+
+```bash
+npm run release:package:linux
+```
+
 指定版本打包：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version 0.3.0
+```
+
+Linux / macOS 指定版本打包：
+
+```bash
+bash scripts/package-release.sh --version 0.3.0
 ```
 
 输出文件：
@@ -103,10 +121,22 @@ gh auth login -h github.com
 npm run release:publish
 ```
 
+Linux / macOS 创建或更新当前版本的 GitHub Release：
+
+```bash
+npm run release:publish:linux
+```
+
 指定版本发布：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version 0.3.0 -Publish
+```
+
+Linux / macOS 指定版本发布：
+
+```bash
+bash scripts/package-release.sh --version 0.3.0 --publish
 ```
 
 如果命令行访问 GitHub 需要代理，可先设置：
@@ -114,6 +144,13 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version 0.
 ```powershell
 $env:HTTP_PROXY="http://127.0.0.1:7897"
 $env:HTTPS_PROXY="http://127.0.0.1:7897"
+```
+
+Linux / macOS 代理示例：
+
+```bash
+export HTTP_PROXY="http://127.0.0.1:7897"
+export HTTPS_PROXY="http://127.0.0.1:7897"
 ```
 
 ## 5. Git 发布流程
