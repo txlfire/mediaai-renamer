@@ -5,11 +5,12 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.config import AppSettings, LoggingSettings, ScanSettings
 from app.core.database import ensure_database
 from app.schema.media import ParsedMediaName
-from app.schema.metadata import MetadataCandidate
+from app.schema.metadata import MetadataCandidate, MetadataMatchResult, MetadataMatchSummary
 from app.service.preview_service import (
     apply_metadata_candidate,
     generate_rename_previews,
@@ -97,6 +98,21 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("high_confidence", updated.metadata_match_status)
         self.assertEqual(100, updated.metadata_match_score)
         self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
+
+    def test_high_confidence_match_records_effective_metadata_source(self):
+        candidate = MetadataCandidate("TMDB", "603", "movie", "榛戝甯濆浗", "The Matrix", 1999, None, None, "")
+        summary = MetadataMatchSummary(
+            status="high_confidence",
+            message=None,
+            matches=[MetadataMatchResult(candidate, 100, "high_confidence")],
+            metadata_source="TMDB (V4)",
+        )
+
+        with patch("app.service.preview_service.match_metadata_candidates", return_value=summary):
+            updated = match_rename_preview_metadata(self.settings, self.preview.id)
+
+        self.assertEqual("tmdb_matched", updated.status)
+        self.assertEqual("TMDB (V4)", updated.metadata_source)
 
     def test_low_confidence_match_keeps_preview_and_exposes_candidates(self):
         provider = FakeMetadataProvider(

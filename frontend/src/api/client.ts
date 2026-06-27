@@ -232,7 +232,7 @@ export async function getHealth(httpClient: ApiHttpClient = apiClient): Promise<
     return response.data;
   } catch (error) {
     const reason = error instanceof Error ? error.message : messages.errors.unknown;
-    throw new Error(`${messages.errors.healthCheckFailed}锛?{reason}`);
+    throw new Error(`${messages.errors.healthCheckFailed}: ${reason}`);
   }
 }
 

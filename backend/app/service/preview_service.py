@@ -377,6 +377,7 @@ def match_rename_preview_metadata(
         result.message,
         auto_backfill=is_high_confidence,
         preview_status="tmdb_matched" if is_high_confidence else "needs_review",
+        source_override=result.metadata_source if result.metadata_source != "custom" else None,
     )
 
 

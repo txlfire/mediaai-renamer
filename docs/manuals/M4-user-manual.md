@@ -1,6 +1,6 @@
 # MediaAI Renamer M4 User Manual
 
-Version: v0.4.0 preview
+Version: v0.4.1 patch
 Stage: M4 TMDB metadata scraping and file operations
 Date: 2026-06-26
 
@@ -18,13 +18,14 @@ Open System Settings:
 
 1. Select the TMDB metadata category.
 2. Enable TMDB.
-3. Enter a TMDB API Key.
-4. Adjust language, region, and timeout if needed.
-5. Save the settings.
+3. Enter a TMDB V4 read access token first.
+4. Optionally enter a TMDB V3 API Key as fallback when V4 fails.
+5. Adjust language, region, and timeout if needed.
+6. Save the settings.
 
-Settings take effect without restarting the service. The API key is masked after saving.
+Settings take effect without restarting the service. Tokens and API keys are masked after saving.
 
-If TMDB is disabled or no API key is configured, the system falls back to local parsing.
+If TMDB is disabled, or neither a V4 token nor a V3 API key is configured, the system falls back to local parsing. When both V4 and V3 are configured, V4 is used first and V3 is used automatically as fallback if V4 fails.
 
 ## 3. Configure Minimum File Size
 

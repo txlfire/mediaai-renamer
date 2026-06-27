@@ -11,6 +11,7 @@ const activeCategory = ref("tmdb");
 const pageText = messages.settings;
 
 const form = reactive({
+  v4Token: "",
   apiKey: "",
   language: "zh-CN",
   region: "CN",

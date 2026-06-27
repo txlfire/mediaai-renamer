@@ -66,6 +66,21 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertTrue(api_key.sensitive)
             self.assertEqual("********3456", api_key.value)
 
+    def test_v4_token_accepts_jwt_like_characters_and_masks_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            token = "eyJhbGciOiJIUzI1NiJ9.payload-part_signature"
+
+            update_setting_values(settings, {"tmdb.v4_token": token}, operator="admin")
+            effective = get_effective_settings(settings)
+            values = list_setting_values(settings)
+            v4_token = next(item for item in values if item.key == "tmdb.v4_token")
+
+            self.assertEqual(token, effective["tmdb.v4_token"])
+            self.assertTrue(v4_token.sensitive)
+            self.assertEqual("********ture", v4_token.value)
+
     def test_invalid_values_are_rejected_and_do_not_update_effective_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = self.build_settings(Path(temp_dir))
