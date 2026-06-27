@@ -1907,3 +1907,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
     transition: none;
   }
 }
+
+.settings-test-results {
+  display: grid;
+  gap: 0.5rem;
+}

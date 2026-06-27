@@ -1,4 +1,4 @@
-import axios from "axios";
+﻿import axios from "axios";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
 
@@ -198,8 +198,9 @@ export type SystemSetting = {
 };
 
 export type TmdbConnectionTestResult = {
-  success: boolean;
-  message: string;
+  v4: { status: string; message: string };
+  v3: { status: string; message: string };
+  effective: string;
 };
 
 export type PendingFile = {
@@ -231,7 +232,7 @@ export async function getHealth(httpClient: ApiHttpClient = apiClient): Promise<
     return response.data;
   } catch (error) {
     const reason = error instanceof Error ? error.message : messages.errors.unknown;
-    throw new Error(`${messages.errors.healthCheckFailed}：${reason}`);
+    throw new Error(`${messages.errors.healthCheckFailed}锛?{reason}`);
   }
 }
 
@@ -551,3 +552,4 @@ export async function movePendingFiles(
   });
   return response.data;
 }
+

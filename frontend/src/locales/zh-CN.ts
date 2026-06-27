@@ -257,7 +257,11 @@ export const zhCnMessages = {
       operations: "系统运维配置",
     },
     tmdb: {
-      apiKey: "TMDB API Key",
+      v4Token: "TMDB V4 只读访问令牌（推荐优先配置）",
+      v4TokenHint: "优先配置令牌，调用 V4 新版接口，连接更稳定",
+      v4TokenPlaceholder: "输入 V4 只读访问令牌",
+      priorityHint: "调用优先级：系统优先使用 V4 令牌；令牌未填写时，自动降级使用 V3 API 密钥。",
+      apiKey: "TMDB V3 API 密钥（备用降级方案）",
       apiKeyPlaceholder: "留空表示不启用 TMDB 刮削",
       language: "请求语言",
       region: "地区",

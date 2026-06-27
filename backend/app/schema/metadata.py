@@ -34,3 +34,4 @@ class MetadataMatchSummary:
     status: str
     message: str | None
     matches: list[MetadataMatchResult]
+    metadata_source: str = ""

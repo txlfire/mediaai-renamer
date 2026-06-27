@@ -107,7 +107,11 @@ class SettingsApiTest(unittest.TestCase):
             original = settings_api.test_tmdb_connection
 
             def fail_connection(app_settings):
-                raise ValueError("TMDB 连接失败：HTTP 401。请检查 API Key、网络或代理配置。")
+                return {
+                    "v4": {"status": "failed", "message": "V4 连接失败：HTTP 401"},
+                    "v3": {"status": "skipped", "message": "未配置 V3 API 密钥"},
+                    "effective": "none",
+                }
 
             settings_api.test_tmdb_connection = fail_connection
             try:
@@ -115,11 +119,10 @@ class SettingsApiTest(unittest.TestCase):
             finally:
                 settings_api.test_tmdb_connection = original
 
-            self.assertEqual(400, response.status_code)
-            self.assertEqual(
-                "TMDB 连接失败：HTTP 401。请检查 API Key、网络或代理配置。",
-                response.json()["detail"],
-            )
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual("failed", data["v4"]["status"])
+            self.assertEqual("none", data["effective"])
 
 
 if __name__ == "__main__":

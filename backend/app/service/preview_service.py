@@ -290,6 +290,7 @@ def _update_preview_metadata(
     message: str | None,
     auto_backfill: bool,
     preview_status: str,
+    source_override: str | None = None,
 ) -> RenamePreview:
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -312,7 +313,7 @@ def _update_preview_metadata(
             "WHERE id = ?",
             (
                 suggested_name,
-                candidate.provider if candidate else None,
+                source_override or (candidate.provider if candidate else None),
                 match_status,
                 score,
                 message,
@@ -362,6 +363,7 @@ def match_rename_preview_metadata(
             result.message,
             auto_backfill=False,
             preview_status="needs_review",
+            source_override=result.metadata_source,
         )
 
     best = result.matches[0]

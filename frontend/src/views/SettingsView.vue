@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ElMessage } from "element-plus";
 import { computed, onMounted, reactive, ref } from "vue";
 
@@ -32,6 +32,7 @@ function settingValue<T>(key: string, fallback: T): T {
 }
 
 function syncForm() {
+  form.v4Token = settingValue("tmdb.v4_token", "");
   form.apiKey = "";
   form.language = settingValue("tmdb.language", "zh-CN");
   form.region = settingValue("tmdb.region", "CN");
@@ -53,6 +54,7 @@ async function saveTmdbSettings() {
   form.priority = priority;
   form.minimumFileSizeMb = String(Math.round(minimumFileSize / 1024 / 1024));
   const values: Record<string, string | number | boolean> = {
+    "tmdb.v4_token": form.v4Token.trim(),
     "tmdb.language": form.language,
     "tmdb.region": form.region,
     "tmdb.timeout_ms": timeoutSeconds * 1000,
@@ -69,13 +71,36 @@ async function saveTmdbSettings() {
   ElMessage.success(pageText.saved);
 }
 
+const testResult = ref<import("../api/client").TmdbConnectionTestResult | null>(null);
+
+function channelStatusText(status: string): string {
+  if (status === "success") return "成功";
+  if (status === "failed") return "失败";
+  return "未配置";
+}
+
+function channelStatusType(status: string): "success" | "danger" | "info" {
+  if (status === "success") return "success";
+  if (status === "failed") return "danger";
+  return "info";
+}
+
+function effectiveChannelLabel(effective: string): string {
+  if (effective === "v4") return "V4";
+  if (effective === "v3") return "V3";
+  return "无可用通道";
+}
+
 async function testTmdbConnection() {
   try {
     const result = await settingsStore.testTmdbSettings();
-    ElMessage.success(result.message || pageText.tmdb.testSuccess);
+    testResult.value = result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : pageText.tmdb.testFailed;
-    ElMessage.error(message);
+    testResult.value = {
+      v4: { status: "failed", message: String(error) },
+      v3: { status: "failed", message: String(error) },
+      effective: "none",
+    };
   }
 }
 
@@ -105,11 +130,29 @@ onMounted(async () => {
 
       <section class="settings-panel">
         <el-form v-if="activeCategory === 'tmdb'" label-position="top" class="settings-form">
+          <el-alert
+            :title="pageText.tmdb.priorityHint"
+            type="info"
+            :closable="false"
+            show-icon
+          />
+
+          <el-form-item :label="pageText.tmdb.v4Token">
+            <el-input
+              v-model="form.v4Token"
+              class="settings-secret-control"
+              :placeholder="pageText.tmdb.v4TokenPlaceholder"
+              show-password
+              clearable
+            />
+            <span class="setting-source">{{ pageText.tmdb.v4TokenHint }}</span>
+          </el-form-item>
+
           <el-form-item :label="pageText.tmdb.apiKey">
             <el-input
               v-model="form.apiKey"
               class="settings-secret-control"
-              :placeholder="settingsStore.settingMap['tmdb.api_key']?.value || pageText.tmdb.apiKeyPlaceholder"
+              :placeholder="(settingsStore.settingMap['tmdb.api_key']?.value as string) || pageText.tmdb.apiKeyPlaceholder"
               show-password
               clearable
             />
@@ -163,6 +206,30 @@ onMounted(async () => {
             </el-form-item>
           </div>
 
+          <div v-if="testResult" class="settings-test-results">
+            <el-alert
+              :title="'V4 ' + pageText.tmdb.testConnection + ' ' + channelStatusText(testResult.v4.status)"
+              :description="testResult.v4.message || channelStatusText(testResult.v4.status)"
+              :type="channelStatusType(testResult.v4.status)"
+              show-icon
+              :closable="false"
+            />
+            <el-alert
+              :title="'V3 ' + pageText.tmdb.testConnection + ' ' + channelStatusText(testResult.v3.status)"
+              :description="testResult.v3.message || channelStatusText(testResult.v3.status)"
+              :type="channelStatusType(testResult.v3.status)"
+              show-icon
+              :closable="false"
+            />
+            <el-alert
+              v-if="testResult.effective !== 'none'"
+              :title="pageText.tmdb.testConnection + ' ' + effectiveChannelLabel(testResult.effective)"
+              type="success"
+              show-icon
+              :closable="false"
+            />
+          </div>
+
           <div class="settings-actions">
             <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
               {{ messages.common.refresh }}
@@ -181,3 +248,5 @@ onMounted(async () => {
     </div>
   </ListPageLayout>
 </template>
+
+

@@ -64,7 +64,7 @@ class TmdbMetadataServiceTest(unittest.TestCase):
 
             self.assertFalse(provider.called)
             self.assertEqual("failed", result.status)
-            self.assertEqual("未配置 TMDB API Key", result.message)
+            self.assertEqual("未配置 TMDB V4 令牌且无 V3 API 密钥", result.message)
 
     def test_candidates_are_scored_and_sorted(self):
         with tempfile.TemporaryDirectory() as temp_dir:

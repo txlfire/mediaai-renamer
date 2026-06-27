@@ -1,4 +1,4 @@
-"""System hot settings service."""
+﻿"""System hot settings service."""
 
 from contextlib import closing
 from dataclasses import dataclass
@@ -27,6 +27,15 @@ class SettingDefinition:
 
 
 SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
+    "tmdb.v4_token": SettingDefinition(
+        key="tmdb.v4_token",
+        category="tmdb",
+        default="",
+        value_type="token",
+        description="TMDB V4 Access Token",
+        sensitive=True,
+        env_var="TMDB_V4_TOKEN",
+    ),
     "tmdb.api_key": SettingDefinition(
         key="tmdb.api_key",
         category="tmdb",
@@ -140,6 +149,14 @@ def _parse_secret(value: object) -> str:
     return parsed
 
 
+def _parse_token(value: object) -> str:
+    """JWT 宽松校验，仅做长度检查，不限制字符格式。"""
+    parsed = str(value).strip()
+    if parsed and len(parsed) > 1024:
+        raise ValueError("令牌长度超出限制")
+    return parsed
+
+
 def _parse_string(value: object, definition: SettingDefinition) -> str:
     parsed = str(value).strip()
     if definition.allowed_values and parsed not in definition.allowed_values:
@@ -154,6 +171,8 @@ def _parse_value(value: object, definition: SettingDefinition) -> object:
         return _parse_int(value, definition)
     if definition.value_type == "secret":
         return _parse_secret(value)
+    if definition.value_type == "token":
+        return _parse_token(value)
     return _parse_string(value, definition)
 
 
@@ -239,7 +258,7 @@ def update_setting_values(
     for key, value in values.items():
         definition = SETTING_DEFINITIONS.get(key)
         if definition is None:
-            raise ValueError(f"未知配置项: {key}")
+            raise ValueError(f"未知配置项 {key}")
         parsed_values[key] = (definition, _parse_value(value, definition))
 
     now = _utc_now()
@@ -273,31 +292,61 @@ def update_setting_values(
 
 
 def test_tmdb_connection(settings: AppSettings) -> dict[str, object]:
-    """Validate current effective TMDB configuration."""
+    """Test V4 token and V3 API key separately, return per-channel results."""
 
     effective = get_effective_settings(settings)
+    v4_token = str(effective.get("tmdb.v4_token") or "").strip()
     api_key = str(effective.get("tmdb.api_key") or "").strip()
-    if not api_key:
-        raise ValueError("TMDB 连接失败：未配置 API Key。请先填写并保存 TMDB API Key。")
 
-    client = TmdbClient(
-        api_key=api_key,
-        language=str(effective.get("tmdb.language") or "zh-CN"),
-        region=str(effective.get("tmdb.region") or "CN"),
-        timeout_ms=int(effective.get("tmdb.timeout_ms") or 10000),
-    )
-    try:
-        client.test_connection()
-    except RuntimeError as exc:
-        reason = str(exc)
-        if "HTTP 401" in reason:
-            message = "TMDB 连接失败：API Key 无效或无权限。请检查密钥是否填写正确。"
-        elif "HTTP 404" in reason:
-            message = "TMDB 连接失败：接口地址不可用。请稍后重试。"
-        elif "timed out" in reason.lower() or "timeout" in reason.lower():
-            message = "TMDB 连接失败：请求超时。请检查网络、代理或适当调大超时时间。"
-        else:
-            message = f"TMDB 连接失败：{reason}。请检查网络、代理或 API Key。"
-        raise ValueError(message) from exc
+    v4_result: dict[str, object] = {"status": "skipped", "message": "未配置 V4 令牌"}
+    v3_result: dict[str, object] = {"status": "skipped", "message": "未配置 V3 API 密钥"}
+    effective_channel = "none"
 
-    return {"success": True, "message": "连接成功！信息有效！"}
+    # Test V4
+    if v4_token:
+        client = TmdbClient(
+            v4_token=v4_token,
+            language=str(effective.get("tmdb.language") or "zh-CN"),
+            region=str(effective.get("tmdb.region") or "CN"),
+            timeout_ms=int(effective.get("tmdb.timeout_ms") or 10000),
+        )
+        try:
+            client.test_connection()
+            v4_result = {"status": "success", "message": "V4 连接成功"}
+            effective_channel = "v4"
+        except RuntimeError as exc:
+            reason = str(exc)
+            if "HTTP 401" in reason:
+                v4_result = {"status": "failed", "message": "V4 鉴权失败：令牌无效或无权访问"}
+            else:
+                v4_result = {"status": "failed", "message": f"V4 连接失败：{reason}"}
+
+    # Test V3
+    if api_key:
+        client = TmdbClient(
+            api_key=api_key,
+            language=str(effective.get("tmdb.language") or "zh-CN"),
+            region=str(effective.get("tmdb.region") or "CN"),
+            timeout_ms=int(effective.get("tmdb.timeout_ms") or 10000),
+        )
+        try:
+            client.test_connection()
+            v3_result = {"status": "success", "message": "V3 连接成功"}
+            if effective_channel == "none":
+                effective_channel = "v3"
+        except RuntimeError as exc:
+            reason = str(exc)
+            if "HTTP 401" in reason:
+                v3_result = {"status": "failed", "message": "V3 鉴权失败：API Key 无效或无权访问"}
+            else:
+                v3_result = {"status": "failed", "message": f"V3 连接失败：{reason}"}
+
+    # If V4 failed but V3 succeeded, effective channel is V3
+    if v4_result["status"] == "failed" and v3_result["status"] == "success":
+        effective_channel = "v3"
+
+    return {
+        "v4": v4_result,
+        "v3": v3_result,
+        "effective": effective_channel,
+    }
