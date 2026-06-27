@@ -49,7 +49,7 @@ describe("getHealth", () => {
         return {
           data: {
             app: "MediaAI Renamer",
-            version: "0.5.0",
+            version: "0.5.1",
             status: "ok",
           } as T,
         };
@@ -58,7 +58,7 @@ describe("getHealth", () => {
 
     await expect(getHealth(httpClient)).resolves.toEqual({
       app: "MediaAI Renamer",
-      version: "0.5.0",
+      version: "0.5.1",
       status: "ok",
     });
   });
