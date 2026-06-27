@@ -481,9 +481,9 @@ onMounted(() => {
                     :width="360"
                   >
                     <template #reference>
-                      <span class="media-source-path-type-help">
+                      <button class="media-source-path-type-help" type="button">
                         <el-icon><InfoFilled /></el-icon>
-                      </span>
+                      </button>
                     </template>
                     <div class="media-source-floating-form">
                       <template v-if="form.path_type === 'unc'">
@@ -790,7 +790,6 @@ onMounted(() => {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--panel-bg);
-  transition: padding 180ms ease, box-shadow 180ms ease;
 }
 
 .media-source-path-header {
@@ -815,8 +814,14 @@ onMounted(() => {
   display: flex;
   align-items: center;
   width: 100%;
+  height: 34px;
   min-width: 0;
   gap: 0.375rem;
+}
+
+.media-source-path-type-control :deep(.el-select) {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .media-source-path-actions {
@@ -824,6 +829,7 @@ onMounted(() => {
   align-items: flex-end;
   justify-content: flex-end;
   gap: clamp(0.5rem, 0.8vw, 0.75rem);
+  height: calc(1.375rem + 34px);
   margin-left: 0;
   min-width: max-content;
   padding-top: 0;
@@ -855,7 +861,7 @@ onMounted(() => {
 
 .media-source-path-panel :deep(.el-input__wrapper),
 .media-source-path-panel :deep(.el-select__wrapper) {
-  border-radius: 1px;
+  border-radius: 6px;
   box-shadow: 0 0 0 1px var(--el-border-color) inset;
 }
 
@@ -867,6 +873,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   width: 100%;
+  height: 34px;
   min-width: 0;
   gap: 0.375rem;
   overflow: hidden;
@@ -918,8 +925,23 @@ onMounted(() => {
   justify-content: center;
   width: 1.5rem;
   height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  line-height: 1;
+  vertical-align: middle;
+  background: var(--button-quiet-bg);
   color: var(--el-color-primary);
   cursor: help;
+}
+
+.media-source-path-type-help:hover {
+  background: var(--button-quiet-hover-bg);
+}
+
+.media-source-path-type-help:focus,
+.media-source-path-type-help:focus-visible {
+  outline: none;
 }
 
 :global(.media-source-path-popover) {

@@ -136,7 +136,7 @@ onMounted(async () => {
       <el-select v-model="selectedScanJobId" :placeholder="messages.scanResults.selectScanJob" clearable>
         <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-button :icon="Search" :disabled="!selectedScanJobId" @click="queryMediaFiles">
+      <el-button class="query-action-button" :icon="Search" :disabled="!selectedScanJobId" @click="queryMediaFiles">
         {{ messages.common.query }}
       </el-button>
       <el-button @click="resetScanResults">{{ messages.common.reset }}</el-button>

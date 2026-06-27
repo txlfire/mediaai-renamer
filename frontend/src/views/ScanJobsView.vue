@@ -116,7 +116,7 @@ onMounted(async () => {
           :value="item.value"
         />
       </el-select>
-      <el-button :icon="Search" :disabled="!selectedSourceId" @click="queryScanJobs">{{ messages.common.query }}</el-button>
+      <el-button class="query-action-button" :icon="Search" :disabled="!selectedSourceId" @click="queryScanJobs">{{ messages.common.query }}</el-button>
       <el-button @click="resetScanJobs">{{ messages.common.reset }}</el-button>
     </template>
 

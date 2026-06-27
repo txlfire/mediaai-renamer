@@ -52,7 +52,9 @@ function toggleFilters() {
         >
           {{ filtersExpanded ? messages.common.collapse : messages.common.expand }}
         </el-button>
-        <slot name="queryAction" />
+        <div class="list-query-actions">
+          <slot name="queryAction" />
+        </div>
         <div class="list-filter-actions">
           <slot name="filterActions" />
         </div>
@@ -71,7 +73,9 @@ function toggleFilters() {
       >
         {{ filtersExpanded ? messages.common.collapse : messages.common.expand }}
       </el-button>
-      <slot name="queryAction" />
+      <div class="list-query-actions">
+        <slot name="queryAction" />
+      </div>
       <div class="list-filter-actions">
         <slot name="filterActions" />
       </div>

@@ -486,7 +486,7 @@ onMounted(async () => {
     </template>
 
     <template #queryAction>
-      <el-button :icon="Search" :disabled="!previewStore.filters.scan_job_id" @click="refreshPreviews">
+      <el-button class="query-action-button" :icon="Search" :disabled="!previewStore.filters.scan_job_id" @click="refreshPreviews">
         {{ messages.common.query }}
       </el-button>
       <el-button @click="resetRenamePreviews">{{ messages.common.reset }}</el-button>
