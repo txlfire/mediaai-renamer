@@ -8,6 +8,11 @@ import string
 
 from app.core.config import AppSettings
 from app.schema.media import LocalDirectoryEntry, LocalDirectoryListing, MediaSource
+from app.service.media_source_secret import encrypt_secret, has_secret
+from app.service.shared_protocols.base import ConnectionTestResult
+from app.service.shared_protocols.registry import get_protocol
+
+VALID_PATH_TYPES = {"local", "unc", "mounted_nfs"}
 
 
 def _utc_now() -> str:
@@ -22,12 +27,29 @@ def _row_to_media_source(row: sqlite3.Row) -> MediaSource:
         enabled=bool(row["enabled"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        path_type=str(row["path_type"]),
+        protocol=str(row["protocol"]),
+        host=row["host"],
+        share_name=row["share_name"],
+        domain=row["domain"],
+        username=row["username"],
+        secret=None,
+        has_secret=has_secret(row["encrypted_secret"]),
+        port=row["port"],
+        remark=row["remark"],
+        nfs_host=row["nfs_host"],
+        nfs_export=row["nfs_export"],
+        nfs_version=row["nfs_version"],
+        nfs_options=row["nfs_options"],
+        local_mount_path=row["local_mount_path"],
     )
 
 
 def _fetch_media_source(connection: sqlite3.Connection, source_id: int) -> MediaSource:
     row = connection.execute(
-        "SELECT id, name, path, enabled, created_at, updated_at "
+        "SELECT id, name, path, path_type, protocol, host, share_name, domain, username, "
+        "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, nfs_options, "
+        "local_mount_path, enabled, created_at, updated_at "
         "FROM media_sources WHERE id = ?",
         (source_id,),
     ).fetchone()
@@ -45,6 +67,38 @@ def _validate_media_source_path(path: Path) -> Path:
     if not resolved_path.is_dir():
         raise ValueError("媒体源路径必须是目录")
     return resolved_path
+
+
+def _normalize_media_source_path(path: str | Path) -> str:
+    raw_path = str(path).strip()
+    if not raw_path:
+        raise ValueError("媒体源路径不能为空")
+    return str(Path(raw_path).expanduser())
+
+
+def _validate_unc_path(path: str) -> str:
+    normalized = path.strip()
+    if not normalized:
+        raise ValueError("媒体源路径不能为空")
+    if not normalized.startswith("\\\\"):
+        raise ValueError("UNC 路径必须以 \\\\ 开头")
+    parts = [part for part in normalized.split("\\") if part]
+    if len(parts) < 2:
+        raise ValueError("UNC 路径必须包含主机和共享名")
+    return normalized
+
+
+def _normalize_path_type(path_type: str | None) -> str:
+    normalized = (path_type or "local").strip()
+    if normalized not in VALID_PATH_TYPES:
+        raise ValueError("不支持的路径类型")
+    return normalized
+
+
+def _protocol_for_path_type(path_type: str) -> str:
+    if path_type == "unc":
+        return "smb"
+    return path_type
 
 
 def _validate_media_source_name(name: str) -> str:
@@ -205,25 +259,115 @@ def list_local_directories(path: str | None = None) -> LocalDirectoryListing:
     )
 
 
+def list_source_directories(
+    settings: AppSettings,
+    source_id: int,
+    path: str | None = None,
+) -> LocalDirectoryListing:
+    source = get_media_source(settings, source_id)
+    protocol = get_protocol(source.path_type)
+    listing = protocol.list_directories(path or source.path)
+    return LocalDirectoryListing(
+        current_path=listing.current_path,
+        parent_path=listing.parent_path,
+        entries=[
+            LocalDirectoryEntry(
+                name=entry.name,
+                path=entry.path,
+                is_directory=entry.is_directory,
+            )
+            for entry in listing.entries
+        ],
+    )
+
+
+def test_media_source_connection(
+    settings: AppSettings,
+    source_id: int,
+) -> ConnectionTestResult:
+    source = get_media_source(settings, source_id)
+    protocol = get_protocol(source.path_type)
+    return protocol.test_connection(source.path)
+
+
+def test_media_source_connection_payload(path_type: str, path: str | Path) -> ConnectionTestResult:
+    source_path_type = _normalize_path_type(path_type)
+    if source_path_type == "unc":
+        source_path = _validate_unc_path(str(path))
+    else:
+        source_path = _normalize_media_source_path(path)
+    protocol = get_protocol(source_path_type)
+    return protocol.test_connection(str(source_path))
+
+
 def create_media_source(
-    settings: AppSettings, name: str, path: str | Path, enabled: bool = True
+    settings: AppSettings,
+    name: str,
+    path: str | Path,
+    enabled: bool = True,
+    path_type: str = "local",
+    host: str | None = None,
+    share_name: str | None = None,
+    domain: str | None = None,
+    username: str | None = None,
+    secret: str | None = None,
+    port: int | None = None,
+    remark: str | None = None,
+    nfs_host: str | None = None,
+    nfs_export: str | None = None,
+    nfs_version: str | None = None,
+    nfs_options: str | None = None,
+    local_mount_path: str | None = None,
 ) -> MediaSource:
-    source_path = _validate_media_source_path(Path(path))
     source_name = _validate_media_source_name(name)
+    source_path_type = _normalize_path_type(path_type)
+    if source_path_type == "unc":
+        source_path = _validate_unc_path(str(path))
+        encrypted_secret = encrypt_secret(settings, secret)
+    else:
+        source_path = _normalize_media_source_path(path)
+        username = None
+        domain = None
+        encrypted_secret = None
+    protocol = _protocol_for_path_type(source_path_type)
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         try:
             cursor = connection.execute(
                 "INSERT INTO media_sources "
-                "(name, path, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (source_name, str(source_path), int(enabled), now, now),
+                "(name, path, path_type, protocol, host, share_name, domain, username, "
+                "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, "
+                "nfs_options, local_mount_path, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    source_name,
+                    str(source_path),
+                    source_path_type,
+                    protocol,
+                    host,
+                    share_name,
+                    domain,
+                    username,
+                    encrypted_secret,
+                    port,
+                    remark,
+                    nfs_host,
+                    nfs_export,
+                    nfs_version,
+                    nfs_options,
+                    local_mount_path,
+                    int(enabled),
+                    now,
+                    now,
+                ),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError("媒体源路径已存在") from exc
         row = connection.execute(
-            "SELECT id, name, path, enabled, created_at, updated_at "
+            "SELECT id, name, path, path_type, protocol, host, share_name, domain, username, "
+            "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, nfs_options, "
+            "local_mount_path, enabled, created_at, updated_at "
             "FROM media_sources WHERE id = ?",
             (cursor.lastrowid,),
         ).fetchone()
@@ -235,7 +379,9 @@ def list_media_sources(settings: AppSettings) -> list[MediaSource]:
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
-            "SELECT id, name, path, enabled, created_at, updated_at "
+            "SELECT id, name, path, path_type, protocol, host, share_name, domain, username, "
+            "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, nfs_options, "
+            "local_mount_path, enabled, created_at, updated_at "
             "FROM media_sources ORDER BY id"
         ).fetchall()
     return [_row_to_media_source(row) for row in rows]
@@ -254,25 +400,49 @@ def update_media_source(
     path: str | Path,
     enabled: bool,
     clear_history_on_path_change: bool = False,
+    username: str | None = None,
+    secret: str | None = None,
+    nfs_host: str | None = None,
+    nfs_export: str | None = None,
 ) -> dict[str, object]:
     source_name = _validate_media_source_name(name)
-    source_path = _validate_media_source_path(Path(path))
     cleanup_summary = _empty_cleanup_summary()
     now = _utc_now()
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         current = _fetch_media_source(connection, source_id)
+        if current.path_type == "unc":
+            source_path = _validate_unc_path(str(path))
+        else:
+            source_path = _normalize_media_source_path(path)
         path_changed = str(source_path) != current.path
         if path_changed and not clear_history_on_path_change:
             raise ValueError("修改路径将清空历史数据，请确认后重试")
         if path_changed:
             cleanup_summary = _delete_related_history(connection, source_id)
+        update_username = username if current.path_type == "unc" else None
+        update_secret = encrypt_secret(settings, secret) if current.path_type == "unc" and secret else None
+        update_nfs_host = nfs_host if current.path_type == "mounted_nfs" else None
+        update_nfs_export = nfs_export if current.path_type == "mounted_nfs" else None
         try:
             connection.execute(
-                "UPDATE media_sources SET name = ?, path = ?, enabled = ?, updated_at = ? "
+                "UPDATE media_sources SET name = ?, path = ?, username = ?, "
+                "encrypted_secret = CASE WHEN ? IS NULL THEN encrypted_secret ELSE ? END, "
+                "nfs_host = ?, nfs_export = ?, enabled = ?, updated_at = ? "
                 "WHERE id = ?",
-                (source_name, str(source_path), int(enabled), now, source_id),
+                (
+                    source_name,
+                    str(source_path),
+                    update_username,
+                    update_secret,
+                    update_secret,
+                    update_nfs_host,
+                    update_nfs_export,
+                    int(enabled),
+                    now,
+                    source_id,
+                ),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError("媒体源路径已存在") from exc

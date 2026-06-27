@@ -20,6 +20,20 @@ export type MediaSource = {
   id: number;
   name: string;
   path: string;
+  path_type: "local" | "unc" | "mounted_nfs" | string;
+  protocol: string;
+  host?: string | null;
+  share_name?: string | null;
+  domain?: string | null;
+  username?: string | null;
+  has_secret?: boolean;
+  port?: number | null;
+  remark?: string | null;
+  nfs_host?: string | null;
+  nfs_export?: string | null;
+  nfs_version?: string | null;
+  nfs_options?: string | null;
+  local_mount_path?: string | null;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -29,6 +43,19 @@ export type MediaSourceCreatePayload = {
   name: string;
   path: string;
   enabled: boolean;
+  path_type?: "local" | "unc" | "mounted_nfs";
+  host?: string | null;
+  share_name?: string | null;
+  domain?: string | null;
+  username?: string | null;
+  secret?: string | null;
+  port?: number | null;
+  remark?: string | null;
+  nfs_host?: string | null;
+  nfs_export?: string | null;
+  nfs_version?: string | null;
+  nfs_options?: string | null;
+  local_mount_path?: string | null;
 };
 
 export type CleanupSummary = {
@@ -59,6 +86,30 @@ export type LocalDirectoryListing = {
   current_path: string | null;
   parent_path: string | null;
   entries: LocalDirectoryEntry[];
+};
+
+export type SharedProtocolCapability = {
+  protocol: string;
+  display_name: string;
+  supports_credentials: boolean;
+  supports_directory_browse: boolean;
+  supports_scan: boolean;
+  supports_rename: boolean;
+  requires_system_mount: boolean;
+  can_verify_filesystem_type: boolean;
+  future_candidate: boolean;
+  user_notice: string;
+};
+
+export type ConnectionTestResult = {
+  success: boolean;
+  message: string;
+  suggestion?: string | null;
+};
+
+export type MediaSourceConnectionTestPayload = {
+  path: string;
+  path_type?: "local" | "unc" | "mounted_nfs";
 };
 
 export type ScanJob = {
@@ -286,8 +337,12 @@ export async function createMediaSource(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<MediaSource> {
   const post = requirePost(httpClient);
-  const response = await post<MediaSource>("/media-sources", payload);
-  return response.data;
+  try {
+    const response = await post<MediaSource>("/media-sources", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function updateMediaSource(
@@ -296,8 +351,12 @@ export async function updateMediaSource(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<MediaSourceMutationResult> {
   const put = requirePut(httpClient);
-  const response = await put<MediaSourceMutationResult>(`/media-sources/${sourceId}`, payload);
-  return response.data;
+  try {
+    const response = await put<MediaSourceMutationResult>(`/media-sources/${sourceId}`, payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function setMediaSourceEnabled(
@@ -306,8 +365,12 @@ export async function setMediaSourceEnabled(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<MediaSource> {
   const patch = requirePatch(httpClient);
-  const response = await patch<MediaSource>(`/media-sources/${sourceId}/enabled`, { enabled });
-  return response.data;
+  try {
+    const response = await patch<MediaSource>(`/media-sources/${sourceId}/enabled`, { enabled });
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function deleteMediaSource(
@@ -315,8 +378,12 @@ export async function deleteMediaSource(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<MediaSourceMutationResult> {
   const remove = requireDelete(httpClient);
-  const response = await remove<MediaSourceMutationResult>(`/media-sources/${sourceId}`);
-  return response.data;
+  try {
+    const response = await remove<MediaSourceMutationResult>(`/media-sources/${sourceId}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function bulkDeleteMediaSources(
@@ -324,10 +391,14 @@ export async function bulkDeleteMediaSources(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<MediaSourceMutationResult> {
   const post = requirePost(httpClient);
-  const response = await post<MediaSourceMutationResult>("/media-sources/bulk-delete", {
-    ids: sourceIds,
-  });
-  return response.data;
+  try {
+    const response = await post<MediaSourceMutationResult>("/media-sources/bulk-delete", {
+      ids: sourceIds,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function fetchLocalDirectories(
@@ -444,6 +515,56 @@ export async function executeRenameOperation(
 ): Promise<RenameOperation> {
   const post = requirePost(httpClient);
   const response = await post<RenameOperation>(`/rename-operations/${operationId}/execute`, {});
+  return response.data;
+}
+
+export async function fetchSharedProtocolCapabilities(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<SharedProtocolCapability[]> {
+  const response = await httpClient.get<SharedProtocolCapability[]>("/shared-protocols");
+  return response.data;
+}
+
+export async function testMediaSourceConnection(
+  sourceId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ConnectionTestResult> {
+  const post = requirePost(httpClient);
+  const response = await post<ConnectionTestResult>(
+    `/media-sources/${sourceId}/test-connection`,
+    {},
+  );
+  return response.data;
+}
+
+export async function testMediaSourceConnectionPayload(
+  payload: MediaSourceConnectionTestPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ConnectionTestResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<ConnectionTestResult>("/media-sources/test-connection", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function fetchMediaSourceDirectories(
+  sourceId: number,
+  path = "",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<LocalDirectoryListing> {
+  const params = new URLSearchParams();
+  if (path.trim()) {
+    params.set("path", path);
+  }
+  const query = params.toString();
+  const response = await httpClient.get<LocalDirectoryListing>(
+    query
+      ? `/media-sources/${sourceId}/directories?${query}`
+      : `/media-sources/${sourceId}/directories`,
+  );
   return response.data;
 }
 

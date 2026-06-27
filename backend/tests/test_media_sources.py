@@ -15,6 +15,7 @@ from app.service.media_source_service import (
     list_local_directories,
     list_media_sources,
     set_media_source_enabled,
+    test_media_source_connection_payload,
     update_media_source,
 )
 
@@ -46,19 +47,112 @@ class MediaSourceServiceTest(unittest.TestCase):
 
             self.assertEqual("电影", created.name)
             self.assertEqual(str(media_dir), created.path)
+            self.assertEqual("local", created.path_type)
+            self.assertEqual("local", created.protocol)
             self.assertTrue(created.enabled)
             self.assertEqual(1, len(sources))
 
-    def test_create_media_source_rejects_missing_directory(self):
-        """不存在的路径应返回明确错误。"""
-
+    def test_create_media_source_allows_missing_directory(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = self.build_settings(root)
             ensure_database(settings)
 
+            created = create_media_source(settings, "missing", root / "missing", True)
+
+            self.assertEqual(str(root / "missing"), created.path)
+            self.assertEqual("local", created.path_type)
+
+    def test_connection_payload_reports_missing_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            result = test_media_source_connection_payload("local", root / "missing")
+
+            self.assertFalse(result.success)
+
+    def test_create_unc_media_source_encrypts_secret_and_masks_response(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+
+            created = create_media_source(
+                settings,
+                "共享",
+                r"\\nas\media",
+                True,
+                path_type="unc",
+                username="media-user",
+                secret="plain-password",
+            )
+
+            self.assertEqual("unc", created.path_type)
+            self.assertEqual("smb", created.protocol)
+            self.assertEqual("media-user", created.username)
+            self.assertTrue(created.has_secret)
+            self.assertIsNone(created.secret)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT encrypted_secret FROM media_sources WHERE id = ?",
+                    (created.id,),
+                ).fetchone()
+            self.assertIsNotNone(row[0])
+            self.assertNotEqual("plain-password", row[0])
+
+    def test_create_media_source_can_continue_after_invalid_unc_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            settings = self.build_settings(root)
+            ensure_database(settings)
+
             with self.assertRaises(ValueError):
-                create_media_source(settings, "缺失", root / "missing", True)
+                create_media_source(
+                    settings,
+                    "bad",
+                    r"\nas\media",
+                    True,
+                    path_type="unc",
+                )
+            created = create_media_source(settings, "local", media_dir, True)
+
+            self.assertEqual("local", created.path_type)
+            self.assertEqual([created], list_media_sources(settings))
+
+    def test_create_mounted_nfs_media_source_ignores_sensitive_credentials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mount_dir = root / "nfs"
+            mount_dir.mkdir()
+            settings = self.build_settings(root)
+            ensure_database(settings)
+
+            created = create_media_source(
+                settings,
+                "NFS",
+                mount_dir,
+                True,
+                path_type="mounted_nfs",
+                username="should-not-save",
+                secret="should-not-save",
+                nfs_host="192.168.1.10",
+                nfs_export="/volume1/media",
+            )
+
+            self.assertEqual("mounted_nfs", created.path_type)
+            self.assertEqual("mounted_nfs", created.protocol)
+            self.assertIsNone(created.username)
+            self.assertFalse(created.has_secret)
+            self.assertEqual("192.168.1.10", created.nfs_host)
+            self.assertEqual("/volume1/media", created.nfs_export)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT username, encrypted_secret FROM media_sources WHERE id = ?",
+                    (created.id,),
+                ).fetchone()
+            self.assertEqual((None, None), row)
 
     def test_database_creates_m1_tables(self):
         """数据库初始化应创建 M1 所需表。"""
@@ -161,6 +255,36 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertEqual(1, result["cleanup_summary"]["rename_operation_items"])
             self.assertEqual(1, result["cleanup_summary"]["rename_operations"])
             self._assert_no_history(settings)
+
+    def test_update_unc_media_source_preserves_path_type_and_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings,
+                "share",
+                r"\\nas\media",
+                True,
+                path_type="unc",
+                username="old-user",
+                secret="old-secret",
+            )
+
+            result = update_media_source(
+                settings,
+                source.id,
+                name="share",
+                path=r"\\nas\media",
+                enabled=True,
+                username="new-user",
+                secret=None,
+            )
+
+            self.assertEqual("unc", result["source"].path_type)
+            self.assertEqual("smb", result["source"].protocol)
+            self.assertEqual("new-user", result["source"].username)
+            self.assertTrue(result["source"].has_secret)
 
     def test_delete_media_source_cleans_related_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:

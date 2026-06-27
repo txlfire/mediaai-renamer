@@ -11,7 +11,10 @@ from app.service.media_source_service import (
     delete_media_source,
     list_local_directories,
     list_media_sources,
+    list_source_directories,
     set_media_source_enabled,
+    test_media_source_connection,
+    test_media_source_connection_payload,
     update_media_source,
 )
 
@@ -22,12 +25,29 @@ class MediaSourceCreateRequest(BaseModel):
     name: str
     path: str
     enabled: bool = True
+    path_type: str = "local"
+    host: str | None = None
+    share_name: str | None = None
+    domain: str | None = None
+    username: str | None = None
+    secret: str | None = None
+    port: int | None = None
+    remark: str | None = None
+    nfs_host: str | None = None
+    nfs_export: str | None = None
+    nfs_version: str | None = None
+    nfs_options: str | None = None
+    local_mount_path: str | None = None
 
 
 class MediaSourceUpdateRequest(BaseModel):
     name: str
     path: str
     enabled: bool = True
+    username: str | None = None
+    secret: str | None = None
+    nfs_host: str | None = None
+    nfs_export: str | None = None
     clear_history_on_path_change: bool = False
 
 
@@ -37,6 +57,11 @@ class MediaSourceEnabledRequest(BaseModel):
 
 class MediaSourceBulkDeleteRequest(BaseModel):
     ids: list[int]
+
+
+class MediaSourceConnectionTestRequest(BaseModel):
+    path: str
+    path_type: str = "local"
 
 
 @router.get("")
@@ -52,11 +77,51 @@ def browse_local_directories(path: str | None = None):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/test-connection")
+def test_source_connection_payload(payload: MediaSourceConnectionTestRequest):
+    try:
+        return test_media_source_connection_payload(payload.path_type, payload.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{source_id}/directories")
+def browse_source_directories(source_id: int, request: Request, path: str | None = None):
+    try:
+        return list_source_directories(request.app.state.settings, source_id, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{source_id}/test-connection")
+def test_source_connection(source_id: int, request: Request):
+    try:
+        return test_media_source_connection(request.app.state.settings, source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("")
 def create_source(payload: MediaSourceCreateRequest, request: Request):
     try:
         return create_media_source(
-            request.app.state.settings, payload.name, Path(payload.path), payload.enabled
+            request.app.state.settings,
+            payload.name,
+            payload.path,
+            payload.enabled,
+            path_type=payload.path_type,
+            host=payload.host,
+            share_name=payload.share_name,
+            domain=payload.domain,
+            username=payload.username,
+            secret=payload.secret,
+            port=payload.port,
+            remark=payload.remark,
+            nfs_host=payload.nfs_host,
+            nfs_export=payload.nfs_export,
+            nfs_version=payload.nfs_version,
+            nfs_options=payload.nfs_options,
+            local_mount_path=payload.local_mount_path,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -69,9 +134,13 @@ def update_source(source_id: int, payload: MediaSourceUpdateRequest, request: Re
             request.app.state.settings,
             source_id,
             payload.name,
-            Path(payload.path),
+            payload.path,
             payload.enabled,
-            payload.clear_history_on_path_change,
+            clear_history_on_path_change=payload.clear_history_on_path_change,
+            username=payload.username,
+            secret=payload.secret,
+            nfs_host=payload.nfs_host,
+            nfs_export=payload.nfs_export,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

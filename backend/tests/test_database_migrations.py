@@ -82,6 +82,55 @@ class DatabaseMigrationTest(unittest.TestCase):
 
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
+    def test_existing_media_sources_are_migrated_to_m5_shared_path_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            root.mkdir(parents=True, exist_ok=True)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute(
+                    "INSERT INTO app_meta (key, value) VALUES ('schema_version', '5')"
+                )
+                connection.execute(
+                    "CREATE TABLE media_sources "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "name TEXT NOT NULL, "
+                    "path TEXT NOT NULL UNIQUE, "
+                    "enabled INTEGER NOT NULL DEFAULT 1, "
+                    "created_at TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO media_sources "
+                    "(name, path, enabled, created_at, updated_at) "
+                    "VALUES ('电影', '/data/media', 1, '2026-06-27T00:00:00+00:00', "
+                    "'2026-06-27T00:00:00+00:00')"
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(media_sources)")
+                }
+                row = connection.execute(
+                    "SELECT path_type, protocol, username, encrypted_secret "
+                    "FROM media_sources WHERE name = '电影'"
+                ).fetchone()
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("path_type", columns)
+            self.assertIn("protocol", columns)
+            self.assertIn("username", columns)
+            self.assertIn("encrypted_secret", columns)
+            self.assertEqual(("local", "local", None, None), row)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
 
 if __name__ == "__main__":
     unittest.main()

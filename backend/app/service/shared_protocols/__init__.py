@@ -1,0 +1,1 @@
+"""Shared path protocol implementations."""

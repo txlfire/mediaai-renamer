@@ -13,6 +13,21 @@ class MediaSource:
     enabled: bool
     created_at: str
     updated_at: str
+    path_type: str = "local"
+    protocol: str = "local"
+    host: str | None = None
+    share_name: str | None = None
+    domain: str | None = None
+    username: str | None = None
+    secret: str | None = None
+    has_secret: bool = False
+    port: int | None = None
+    remark: str | None = None
+    nfs_host: str | None = None
+    nfs_export: str | None = None
+    nfs_version: str | None = None
+    nfs_options: str | None = None
+    local_mount_path: str | None = None
 
 
 @dataclass(frozen=True)

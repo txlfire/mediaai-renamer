@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -95,6 +95,23 @@ def _ensure_pending_files_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_media_source_shared_path_columns(connection: sqlite3.Connection) -> None:
+    _ensure_column(connection, "media_sources", "path_type", "TEXT NOT NULL DEFAULT 'local'")
+    _ensure_column(connection, "media_sources", "protocol", "TEXT NOT NULL DEFAULT 'local'")
+    _ensure_column(connection, "media_sources", "host", "TEXT")
+    _ensure_column(connection, "media_sources", "share_name", "TEXT")
+    _ensure_column(connection, "media_sources", "domain", "TEXT")
+    _ensure_column(connection, "media_sources", "username", "TEXT")
+    _ensure_column(connection, "media_sources", "encrypted_secret", "TEXT")
+    _ensure_column(connection, "media_sources", "port", "INTEGER")
+    _ensure_column(connection, "media_sources", "remark", "TEXT")
+    _ensure_column(connection, "media_sources", "nfs_host", "TEXT")
+    _ensure_column(connection, "media_sources", "nfs_export", "TEXT")
+    _ensure_column(connection, "media_sources", "nfs_version", "TEXT")
+    _ensure_column(connection, "media_sources", "nfs_options", "TEXT")
+    _ensure_column(connection, "media_sources", "local_mount_path", "TEXT")
+
+
 def _run_migrations(connection: sqlite3.Connection) -> None:
     version = _schema_version(connection)
 
@@ -105,6 +122,18 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
     if version < 5:
         _ensure_pending_files_table(connection)
+        _set_schema_version(connection, 5)
+
+    if version < 6:
+        _ensure_media_source_shared_path_columns(connection)
+        connection.execute(
+            "UPDATE media_sources SET path_type = 'local' "
+            "WHERE path_type IS NULL OR path_type = ''"
+        )
+        connection.execute(
+            "UPDATE media_sources SET protocol = 'local' "
+            "WHERE protocol IS NULL OR protocol = ''"
+        )
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 
@@ -131,6 +160,20 @@ def ensure_database(settings: AppSettings) -> Path:
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "name TEXT NOT NULL, "
             "path TEXT NOT NULL UNIQUE, "
+            "path_type TEXT NOT NULL DEFAULT 'local', "
+            "protocol TEXT NOT NULL DEFAULT 'local', "
+            "host TEXT, "
+            "share_name TEXT, "
+            "domain TEXT, "
+            "username TEXT, "
+            "encrypted_secret TEXT, "
+            "port INTEGER, "
+            "remark TEXT, "
+            "nfs_host TEXT, "
+            "nfs_export TEXT, "
+            "nfs_version TEXT, "
+            "nfs_options TEXT, "
+            "local_mount_path TEXT, "
             "enabled INTEGER NOT NULL DEFAULT 1, "
             "created_at TEXT NOT NULL, "
             "updated_at TEXT NOT NULL)"

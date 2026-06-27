@@ -92,6 +92,69 @@ class M1ApiTest(unittest.TestCase):
             finally:
                 shutdown_logging()
 
+    def test_create_unc_media_source_api_masks_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            try:
+                app = create_app(self.build_settings(root))
+                client = TestClient(app)
+
+                response = client.post(
+                    "/api/media-sources",
+                    json={
+                        "name": "NAS",
+                        "path": r"\\nas\media",
+                        "path_type": "unc",
+                        "username": "admin",
+                        "secret": "password",
+                    },
+                )
+
+                self.assertEqual(200, response.status_code)
+                payload = response.json()
+                self.assertEqual("unc", payload["path_type"])
+                self.assertEqual("smb", payload["protocol"])
+                self.assertEqual("admin", payload["username"])
+                self.assertTrue(payload["has_secret"])
+                self.assertNotIn("password", str(payload))
+            finally:
+                shutdown_logging()
+
+    def test_shared_protocol_capabilities_and_connection_test_api(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            try:
+                app = create_app(self.build_settings(root))
+                client = TestClient(app)
+
+                capabilities_response = client.get("/api/shared-protocols")
+                self.assertEqual(200, capabilities_response.status_code)
+                protocols = {item["protocol"] for item in capabilities_response.json()}
+                self.assertIn("local", protocols)
+                self.assertIn("unc", protocols)
+                self.assertIn("mounted_nfs", protocols)
+                self.assertIn("webdav", protocols)
+
+                create_response = client.post(
+                    "/api/media-sources",
+                    json={
+                        "name": "电影",
+                        "path": str(media_dir),
+                        "path_type": "local",
+                    },
+                )
+                self.assertEqual(200, create_response.status_code)
+                source_id = create_response.json()["id"]
+
+                test_response = client.post(f"/api/media-sources/{source_id}/test-connection")
+                self.assertEqual(200, test_response.status_code)
+                self.assertTrue(test_response.json()["success"])
+                self.assertEqual("连接成功", test_response.json()["message"])
+            finally:
+                shutdown_logging()
+
 
 if __name__ == "__main__":
     unittest.main()

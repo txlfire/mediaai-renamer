@@ -25,7 +25,7 @@ class HealthEndpointTest(unittest.TestCase):
         self.assertEqual(
             {
                 "app": "MediaAI Renamer",
-                "version": "0.4.1",
+                "version": "0.5.0",
                 "status": "ok",
             },
             response.json(),

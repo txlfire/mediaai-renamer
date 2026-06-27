@@ -13,6 +13,7 @@ from app.api.rename_operations import router as rename_operations_router
 from app.api.rename_previews import router as rename_previews_router
 from app.api.scan_jobs import router as scan_jobs_router
 from app.api.settings import router as settings_router
+from app.api.shared_protocols import router as shared_protocols_router
 from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
@@ -38,6 +39,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.include_router(health_router)
     app.include_router(media_sources_router)
+    app.include_router(shared_protocols_router)
     app.include_router(scan_jobs_router)
     app.include_router(rename_previews_router)
     app.include_router(rename_operations_router)

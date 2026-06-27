@@ -14,7 +14,9 @@ import {
   fetchLocalDirectories,
   fetchLogs,
   fetchMediaFiles,
+  fetchMediaSourceDirectories,
   fetchMediaSources,
+  fetchSharedProtocolCapabilities,
   fetchPendingFiles,
   fetchRenameOperation,
   fetchRenamePreviewMetadataCandidates,
@@ -26,6 +28,8 @@ import {
   movePendingFiles,
   removePendingFile,
   setMediaSourceEnabled,
+  testMediaSourceConnection,
+  testMediaSourceConnectionPayload,
   testTmdbSettings,
   updateSettings,
   updateMediaSource,
@@ -45,7 +49,7 @@ describe("getHealth", () => {
         return {
           data: {
             app: "MediaAI Renamer",
-            version: "0.4.1",
+            version: "0.5.0",
             status: "ok",
           } as T,
         };
@@ -54,7 +58,7 @@ describe("getHealth", () => {
 
     await expect(getHealth(httpClient)).resolves.toEqual({
       app: "MediaAI Renamer",
-      version: "0.4.1",
+      version: "0.5.0",
       status: "ok",
     });
   });
@@ -109,7 +113,17 @@ describe("media source API client", () => {
     };
 
     await fetchMediaSources(httpClient);
-    await createMediaSource({ name: "movie", path: "D:/media", enabled: true }, httpClient);
+    await createMediaSource(
+      {
+        name: "movie",
+        path: "\\\\nas\\media",
+        enabled: true,
+        path_type: "unc",
+        username: "admin",
+        secret: "password",
+      },
+      httpClient,
+    );
     await updateMediaSource(
       1,
       {
@@ -124,15 +138,23 @@ describe("media source API client", () => {
     await deleteMediaSource(1, httpClient);
     await bulkDeleteMediaSources([1, 2], httpClient);
     await fetchLocalDirectories("D:/media", httpClient);
+    await fetchSharedProtocolCapabilities(httpClient);
+    await testMediaSourceConnection(1, httpClient);
+    await testMediaSourceConnectionPayload({ path: "D:/new", path_type: "local" }, httpClient);
+    await fetchMediaSourceDirectories(1, "D:/media", httpClient);
 
     expect(calls).toEqual([
       "GET /media-sources",
-      'POST /media-sources:{"name":"movie","path":"D:/media","enabled":true}',
+      'POST /media-sources:{"name":"movie","path":"\\\\\\\\nas\\\\media","enabled":true,"path_type":"unc","username":"admin","secret":"password"}',
       'PUT /media-sources/1:{"name":"movie","path":"D:/new","enabled":true,"clear_history_on_path_change":true}',
       'PATCH /media-sources/1/enabled:{"enabled":false}',
       "DELETE /media-sources/1",
       'POST /media-sources/bulk-delete:{"ids":[1,2]}',
       "GET /media-sources/local-directories?path=D%3A%2Fmedia",
+      "GET /shared-protocols",
+      "POST /media-sources/1/test-connection:{}",
+      'POST /media-sources/test-connection:{"path":"D:/new","path_type":"local"}',
+      "GET /media-sources/1/directories?path=D%3A%2Fmedia",
     ]);
   });
 
