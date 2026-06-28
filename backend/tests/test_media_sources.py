@@ -14,10 +14,12 @@ from app.service.media_source_service import (
     delete_media_source,
     list_local_directories,
     list_media_sources,
+    list_source_directories,
     set_media_source_enabled,
     test_media_source_connection_payload,
     update_media_source,
 )
+from app.service.settings_service import update_setting_values
 
 
 class MediaSourceServiceTest(unittest.TestCase):
@@ -71,6 +73,20 @@ class MediaSourceServiceTest(unittest.TestCase):
 
             self.assertFalse(result.success)
 
+    def test_connection_payload_accepts_smb_context_without_persisting_secret(self):
+        result = test_media_source_connection_payload(
+            "unc",
+            r"\\definitely-missing-mediaai\share",
+            host="definitely-missing-mediaai",
+            share_name="share",
+            username="admin",
+            secret="temporary-secret",
+        )
+
+        self.assertFalse(result.success)
+        self.assertNotIn("temporary-secret", result.message)
+        self.assertNotIn("temporary-secret", result.suggestion or "")
+
     def test_create_unc_media_source_encrypts_secret_and_masks_response(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -99,6 +115,22 @@ class MediaSourceServiceTest(unittest.TestCase):
                 ).fetchone()
             self.assertIsNotNone(row[0])
             self.assertNotEqual("plain-password", row[0])
+
+    def test_create_media_source_rejects_invalid_port(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+
+            with self.assertRaises(ValueError):
+                create_media_source(
+                    settings,
+                    "bad-port",
+                    r"\\nas\media",
+                    True,
+                    path_type="unc",
+                    port=70000,
+                )
 
     def test_create_media_source_can_continue_after_invalid_unc_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -188,6 +220,30 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertEqual(str(root.resolve()), result.current_path)
             self.assertEqual(["Movies", "Series"], [item.name for item in result.entries])
             self.assertTrue(all(item.is_directory for item in result.entries))
+            self.assertTrue(all(item.readable for item in result.entries))
+            self.assertTrue(all(item.writable for item in result.entries))
+
+    def test_list_source_directories_obeys_shared_browse_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            for name in ("A", "B", "C"):
+                (media_dir / name).mkdir()
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {"shared.directory_browse_limit": 2},
+                operator="test",
+            )
+            source = create_media_source(settings, "media", media_dir, True)
+
+            result = list_source_directories(settings, source.id)
+
+            self.assertEqual(["A", "B"], [item.name for item in result.entries])
+            self.assertTrue(all(item.readable for item in result.entries))
+            self.assertTrue(all(item.writable for item in result.entries))
 
     def test_set_media_source_enabled_updates_status_independently(self):
         with tempfile.TemporaryDirectory() as temp_dir:

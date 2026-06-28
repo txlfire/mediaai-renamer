@@ -8,6 +8,9 @@ import sqlite3
 
 from app.core.config import AppSettings
 from app.schema.media import RenameOperation, RenameOperationItem
+from app.service.media_source_service import get_media_source_protocol_context
+from app.service.shared_protocols.registry import get_protocol
+from app.service.settings_service import get_effective_settings
 
 READY_STATUSES = {"generated", "edited"}
 
@@ -57,9 +60,11 @@ def _query_previews(connection: sqlite3.Connection, preview_ids: list[int]) -> l
         return []
     placeholders = ", ".join("?" for _ in preview_ids)
     return connection.execute(
-        "SELECT rp.id, rp.status, rp.suggested_name, rp.edited_name, mf.file_path "
+        "SELECT rp.id, rp.status, rp.suggested_name, rp.edited_name, mf.file_path, "
+        "ms.id AS media_source_id, ms.path_type "
         "FROM rename_previews rp "
         "JOIN media_files mf ON mf.id = rp.media_file_id "
+        "JOIN media_sources ms ON ms.id = mf.media_source_id "
         f"WHERE rp.id IN ({placeholders}) "
         "ORDER BY rp.id",
         preview_ids,
@@ -84,7 +89,11 @@ def _update_successful_media_record(
     )
 
 
-def _build_item_plan(row: sqlite3.Row, duplicate_targets: Counter[str]) -> tuple[str, str, str, str | None]:
+def _build_item_plan(
+    settings: AppSettings,
+    row: sqlite3.Row,
+    duplicate_targets: Counter[str],
+) -> tuple[str, str, str, str | None]:
     source_path = Path(str(row["file_path"]))
     target_name = str(row["edited_name"] or row["suggested_name"])
     target_path = source_path.parent / target_name
@@ -107,6 +116,16 @@ def _build_item_plan(row: sqlite3.Row, duplicate_targets: Counter[str]) -> tuple
         status = "conflict"
         message = "批次内目标文件重复"
 
+    if status == "ready":
+        readiness = get_protocol(str(row["path_type"])).check_rename_ready(
+            str(source_path),
+            str(target_path),
+            get_media_source_protocol_context(settings, int(row["media_source_id"])),
+        )
+        if not readiness.success:
+            status = "conflict"
+            message = readiness.message
+
     return str(source_path), str(target_path), status, message
 
 
@@ -115,6 +134,9 @@ def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int]) 
 
     now = _utc_now()
     preview_ids = list(dict.fromkeys(rename_preview_ids))
+    batch_limit = int(get_effective_settings(settings).get("operations.batch_limit") or 200)
+    if len(preview_ids) > batch_limit:
+        raise ValueError(f"批量操作数量不能超过 {batch_limit} 条")
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = _query_previews(connection, preview_ids)
@@ -126,7 +148,7 @@ def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int]) 
         duplicate_targets = Counter(target_paths)
 
         item_plans = [
-            (row["id"], *_build_item_plan(row, duplicate_targets))
+            (row["id"], *_build_item_plan(settings, row, duplicate_targets))
             for row in rows
         ]
         ready_count = sum(1 for item in item_plans if item[3] == "ready")
@@ -198,6 +220,22 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                     raise ValueError("源文件不存在")
                 if target_path.exists() and source_path.resolve() != target_path.resolve():
                     raise ValueError("目标文件已存在")
+                media_source_row = connection.execute(
+                    "SELECT ms.id AS media_source_id, ms.path_type FROM rename_previews rp "
+                    "JOIN media_files mf ON mf.id = rp.media_file_id "
+                    "JOIN media_sources ms ON ms.id = mf.media_source_id "
+                    "WHERE rp.id = ?",
+                    (item.rename_preview_id,),
+                ).fetchone()
+                path_type = str(media_source_row["path_type"]) if media_source_row else "local"
+                context = (
+                    get_media_source_protocol_context(settings, int(media_source_row["media_source_id"]))
+                    if media_source_row
+                    else None
+                )
+                readiness = get_protocol(path_type).check_rename_ready(str(source_path), str(target_path), context)
+                if not readiness.success:
+                    raise ValueError(readiness.message)
                 source_path.rename(target_path)
                 connection.execute(
                     "UPDATE rename_operation_items SET status = ?, message = ?, updated_at = ? WHERE id = ?",

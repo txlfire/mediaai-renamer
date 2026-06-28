@@ -18,6 +18,7 @@ from app.service.preview_service import (
     update_rename_preview,
 )
 from app.service.rename_operation_service import create_rename_dry_run, execute_rename_operation
+from app.service.settings_service import update_setting_values
 
 
 class RenameOperationDatabaseTest(unittest.TestCase):
@@ -185,6 +186,34 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual(0, operation.ready_count)
         self.assertEqual(1, operation.conflict_count)
         self.assertEqual("conflict", operation.items[0].status)
+
+    def test_dry_run_rejects_batch_over_operation_limit(self):
+        update_setting_values(self.settings, {"operations.batch_limit": 1}, operator="test")
+        second_source = self.media_dir / "Movie.2025.2160p.mkv"
+        second_source.write_text("movie-2", encoding="utf-8")
+        self._insert_additional_media_file(2, second_source)
+        generate_rename_previews(self.settings)
+        previews = list_rename_previews(self.settings)
+
+        with self.assertRaises(ValueError):
+            create_rename_dry_run(self.settings, [preview.id for preview in previews])
+
+    def test_dry_run_uses_media_source_protocol_validation(self):
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE media_sources SET path_type = 'unc', protocol = 'unc' WHERE id = 1"
+            )
+            connection.commit()
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+        update_rename_preview(self.settings, preview.id, "Movie.Protocol")
+
+        operation = create_rename_dry_run(self.settings, [preview.id])
+
+        self.assertEqual(0, operation.ready_count)
+        self.assertEqual(1, operation.conflict_count)
+        self.assertEqual("conflict", operation.items[0].status)
+        self.assertEqual("UNC 路径格式不正确", operation.items[0].message)
 
     def test_execute_marks_missing_source_as_failed(self):
         generate_rename_previews(self.settings)

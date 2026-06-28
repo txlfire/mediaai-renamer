@@ -1,4 +1,4 @@
-﻿"""System hot settings service."""
+"""System hot settings service."""
 
 from contextlib import closing
 from dataclasses import dataclass
@@ -101,6 +101,220 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         min_value=0,
         max_value=10_000_000_000,
     ),
+    "scan.batch_size": SettingDefinition(
+        key="scan.batch_size",
+        category="scan",
+        default=100,
+        value_type="int",
+        description="Scan batch size",
+        min_value=1,
+        max_value=10000,
+    ),
+    "scan.batch_interval_seconds": SettingDefinition(
+        key="scan.batch_interval_seconds",
+        category="scan",
+        default=1,
+        value_type="int",
+        description="Interval seconds between scan batches",
+        min_value=0,
+        max_value=3600,
+    ),
+    "scan.skip_hidden_files": SettingDefinition(
+        key="scan.skip_hidden_files",
+        category="scan",
+        default=True,
+        value_type="bool",
+        description="Skip hidden files when scanning",
+    ),
+    "scan.recursive": SettingDefinition(
+        key="scan.recursive",
+        category="scan",
+        default=True,
+        value_type="bool",
+        description="Scan subdirectories recursively",
+    ),
+    "scan.validate_path_before_scan": SettingDefinition(
+        key="scan.validate_path_before_scan",
+        category="scan",
+        default=True,
+        value_type="bool",
+        description="Validate media source path before scan",
+    ),
+    "naming.movie_template": SettingDefinition(
+        key="naming.movie_template",
+        category="naming",
+        default="{title}.{year}",
+        value_type="template",
+        description="Movie naming template",
+    ),
+    "naming.episode_template": SettingDefinition(
+        key="naming.episode_template",
+        category="naming",
+        default="{title}.{year}.S{season:02d}E{episode:02d}",
+        value_type="template",
+        description="Episode naming template",
+    ),
+    "naming.separator": SettingDefinition(
+        key="naming.separator",
+        category="naming",
+        default=".",
+        value_type="separator",
+        description="Filename separator",
+    ),
+    "naming.keep_year": SettingDefinition(
+        key="naming.keep_year",
+        category="naming",
+        default=True,
+        value_type="bool",
+        description="Keep year in generated names",
+    ),
+    "naming.clean_illegal_chars": SettingDefinition(
+        key="naming.clean_illegal_chars",
+        category="naming",
+        default=True,
+        value_type="bool",
+        description="Clean illegal filename characters",
+    ),
+    "naming.text_truncate_bytes": SettingDefinition(
+        key="naming.text_truncate_bytes",
+        category="naming",
+        default=50,
+        value_type="int",
+        description="Text truncation bytes for lists",
+        min_value=1,
+        max_value=1000,
+    ),
+    "naming.path_truncate_bytes": SettingDefinition(
+        key="naming.path_truncate_bytes",
+        category="naming",
+        default=80,
+        value_type="int",
+        description="Path truncation bytes for lists",
+        min_value=1,
+        max_value=2000,
+    ),
+    "operations.log_retention_days": SettingDefinition(
+        key="operations.log_retention_days",
+        category="operations",
+        default=30,
+        value_type="int",
+        description="Log retention days",
+        min_value=0,
+        max_value=3650,
+    ),
+    "operations.log_default_limit": SettingDefinition(
+        key="operations.log_default_limit",
+        category="operations",
+        default=200,
+        value_type="int",
+        description="Default operation log item limit",
+        min_value=1,
+        max_value=10000,
+    ),
+    "operations.force_dry_run": SettingDefinition(
+        key="operations.force_dry_run",
+        category="operations",
+        default=True,
+        value_type="bool",
+        description="Force dry-run before rename",
+    ),
+    "operations.require_second_confirmation": SettingDefinition(
+        key="operations.require_second_confirmation",
+        category="operations",
+        default=True,
+        value_type="bool",
+        description="Require second confirmation before execution",
+    ),
+    "operations.persist_failure_detail": SettingDefinition(
+        key="operations.persist_failure_detail",
+        category="operations",
+        default=True,
+        value_type="bool",
+        description="Persist failure detail",
+    ),
+    "operations.batch_limit": SettingDefinition(
+        key="operations.batch_limit",
+        category="operations",
+        default=200,
+        value_type="int",
+        description="Batch operation item limit",
+        min_value=1,
+        max_value=10000,
+    ),
+    "shared.default_path_type": SettingDefinition(
+        key="shared.default_path_type",
+        category="shared",
+        default="local",
+        value_type="string",
+        description="Default media source path type",
+        allowed_values=("local", "unc", "mounted_nfs"),
+    ),
+    "shared.connection_timeout_seconds": SettingDefinition(
+        key="shared.connection_timeout_seconds",
+        category="shared",
+        default=5,
+        value_type="int",
+        description="Shared directory connection timeout seconds",
+        min_value=1,
+        max_value=300,
+    ),
+    "shared.directory_browse_limit": SettingDefinition(
+        key="shared.directory_browse_limit",
+        category="shared",
+        default=500,
+        value_type="int",
+        description="Directory browse max item count",
+        min_value=1,
+        max_value=10000,
+    ),
+    "shared.force_scan_connection_test": SettingDefinition(
+        key="shared.force_scan_connection_test",
+        category="shared",
+        default=True,
+        value_type="bool",
+        description="Force connection test before scan",
+    ),
+    "shared.force_rename_write_test": SettingDefinition(
+        key="shared.force_rename_write_test",
+        category="shared",
+        default=True,
+        value_type="bool",
+        description="Force write permission test before rename",
+    ),
+    "shared.nfs_operation_timeout_seconds": SettingDefinition(
+        key="shared.nfs_operation_timeout_seconds",
+        category="shared",
+        default=30,
+        value_type="int",
+        description="NFS operation timeout seconds",
+        min_value=1,
+        max_value=3600,
+    ),
+    "shared.nfs_retry_count": SettingDefinition(
+        key="shared.nfs_retry_count",
+        category="shared",
+        default=3,
+        value_type="int",
+        description="NFS retry count",
+        min_value=0,
+        max_value=20,
+    ),
+    "shared.prefer_nfsv4": SettingDefinition(
+        key="shared.prefer_nfsv4",
+        category="shared",
+        default=True,
+        value_type="bool",
+        description="Prefer NFSv4",
+    ),
+    "shared.mount_check_interval_seconds": SettingDefinition(
+        key="shared.mount_check_interval_seconds",
+        category="shared",
+        default=60,
+        value_type="int",
+        description="NFS mount check interval seconds",
+        min_value=1,
+        max_value=86400,
+    ),
 }
 
 
@@ -164,6 +378,24 @@ def _parse_string(value: object, definition: SettingDefinition) -> str:
     return parsed
 
 
+def _parse_template(value: object, definition: SettingDefinition) -> str:
+    parsed = str(value).strip()
+    if not parsed:
+        raise ValueError(f"{definition.key} 不能为空")
+    if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", parsed):
+        raise ValueError(f"{definition.key} 必须包含有效文本或变量")
+    return parsed
+
+
+def _parse_separator(value: object, definition: SettingDefinition) -> str:
+    parsed = str(value).strip()
+    if not parsed:
+        raise ValueError(f"{definition.key} 不能为空")
+    if any(char in parsed for char in ('/', '\\', ':', '*', '?', '"', '<', '>', '|')):
+        raise ValueError(f"{definition.key} 包含非法文件名字符")
+    return parsed
+
+
 def _parse_value(value: object, definition: SettingDefinition) -> object:
     if definition.value_type == "bool":
         return _parse_bool(value)
@@ -173,6 +405,10 @@ def _parse_value(value: object, definition: SettingDefinition) -> object:
         return _parse_secret(value)
     if definition.value_type == "token":
         return _parse_token(value)
+    if definition.value_type == "template":
+        return _parse_template(value, definition)
+    if definition.value_type == "separator":
+        return _parse_separator(value, definition)
     return _parse_string(value, definition)
 
 

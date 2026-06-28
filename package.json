@@ -1,6 +1,6 @@
 {
   "name": "mediaai-renamer",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,7 @@
     "frontend:build": "vue-tsc --noEmit --project frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
     "frontend:test": "vitest run frontend/src/api/client.test.ts",
     "backend:test": "powershell -ExecutionPolicy Bypass -File scripts/run-backend-tests.ps1",
+    "check:encoding": "powershell -ExecutionPolicy Bypass -File scripts/check-encoding.ps1",
     "backend:test:linux": "bash scripts/run-backend-tests.sh",
     "release:package": "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "release:package:linux": "bash scripts/package-release.sh",

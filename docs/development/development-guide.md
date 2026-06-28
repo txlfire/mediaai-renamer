@@ -101,6 +101,27 @@ npm audit --audit-level=moderate
 
 ## 5. 编码规范
 
+### 5.1 编码和换行
+
+- 所有源码、配置和 Markdown 文档统一使用 UTF-8 no BOM。
+- 除 `.bat`、`.cmd` 外，文本文件统一使用 LF 换行。
+- 新增或修改文件前优先使用 `apply_patch`；如需脚本批量处理文本，必须显式使用 UTF-8 no BOM 写入。
+- Windows PowerShell 5 的 `Set-Content -Encoding UTF8` 会写入 BOM，除非明确需要，否则不要用于源码和文档。
+- 提交前执行：
+
+```powershell
+npm run check:encoding
+git diff --check
+```
+
+### 5.2 前端国际化
+
+- 用户可见文本统一维护在 `frontend/src/locales/zh-CN.ts`。
+- Vue 页面、Pinia store、API client 中不得直接硬编码中文提示、按钮、标题、表头和空状态文案。
+- 测试用例和内部字符串判断可以保留必要中文样例，但不得作为页面展示文案来源。
+- 新增页面或功能前先检查 `zh-CN.ts` 是否已有可复用文案，避免重复提取。
+- 后续增加其他语言时，以 `zh-CN.ts` 的 key 结构作为基准，不在页面中新增临时文本。
+
 ## 5. M1 API
 
 媒体源：
@@ -249,3 +270,19 @@ docker compose up --build
 - 用户手册更新内容必须记录到 `docs/work-logs/` 下对应日期或阶段的工作日志中。
 
 API 稳定后，新增接口文档放入 `docs/api/`。
+
+## 12. Project Local Skill Usage
+
+This project now splits repeatable Codex workflows into project-local skills under `.codex/skills/`. These skills are first used by this project and can later be promoted to global `~/.codex/skills/` for similar projects.
+
+- `mediaai-docs-lifecycle`: requirement analysis, requirement design, requirement split, requirement supplementation, design docs, user manuals, acceptance checklists, acceptance reports, README, work logs, and milestone archive.
+- `mediaai-frontend-ui`: Vue pages, Element Plus controls, Pinia stores, frontend API calls, tables, dialogs, theme behavior, sidebar behavior, i18n, and UI polish.
+- `mediaai-backend-api`: FastAPI routes, service logic, SQLite schema migration, shared protocols, scan, rename, TMDB, settings, encryption, validation, and backend tests.
+- `mediaai-test-release`: testing, builds, packaging, version bumps, Git flow, GitHub Release, release notes, and milestone release verification.
+
+Rules:
+
+- Before starting a matching task type, read the matching skill's `SKILL.md` first.
+- Keep reusable workflow, paths, and commands in each skill's `references/`; do not store temporary daily notes there.
+- When real development reveals a workflow gap, update the matching skill and record the change in `docs/work-logs/`.
+- At milestone closeout, use `mediaai-docs-lifecycle` for document consistency and `mediaai-test-release` for validation and release steps.

@@ -102,7 +102,7 @@ function showPathPopoverIfNeeded() {
 }
 
 function connectionErrorMessage(message: string, suggestion?: string | null) {
-  const detail = suggestion ? `${message}：${suggestion}` : message;
+  const detail = suggestion ? `${message}；${suggestion}` : message;
   if (detail.includes("路径不存在") || detail.includes("目录不存在")) {
     return `${detail}。${pageText.pathNotFoundSuggestion}`;
   }
@@ -284,6 +284,10 @@ async function testEditConnection() {
     const result = await testMediaSourceConnectionPayload({
       path: editForm.path,
       path_type: editForm.path_type,
+      username: editForm.path_type === "unc" ? editForm.username : null,
+      secret: editForm.path_type === "unc" ? editForm.secret || null : null,
+      nfs_host: editForm.path_type === "mounted_nfs" ? editForm.nfs_host : null,
+      nfs_export: editForm.path_type === "mounted_nfs" ? editForm.nfs_export : null,
     });
     if (result.success) {
       ElMessage.success(result.message || pageText.connectionSuccess);
@@ -762,10 +766,20 @@ onMounted(() => {
             :key="entry.path"
             type="button"
             class="directory-item"
+            :class="{ 'is-disabled': entry.readable === false }"
+            :disabled="entry.readable === false"
             @click="enterDirectory(entry.path)"
           >
             <el-icon><FolderOpened /></el-icon>
-            <span>{{ entry.name }}</span>
+            <span class="directory-item-name">{{ entry.name }}</span>
+            <span v-if="entry.readable != null || entry.writable != null" class="directory-permissions">
+              <span :class="['directory-permission', entry.readable === false ? 'is-denied' : 'is-allowed']">
+                {{ entry.readable === false ? messages.mediaSources.unreadable : messages.mediaSources.readable }}
+              </span>
+              <span :class="['directory-permission', entry.writable === false ? 'is-denied' : 'is-allowed']">
+                {{ entry.writable === false ? messages.mediaSources.unwritable : messages.mediaSources.writable }}
+              </span>
+            </span>
           </button>
           <p v-if="!directoryPicker.loading && directoryPicker.listing.entries.length === 0" class="empty-text">
             {{ messages.mediaSources.noSubDirectories }}

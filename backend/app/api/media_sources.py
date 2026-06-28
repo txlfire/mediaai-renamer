@@ -62,6 +62,17 @@ class MediaSourceBulkDeleteRequest(BaseModel):
 class MediaSourceConnectionTestRequest(BaseModel):
     path: str
     path_type: str = "local"
+    host: str | None = None
+    share_name: str | None = None
+    domain: str | None = None
+    username: str | None = None
+    secret: str | None = None
+    port: int | None = None
+    nfs_host: str | None = None
+    nfs_export: str | None = None
+    nfs_version: str | None = None
+    nfs_options: str | None = None
+    local_mount_path: str | None = None
 
 
 @router.get("")
@@ -80,7 +91,21 @@ def browse_local_directories(path: str | None = None):
 @router.post("/test-connection")
 def test_source_connection_payload(payload: MediaSourceConnectionTestRequest):
     try:
-        return test_media_source_connection_payload(payload.path_type, payload.path)
+        return test_media_source_connection_payload(
+            payload.path_type,
+            payload.path,
+            username=payload.username,
+            secret=payload.secret,
+            host=payload.host,
+            share_name=payload.share_name,
+            domain=payload.domain,
+            port=payload.port,
+            nfs_host=payload.nfs_host,
+            nfs_export=payload.nfs_export,
+            nfs_version=payload.nfs_version,
+            nfs_options=payload.nfs_options,
+            local_mount_path=payload.local_mount_path,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

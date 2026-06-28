@@ -37,6 +37,8 @@ class LocalDirectoryEntry:
     name: str
     path: str
     is_directory: bool
+    readable: bool | None = None
+    writable: bool | None = None
 
 
 @dataclass(frozen=True)

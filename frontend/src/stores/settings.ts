@@ -7,6 +7,7 @@ import {
   type SystemSetting,
   type TmdbConnectionTestResult,
 } from "../api/client";
+import { zhCnMessages as messages } from "../locales/zh-CN";
 
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
@@ -26,7 +27,7 @@ export const useSettingsStore = defineStore("settings", {
       try {
         this.settings = await fetchSettings();
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "读取系统设置失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.loadFailed;
       } finally {
         this.loading = false;
       }
@@ -38,7 +39,7 @@ export const useSettingsStore = defineStore("settings", {
       try {
         this.settings = await updateSettings(values);
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "保存系统设置失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.saveFailed;
         throw error;
       } finally {
         this.loading = false;
@@ -51,7 +52,7 @@ export const useSettingsStore = defineStore("settings", {
       try {
         return await testTmdbSettings();
       } catch (error) {
-        this.errorMessage = error instanceof Error ? error.message : "TMDB 连接测试失败";
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.tmdb.testFailed;
         throw error;
       } finally {
         this.loading = false;

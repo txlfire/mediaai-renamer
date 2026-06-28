@@ -73,8 +73,11 @@ export function formatScanJobStatus(value: unknown): string {
     pending: messages.status.pending,
     running: messages.status.running,
     completed: messages.status.completed,
+    partial_completed: messages.status.partialCompleted,
+    partial_failed: messages.status.partialCompleted,
+    connection_lost: messages.status.connectionLost,
     failed: messages.status.failed,
   };
 
-  return labels[status] ?? status;
+  return labels[status] ?? messages.status.unknown;
 }

@@ -1,4 +1,4 @@
-﻿import axios from "axios";
+import axios from "axios";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
 
@@ -80,6 +80,8 @@ export type LocalDirectoryEntry = {
   name: string;
   path: string;
   is_directory: boolean;
+  readable?: boolean | null;
+  writable?: boolean | null;
 };
 
 export type LocalDirectoryListing = {
@@ -105,11 +107,25 @@ export type ConnectionTestResult = {
   success: boolean;
   message: string;
   suggestion?: string | null;
+  readable?: boolean | null;
+  writable?: boolean | null;
+  filesystem_type?: string | null;
 };
 
 export type MediaSourceConnectionTestPayload = {
   path: string;
   path_type?: "local" | "unc" | "mounted_nfs";
+  host?: string | null;
+  share_name?: string | null;
+  domain?: string | null;
+  username?: string | null;
+  secret?: string | null;
+  port?: number | null;
+  nfs_host?: string | null;
+  nfs_export?: string | null;
+  nfs_version?: string | null;
+  nfs_options?: string | null;
+  local_mount_path?: string | null;
 };
 
 export type ScanJob = {
@@ -673,4 +689,3 @@ export async function movePendingFiles(
   });
   return response.data;
 }
-

@@ -1,4 +1,4 @@
-﻿# M5 共享协议接口实现计划
+# M5 共享协议接口实现计划
 
 > 面向 AI 代理的工作者：实现此计划前先读取 `docs/development/m5/M5-NAS-SMB共享目录开发计划.md` 和 `docs/development/m5/M5-NAS-SMB共享目录验收清单.md`。步骤使用复选框语法跟进进度。
 

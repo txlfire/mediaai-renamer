@@ -43,8 +43,11 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             listing = protocol.list_directories(str(root))
 
             self.assertTrue(result.success)
-            self.assertEqual("连接成功", result.message)
+            self.assertTrue(result.readable)
+            self.assertTrue(result.writable)
             self.assertEqual(["Movies"], [entry.name for entry in listing.entries])
+            self.assertTrue(listing.entries[0].readable)
+            self.assertTrue(listing.entries[0].writable)
 
     def test_local_connection_reports_missing_directory(self):
         protocol = get_protocol("local")
@@ -58,11 +61,39 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         protocol = get_protocol("unc")
 
         invalid = protocol.test_connection("D:/media")
-        valid_shape = protocol.test_connection(r"\\nas\media")
+        valid_shape = protocol.validate_config(r"\\nas\media")
+        unavailable = protocol.test_connection(r"\\definitely-missing-mediaai\share")
 
         self.assertFalse(invalid.success)
         self.assertIn("UNC", invalid.message)
         self.assertTrue(valid_shape.success)
+        self.assertFalse(unavailable.success)
+
+    def test_protocols_expose_m5_validation_hooks(self):
+        protocol = get_protocol("local")
+
+        self.assertTrue(protocol.validate_config(".").success)
+        self.assertTrue(protocol.check_scan_ready(".").success)
+        self.assertEqual(str(Path(".").expanduser().resolve()), protocol.normalize_path("."))
+
+        missing_scan = protocol.check_scan_ready("Z:/definitely-missing-mediaai")
+
+        self.assertFalse(missing_scan.success)
+
+    def test_local_rename_readiness_checks_source_and_target_directory(self):
+        protocol = get_protocol("local")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "movie.mkv"
+            source.write_text("movie", encoding="utf-8")
+
+            ready = protocol.check_rename_ready(str(source), str(root / "renamed.mkv"))
+            missing_source = protocol.check_rename_ready(str(root / "missing.mkv"), str(root / "renamed.mkv"))
+            missing_target_dir = protocol.check_rename_ready(str(source), str(root / "missing" / "renamed.mkv"))
+
+            self.assertTrue(ready.success)
+            self.assertFalse(missing_source.success)
+            self.assertFalse(missing_target_dir.success)
 
     def test_mounted_nfs_lists_directories_without_credentials(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -74,7 +105,12 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             listing = protocol.list_directories(str(root))
 
             self.assertTrue(result.success)
+            self.assertTrue(result.readable)
+            self.assertTrue(result.writable)
+            self.assertIsNotNone(result.suggestion)
             self.assertEqual(["Series"], [entry.name for entry in listing.entries])
+            self.assertTrue(listing.entries[0].readable)
+            self.assertTrue(listing.entries[0].writable)
 
 
 if __name__ == "__main__":

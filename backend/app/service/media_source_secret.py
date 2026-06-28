@@ -22,3 +22,12 @@ def encrypt_secret(settings: AppSettings, secret: str | None) -> str | None:
 
 def has_secret(encrypted_secret: str | None) -> bool:
     return bool(encrypted_secret)
+
+
+def decrypt_secret(settings: AppSettings, encrypted_secret: str | None) -> str | None:
+    if not encrypted_secret:
+        return None
+    encrypted = base64.urlsafe_b64decode(encrypted_secret.encode("ascii"))
+    key = _key(settings)
+    raw = bytes(value ^ key[index % len(key)] for index, value in enumerate(encrypted))
+    return raw.decode("utf-8")

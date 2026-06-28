@@ -2,15 +2,18 @@
 
 from contextlib import closing
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import sqlite3
 import string
 
 from app.core.config import AppSettings
+from app.core.logger import get_batch_logger
 from app.schema.media import LocalDirectoryEntry, LocalDirectoryListing, MediaSource
 from app.service.media_source_secret import encrypt_secret, has_secret
-from app.service.shared_protocols.base import ConnectionTestResult
+from app.service.shared_protocols.base import ConnectionTestResult, SharedPathContext
 from app.service.shared_protocols.registry import get_protocol
+from app.service.settings_service import get_effective_settings
 
 VALID_PATH_TYPES = {"local", "unc", "mounted_nfs"}
 
@@ -56,6 +59,47 @@ def _fetch_media_source(connection: sqlite3.Connection, source_id: int) -> Media
     if row is None:
         raise ValueError("媒体源不存在")
     return _row_to_media_source(row)
+
+
+def _media_source_context(source: MediaSource) -> SharedPathContext:
+    return SharedPathContext(
+        path_type=source.path_type,
+        username=source.username,
+        has_secret=source.has_secret,
+        host=source.host,
+        share_name=source.share_name,
+        domain=source.domain,
+        port=source.port,
+        nfs_host=source.nfs_host,
+        nfs_export=source.nfs_export,
+        nfs_version=source.nfs_version,
+        nfs_options=source.nfs_options,
+        local_mount_path=source.local_mount_path,
+    )
+
+
+def get_media_source_protocol_context(settings: AppSettings, source_id: int) -> SharedPathContext:
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        source = _fetch_media_source(connection, source_id)
+        row = connection.execute(
+            "SELECT encrypted_secret FROM media_sources WHERE id = ?",
+            (source_id,),
+        ).fetchone()
+    return SharedPathContext(
+        path_type=source.path_type,
+        username=source.username,
+        has_secret=has_secret(row["encrypted_secret"] if row else None),
+        host=source.host,
+        share_name=source.share_name,
+        domain=source.domain,
+        port=source.port,
+        nfs_host=source.nfs_host,
+        nfs_export=source.nfs_export,
+        nfs_version=source.nfs_version,
+        nfs_options=source.nfs_options,
+        local_mount_path=source.local_mount_path,
+    )
 
 
 def _validate_media_source_path(path: Path) -> Path:
@@ -106,6 +150,14 @@ def _validate_media_source_name(name: str) -> str:
     if not normalized:
         raise ValueError("媒体源名称不能为空")
     return normalized
+
+
+def _validate_port(port: int | None) -> int | None:
+    if port is None:
+        return None
+    if port < 0 or port > 65535:
+        raise ValueError("端口必须在 0-65535 范围内")
+    return port
 
 
 def _empty_cleanup_summary() -> dict[str, int]:
@@ -225,7 +277,13 @@ def _windows_drive_entries() -> list[LocalDirectoryEntry]:
         drive_path = Path(f"{letter}:\\")
         if drive_path.exists():
             entries.append(
-                LocalDirectoryEntry(name=f"{letter}:", path=str(drive_path), is_directory=True)
+                LocalDirectoryEntry(
+                    name=f"{letter}:",
+                    path=str(drive_path),
+                    is_directory=True,
+                    readable=os.access(drive_path, os.R_OK),
+                    writable=os.access(drive_path, os.W_OK),
+                )
             )
     return entries
 
@@ -245,7 +303,13 @@ def list_local_directories(path: str | None = None) -> LocalDirectoryListing:
         raise ValueError("路径不是目录")
 
     entries = [
-        LocalDirectoryEntry(name=item.name, path=str(item), is_directory=True)
+        LocalDirectoryEntry(
+            name=item.name,
+            path=str(item),
+            is_directory=True,
+            readable=os.access(item, os.R_OK),
+            writable=os.access(item, os.W_OK),
+        )
         for item in current_path.iterdir()
         if item.is_dir()
     ]
@@ -266,7 +330,8 @@ def list_source_directories(
 ) -> LocalDirectoryListing:
     source = get_media_source(settings, source_id)
     protocol = get_protocol(source.path_type)
-    listing = protocol.list_directories(path or source.path)
+    listing = protocol.list_directories(path or source.path, _media_source_context(source))
+    browse_limit = int(get_effective_settings(settings).get("shared.directory_browse_limit") or 500)
     return LocalDirectoryListing(
         current_path=listing.current_path,
         parent_path=listing.parent_path,
@@ -275,8 +340,10 @@ def list_source_directories(
                 name=entry.name,
                 path=entry.path,
                 is_directory=entry.is_directory,
+                readable=entry.readable,
+                writable=entry.writable,
             )
-            for entry in listing.entries
+            for entry in listing.entries[:browse_limit]
         ],
     )
 
@@ -287,17 +354,67 @@ def test_media_source_connection(
 ) -> ConnectionTestResult:
     source = get_media_source(settings, source_id)
     protocol = get_protocol(source.path_type)
-    return protocol.test_connection(source.path)
+    result = protocol.test_connection(source.path, _media_source_context(source))
+    status = "成功" if result.success else "失败"
+    get_batch_logger().info(
+        "媒体源连接测试%s source_id=%s path_type=%s path=%s message=%s suggestion=%s",
+        status,
+        source.id,
+        source.path_type,
+        source.path,
+        result.message,
+        result.suggestion or "",
+    )
+    return result
 
 
-def test_media_source_connection_payload(path_type: str, path: str | Path) -> ConnectionTestResult:
+def test_media_source_connection_payload(
+    path_type: str,
+    path: str | Path,
+    username: str | None = None,
+    secret: str | None = None,
+    host: str | None = None,
+    share_name: str | None = None,
+    domain: str | None = None,
+    port: int | None = None,
+    nfs_host: str | None = None,
+    nfs_export: str | None = None,
+    nfs_version: str | None = None,
+    nfs_options: str | None = None,
+    local_mount_path: str | None = None,
+) -> ConnectionTestResult:
     source_path_type = _normalize_path_type(path_type)
+    port = _validate_port(port)
     if source_path_type == "unc":
         source_path = _validate_unc_path(str(path))
     else:
         source_path = _normalize_media_source_path(path)
     protocol = get_protocol(source_path_type)
-    return protocol.test_connection(str(source_path))
+    context = SharedPathContext(
+        path_type=source_path_type,
+        username=username if source_path_type == "unc" else None,
+        has_secret=bool(secret) if source_path_type == "unc" else False,
+        host=host,
+        share_name=share_name,
+        domain=domain if source_path_type == "unc" else None,
+        port=port,
+        nfs_host=nfs_host if source_path_type == "mounted_nfs" else None,
+        nfs_export=nfs_export if source_path_type == "mounted_nfs" else None,
+        nfs_version=nfs_version if source_path_type == "mounted_nfs" else None,
+        nfs_options=nfs_options if source_path_type == "mounted_nfs" else None,
+        local_mount_path=local_mount_path if source_path_type == "mounted_nfs" else None,
+    )
+    result = protocol.test_connection(str(source_path), context)
+    status = "成功" if result.success else "失败"
+    get_batch_logger().info(
+        "媒体源临时连接测试%s path_type=%s path=%s message=%s suggestion=%s",
+        status,
+        source_path_type,
+        source_path,
+        result.message,
+        result.suggestion or "",
+    )
+    return result
 
 
 def create_media_source(
@@ -321,6 +438,7 @@ def create_media_source(
 ) -> MediaSource:
     source_name = _validate_media_source_name(name)
     source_path_type = _normalize_path_type(path_type)
+    port = _validate_port(port)
     if source_path_type == "unc":
         source_path = _validate_unc_path(str(path))
         encrypted_secret = encrypt_secret(settings, secret)

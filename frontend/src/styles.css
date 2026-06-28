@@ -1045,28 +1045,46 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 .settings-categories {
   display: grid;
   align-content: start;
+  gap: clamp(0.5rem, 1vw, 0.75rem);
   padding: clamp(0.5rem, 1vw, 0.75rem);
 }
 
 .settings-category-button {
   display: flex;
   align-items: center;
-  min-height: 36px;
-  padding: 0 clamp(0.5rem, 1vw, 0.75rem);
+  min-height: 44px;
+  padding: 0 clamp(0.75rem, 1.2vw, 1rem);
   border: 1px solid transparent;
   border-radius: 6px;
-  background: var(--button-quiet-bg);
+  background: var(--el-fill-color-light);
   color: var(--el-text-color-regular);
   cursor: pointer;
   font: inherit;
+  font-weight: 500;
   text-align: left;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.settings-category-button.is-active,
 .settings-category-button:hover {
   color: var(--el-color-primary);
   border-color: var(--el-color-primary);
   background: var(--button-quiet-hover-bg);
+}
+
+.settings-category-button.is-active {
+  color: var(--el-color-white);
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary);
+  box-shadow: 0 0.25rem 0.75rem rgb(64 128 255 / 18%);
+}
+
+.settings-category-button.is-active:hover {
+  color: var(--el-color-white);
+  background: var(--el-color-primary-light-3);
 }
 
 .settings-panel {
@@ -1856,10 +1874,45 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   text-align: left;
 }
 
-.directory-item span {
+.directory-item > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.directory-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.directory-permissions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.directory-permission {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 6px;
+  overflow: visible;
+  text-overflow: clip;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: var(--button-quiet-bg);
+}
+
+.directory-permission.is-allowed {
+  color: var(--success-color);
+}
+
+.directory-permission.is-denied {
+  color: var(--danger-color);
 }
 
 .directory-item .el-icon {
@@ -1869,6 +1922,15 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
 .directory-item:hover {
   background: var(--button-quiet-hover-bg);
+}
+
+.directory-item.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.directory-item.is-disabled:hover {
+  background: var(--button-quiet-bg);
 }
 
 :root[data-theme="dark"] .directory-item .el-icon {

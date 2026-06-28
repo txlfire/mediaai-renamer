@@ -1,4 +1,4 @@
-﻿"""TMDB metadata search client."""
+"""TMDB metadata search client."""
 
 from typing import Any
 from urllib.error import HTTPError, URLError
