@@ -220,6 +220,16 @@ function effectiveChannelLabel(effective: string): string {
   return pageText.tmdb.noAvailableChannel;
 }
 
+const testChannels = computed(() => {
+  if (!testResult.value) {
+    return [];
+  }
+  return [
+    { key: "v4", label: "V4", result: testResult.value.v4 },
+    { key: "v3", label: "V3", result: testResult.value.v3 },
+  ];
+});
+
 async function testTmdbConnection() {
   try {
     const result = await settingsStore.testTmdbSettings();
@@ -335,30 +345,6 @@ onMounted(async () => {
             </el-form-item>
           </div>
 
-          <div v-if="testResult" class="settings-test-results">
-            <el-alert
-              :title="'V4 ' + pageText.tmdb.testConnection + ' ' + channelStatusText(testResult.v4.status)"
-              :description="testResult.v4.message || channelStatusText(testResult.v4.status)"
-              :type="channelStatusType(testResult.v4.status)"
-              show-icon
-              :closable="false"
-            />
-            <el-alert
-              :title="'V3 ' + pageText.tmdb.testConnection + ' ' + channelStatusText(testResult.v3.status)"
-              :description="testResult.v3.message || channelStatusText(testResult.v3.status)"
-              :type="channelStatusType(testResult.v3.status)"
-              show-icon
-              :closable="false"
-            />
-            <el-alert
-              v-if="testResult.effective !== 'none'"
-              :title="pageText.tmdb.testConnection + ' ' + effectiveChannelLabel(testResult.effective)"
-              type="success"
-              show-icon
-              :closable="false"
-            />
-          </div>
-
           <div class="settings-actions">
             <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
               {{ messages.common.refresh }}
@@ -369,6 +355,27 @@ onMounted(async () => {
             <el-button type="primary" :loading="settingsStore.loading" @click="saveTmdbSettings">
               {{ messages.common.save }}
             </el-button>
+          </div>
+
+          <div v-if="testResult" class="settings-test-results">
+            <div class="settings-test-results-title">{{ pageText.tmdb.testResultTitle }}</div>
+            <div
+              v-for="channel in testChannels"
+              :key="channel.key"
+              class="settings-test-result-row"
+            >
+              <span class="settings-test-channel">{{ channel.label }}</span>
+              <el-tag :type="channelStatusType(channel.result.status)" effect="light">
+                {{ channelStatusText(channel.result.status) }}
+              </el-tag>
+              <span class="settings-test-message">
+                {{ channel.result.message || channelStatusText(channel.result.status) }}
+              </span>
+            </div>
+            <div v-if="testResult.effective !== 'none'" class="settings-test-effective">
+              <span>{{ pageText.tmdb.effectiveChannel }}</span>
+              <strong>{{ effectiveChannelLabel(testResult.effective) }}</strong>
+            </div>
           </div>
         </el-form>
 
@@ -525,5 +532,4 @@ onMounted(async () => {
     </div>
   </ListPageLayout>
 </template>
-
 

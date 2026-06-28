@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Connection, Delete, Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
 import type { MetadataMatchResult, RenamePreview } from "../api/client";
@@ -10,7 +10,7 @@ import ListStatItem from "../components/ListStatItem.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
@@ -52,74 +52,12 @@ const metadataCandidates = ref<MetadataMatchResult[]>([]);
 const pendingMoveTargetDirectory = ref("");
 const activePreviewTab = ref("previews");
 const defaultSort = { prop: "updated_at", order: "descending" as const };
-const previewTableTopScroll = ref<HTMLElement | null>(null);
-const previewTable = ref();
-const previewTopScrollWidth = ref(0);
-const previewTopScrollVisible = ref(false);
-let syncingPreviewScroll = false;
-
 const pagedPreviews = computed(() =>
   paginationStore.paginate(
     "rename-previews",
     tableSortStore.applySort("rename-previews", previewStore.previews),
   ),
 );
-
-function getPreviewScrollBody() {
-  return previewTable.value?.$el?.querySelector(".el-scrollbar__wrap") as HTMLElement | null;
-}
-
-async function syncPreviewTopScrollWidth() {
-  await nextTick();
-  const scrollBody = previewTable.value?.$el?.querySelector(".el-scrollbar__wrap") as HTMLElement | null;
-  const scrollContent = previewTable.value?.$el?.querySelector(".el-table__body") as HTMLElement | null;
-  const scrollWidth = Math.max(scrollContent?.scrollWidth ?? 0, scrollBody?.scrollWidth ?? 0);
-  previewTopScrollWidth.value = previewStore.previews.length > 0 ? scrollWidth : 0;
-  previewTopScrollVisible.value = previewStore.previews.length > 0 && scrollBody ? scrollWidth > scrollBody.clientWidth : false;
-  if (previewTableTopScroll.value) {
-    previewTableTopScroll.value.scrollLeft = 0;
-  }
-  if (scrollBody && !previewTopScrollVisible.value) {
-    scrollBody.scrollLeft = 0;
-  }
-}
-
-function handleTopPreviewScroll(event: Event) {
-  if (syncingPreviewScroll) {
-    return;
-  }
-  const scrollBody = getPreviewScrollBody();
-  if (!scrollBody) {
-    return;
-  }
-  syncingPreviewScroll = true;
-  const topScroll = event.currentTarget as HTMLElement;
-  const topMax = Math.max(topScroll.scrollWidth - topScroll.clientWidth, 0);
-  const bodyMax = Math.max(scrollBody.scrollWidth - scrollBody.clientWidth, 0);
-  scrollBody.scrollLeft = topMax > 0 ? (topScroll.scrollLeft / topMax) * bodyMax : 0;
-  window.requestAnimationFrame(() => {
-    syncingPreviewScroll = false;
-  });
-}
-
-function bindPreviewBodyScroll() {
-  const scrollBody = getPreviewScrollBody();
-  if (!scrollBody) {
-    return;
-  }
-  scrollBody.addEventListener("scroll", () => {
-    if (syncingPreviewScroll || !previewTableTopScroll.value) {
-      return;
-    }
-    syncingPreviewScroll = true;
-    const topMax = Math.max(previewTableTopScroll.value.scrollWidth - previewTableTopScroll.value.clientWidth, 0);
-    const bodyMax = Math.max(scrollBody.scrollWidth - scrollBody.clientWidth, 0);
-    previewTableTopScroll.value.scrollLeft = bodyMax > 0 ? (scrollBody.scrollLeft / bodyMax) * topMax : 0;
-    window.requestAnimationFrame(() => {
-      syncingPreviewScroll = false;
-    });
-  });
-}
 
 const sourceOptions = computed(() =>
   mediaStore.mediaSources.map((source) => ({
@@ -255,11 +193,57 @@ const detailRows = computed(() => {
   ];
 });
 
+const operationHasExecuted = computed(() => {
+  const status = renameOperationStore.currentOperation?.status;
+  return Boolean(status && status !== "dry_run");
+});
+
+const operationDialogTitle = computed(() =>
+  operationHasExecuted.value
+    ? messages.renamePreviews.operationDialog.resultTitle
+    : messages.renamePreviews.operationDialog.title,
+);
+
+const operationResultAlert = computed(() => {
+  const operation = renameOperationStore.currentOperation;
+  if (!operation || !operationHasExecuted.value) {
+    return null;
+  }
+
+  const summary = formatMessage(messages.renamePreviews.operationDialog.summary, {
+    total: operation.total_count,
+    renamed: operation.renamed_count,
+    failed: operation.failed_count,
+    conflict: operation.conflict_count,
+  });
+
+  if (operation.failed_count > 0 && operation.renamed_count > 0) {
+    return {
+      type: "warning" as const,
+      title: messages.renamePreviews.operationDialog.partialFailed,
+      description: `${summary} ${messages.renamePreviews.operationDialog.fixSuggestion}`,
+    };
+  }
+
+  if (operation.failed_count > 0) {
+    return {
+      type: "error" as const,
+      title: messages.renamePreviews.operationDialog.failed,
+      description: `${summary} ${messages.renamePreviews.operationDialog.fixSuggestion}`,
+    };
+  }
+
+  return {
+    type: "success" as const,
+    title: messages.renamePreviews.operationDialog.success,
+    description: summary,
+  };
+});
+
 async function refreshPreviews() {
   if (!previewStore.filters.scan_job_id) {
     previewStore.previews = [];
     pendingFileStore.pendingFiles = [];
-    await syncPreviewTopScrollWidth();
     return;
   }
   await previewStore.loadPreviews(previewStore.filters);
@@ -267,7 +251,6 @@ async function refreshPreviews() {
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
-  await syncPreviewTopScrollWidth();
 }
 
 async function generatePreviews() {
@@ -278,14 +261,12 @@ async function generatePreviews() {
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
-  await syncPreviewTopScrollWidth();
 }
 
 async function loadScanJobsForSelectedSource() {
   previewStore.filters.scan_job_id = undefined;
   previewStore.previews = [];
   pendingFileStore.pendingFiles = [];
-  await syncPreviewTopScrollWidth();
   if (!previewStore.filters.media_source_id) {
     mediaStore.scanJobs = [];
     return;
@@ -299,7 +280,6 @@ async function resetRenamePreviews() {
   pendingFileStore.pendingFiles = [];
   selectedPreviewIds.value = [];
   selectedPreviewRows.value = [];
-  await syncPreviewTopScrollWidth();
   await mediaStore.loadMediaSources();
 }
 
@@ -420,6 +400,18 @@ async function continueWithoutEmptyTargets() {
 
 async function executeRenameOperation() {
   await renameOperationStore.executeCurrentOperation();
+  const operation = renameOperationStore.currentOperation;
+  if (renameOperationStore.errorMessage) {
+    ElMessage.error(renameOperationStore.errorMessage);
+    return;
+  }
+  if (operation?.failed_count && operation.renamed_count > 0) {
+    ElMessage.warning(messages.renamePreviews.operationDialog.partialFailed);
+  } else if (operation?.failed_count) {
+    ElMessage.error(messages.renamePreviews.operationDialog.failed);
+  } else if (operation) {
+    ElMessage.success(messages.renamePreviews.operationDialog.success);
+  }
   await refreshPreviews();
 }
 
@@ -449,10 +441,6 @@ onMounted(async () => {
     previewStore.filters.scan_job_id = routeScanJobId;
     await refreshPreviews();
   }
-  window.requestAnimationFrame(() => {
-    void syncPreviewTopScrollWidth();
-    bindPreviewBodyScroll();
-  });
 });
 </script>
 
@@ -530,20 +518,17 @@ onMounted(async () => {
     <template #table>
       <el-tabs v-model="activePreviewTab" class="rename-preview-tabs">
         <el-tab-pane :label="messages.renamePreviews.tabs.previews" name="previews">
-          <div v-show="previewTopScrollVisible" ref="previewTableTopScroll" class="table-top-scroll" @scroll="handleTopPreviewScroll">
-          <div class="table-top-scroll-track" :style="{ width: `${previewTopScrollWidth}px` }" />
-          </div>
           <el-table
-          ref="previewTable"
           :data="pagedPreviews"
           class="data-table rename-previews-table"
+          height="100%"
           table-layout="auto"
           :default-sort="defaultSort"
           @row-click="openDetailDialog"
           @selection-change="handleSelectionChange"
           @sort-change="handleSortChange"
           >
-          <el-table-column type="selection" width="44" align="center" />
+          <el-table-column type="selection" width="44" align="center" fixed="left" />
           <el-table-column
           prop="status"
           :label="messages.common.status"
@@ -703,10 +688,11 @@ onMounted(async () => {
           <el-table
           :data="pendingFileStore.pendingFiles"
           class="data-table"
+          height="100%"
           table-layout="auto"
           @selection-change="handlePendingSelectionChange"
           >
-          <el-table-column type="selection" width="44" align="center" />
+          <el-table-column type="selection" width="44" align="center" fixed="left" />
           <el-table-column :label="messages.renamePreviews.pendingFiles.columns.reason" width="108" align="center" header-align="center">
           <template #default="{ row }">
           <el-tag type="warning" effect="light">{{ pendingReasonLabel(row.reason) }}</el-tag>
@@ -849,13 +835,21 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="operationDialogVisible" :title="messages.renamePreviews.operationDialog.title" width="860px">
+    <el-dialog v-model="operationDialogVisible" :title="operationDialogTitle" width="860px">
       <div class="rename-operation-dialog">
         <el-alert
           v-if="renameOperationStore.errorMessage"
           :title="renameOperationStore.errorMessage"
           type="error"
           show-icon
+        />
+        <el-alert
+          v-if="operationResultAlert"
+          :title="operationResultAlert.title"
+          :description="operationResultAlert.description"
+          :type="operationResultAlert.type"
+          show-icon
+          :closable="false"
         />
         <div v-if="renameOperationStore.currentOperation" class="preview-stats operation-stats">
           <div>
@@ -912,6 +906,7 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="operationDialogVisible = false">{{ messages.common.close }}</el-button>
         <el-button
+          v-if="!operationHasExecuted"
           type="danger"
           :disabled="!renameOperationStore.canExecute"
           :loading="renameOperationStore.loading"

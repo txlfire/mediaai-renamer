@@ -572,10 +572,11 @@ onMounted(() => {
       <el-table
         :data="pagedMediaSources"
         class="data-table"
+        height="100%"
         table-layout="auto"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="44" align="center" />
+        <el-table-column type="selection" width="44" align="center" fixed="left" />
         <el-table-column :label="messages.mediaSources.name" min-width="180" align="left" header-align="left">
           <template #default="{ row }">
             <button type="button" class="link-cell" @click="openEditDialog(row)">

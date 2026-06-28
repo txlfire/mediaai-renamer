@@ -140,6 +140,7 @@ onMounted(async () => {
       <el-table
         :data="pagedScanJobs"
         class="data-table scan-jobs-table"
+        height="100%"
         table-layout="auto"
         :default-sort="defaultSort"
         @sort-change="handleSortChange"

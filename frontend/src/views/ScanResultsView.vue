@@ -152,6 +152,7 @@ onMounted(async () => {
       <el-table
         :data="pagedMediaFiles"
         class="data-table scan-results-table"
+        height="100%"
         table-layout="auto"
         :default-sort="defaultSort"
         @row-click="handleRowClick"
@@ -163,6 +164,7 @@ onMounted(async () => {
           width="76"
           align="center"
           header-align="center"
+          fixed="left"
           sortable="custom"
         >
           <template #default="{ $index }">
