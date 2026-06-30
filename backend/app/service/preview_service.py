@@ -10,8 +10,16 @@ from app.schema.media import ParsedMediaName, PreviewGenerationSummary, RenamePr
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult
 from app.service.metadata_matcher import MATCH_STATUS_HIGH
 from app.service.metadata_service import MetadataProvider, match_metadata_candidates
+from app.service.settings_service import get_effective_settings
 from app.utils.filename_parser import parse_media_filename
-from app.utils.naming_template import build_preview_name
+from app.utils.naming_template import build_preview_name_with_settings
+
+METADATA_MATCH_SOURCE_PARSED_TITLE = "parsed_title"
+METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME = "original_file_name"
+METADATA_MATCH_SOURCES = {
+    METADATA_MATCH_SOURCE_PARSED_TITLE,
+    METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME,
+}
 
 
 def _utc_now() -> str:
@@ -86,13 +94,14 @@ def generate_rename_previews(
     needs_review_count = 0
     edited_kept_count = 0
     now = _utc_now()
+    effective_settings = get_effective_settings(settings)
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = _query_media_files(connection, media_source_id, scan_job_id, media_file_ids)
         for row in rows:
             parsed = parse_media_filename(str(row["file_name"]))
-            suggested_name = build_preview_name(parsed, str(row["extension"]))
+            suggested_name = build_preview_name_with_settings(parsed, str(row["extension"]), effective_settings)
             status = "needs_review" if parsed.media_type == "unknown" or parsed.message else "generated"
             if status == "needs_review":
                 needs_review_count += 1
@@ -253,7 +262,14 @@ def _get_preview_row(connection: sqlite3.Connection, preview_id: int) -> sqlite3
     return row
 
 
-def _parsed_from_preview(row: sqlite3.Row) -> ParsedMediaName:
+def _parsed_from_preview(
+    row: sqlite3.Row,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> ParsedMediaName:
+    if metadata_match_source not in METADATA_MATCH_SOURCES:
+        raise ValueError("涓嶆敮鎸佺殑 TMDB 鍖归厤鏉ユ簮")
+    if metadata_match_source == METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME:
+        return parse_media_filename(str(row["file_name"]))
     return ParsedMediaName(
         media_type=str(row["media_type"]),
         title=str(row["parsed_title"]),
@@ -270,7 +286,7 @@ def _preview_by_id(settings: AppSettings, preview_id: int) -> RenamePreview:
         return _row_to_preview(_get_preview_row(connection, preview_id))
 
 
-def _candidate_preview_name(candidate: MetadataCandidate, extension: str) -> str:
+def _candidate_preview_name(settings: AppSettings, candidate: MetadataCandidate, extension: str) -> str:
     parsed = ParsedMediaName(
         media_type=candidate.media_type,
         title=candidate.title or candidate.original_title,
@@ -278,7 +294,7 @@ def _candidate_preview_name(candidate: MetadataCandidate, extension: str) -> str
         season=candidate.season,
         episode=candidate.episode,
     )
-    return build_preview_name(parsed, extension)
+    return build_preview_name_with_settings(parsed, extension, get_effective_settings(settings))
 
 
 def _update_preview_metadata(
@@ -297,12 +313,30 @@ def _update_preview_metadata(
         connection.row_factory = sqlite3.Row
         row = _get_preview_row(connection, preview_id)
         suggested_name = row["suggested_name"]
+        edited_name = row["edited_name"]
+        media_type = row["media_type"]
+        parsed_title = row["parsed_title"]
+        parsed_year = row["parsed_year"]
+        season = row["season"]
+        episode = row["episode"]
         if candidate is not None and auto_backfill:
-            suggested_name = _candidate_preview_name(candidate, str(row["original_extension"]))
+            suggested_name = _candidate_preview_name(settings, candidate, str(row["original_extension"]))
+            edited_name = None
+            media_type = candidate.media_type
+            parsed_title = candidate.title or candidate.original_title
+            parsed_year = candidate.year
+            season = candidate.season
+            episode = candidate.episode
 
         connection.execute(
             "UPDATE rename_previews SET "
+            "media_type = ?, "
+            "parsed_title = ?, "
+            "parsed_year = ?, "
+            "season = ?, "
+            "episode = ?, "
             "suggested_name = ?, "
+            "edited_name = ?, "
             "metadata_source = ?, "
             "metadata_match_status = ?, "
             "metadata_match_score = ?, "
@@ -312,7 +346,13 @@ def _update_preview_metadata(
             "updated_at = ? "
             "WHERE id = ?",
             (
+                media_type,
+                parsed_title,
+                parsed_year,
+                season,
+                episode,
                 suggested_name,
+                edited_name,
                 source_override or (candidate.provider if candidate else None),
                 match_status,
                 score,
@@ -332,13 +372,18 @@ def list_metadata_candidates(
     settings: AppSettings,
     preview_id: int,
     provider: MetadataProvider | None = None,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
 ) -> list[MetadataMatchResult]:
     """Return sorted metadata candidates for one rename preview."""
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         row = _get_preview_row(connection, preview_id)
-    result = match_metadata_candidates(settings, _parsed_from_preview(row), provider=provider)
+    result = match_metadata_candidates(
+        settings,
+        _parsed_from_preview(row, metadata_match_source),
+        provider=provider,
+    )
     return result.matches
 
 
@@ -346,13 +391,18 @@ def match_rename_preview_metadata(
     settings: AppSettings,
     preview_id: int,
     provider: MetadataProvider | None = None,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
 ) -> RenamePreview:
     """Match one preview against TMDB and auto-backfill high confidence results."""
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         row = _get_preview_row(connection, preview_id)
-    result = match_metadata_candidates(settings, _parsed_from_preview(row), provider=provider)
+    result = match_metadata_candidates(
+        settings,
+        _parsed_from_preview(row, metadata_match_source),
+        provider=provider,
+    )
     if not result.matches:
         return _update_preview_metadata(
             settings,
@@ -398,4 +448,69 @@ def apply_metadata_candidate(
         None,
         auto_backfill=True,
         preview_status="tmdb_selected",
+    )
+
+
+def match_rename_previews_metadata(
+    settings: AppSettings,
+    preview_ids: list[int],
+    provider: MetadataProvider | None = None,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
+    """Batch match selected rename previews against TMDB."""
+
+    unique_ids = list(dict.fromkeys(preview_ids))
+    updated: list[RenamePreview] = []
+    failed: list[dict[str, object]] = []
+    for preview_id in unique_ids:
+        try:
+            updated.append(
+                match_rename_preview_metadata(
+                    settings,
+                    preview_id,
+                    provider=provider,
+                    metadata_match_source=metadata_match_source,
+                )
+            )
+        except ValueError as exc:
+            failed.append({"id": preview_id, "message": str(exc)})
+    return {
+        "total_count": len(unique_ids),
+        "success_count": len(updated),
+        "failed_count": len(failed),
+        "items": updated,
+        "failed_items": failed,
+    }
+
+
+def match_all_unmatched_metadata(
+    settings: AppSettings,
+    media_source_id: int | None = None,
+    scan_job_id: int | None = None,
+    provider: MetadataProvider | None = None,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
+    """Batch match all previews that have no metadata match result."""
+
+    conditions = ["(rp.metadata_match_status IS NULL OR rp.metadata_match_status = '')"]
+    params: list[object] = []
+    if media_source_id is not None:
+        conditions.append("mf.media_source_id = ?")
+        params.append(media_source_id)
+    if scan_job_id is not None:
+        conditions.append("mf.scan_job_id = ?")
+        params.append(scan_job_id)
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        rows = connection.execute(
+            "SELECT rp.id FROM rename_previews rp "
+            "JOIN media_files mf ON mf.id = rp.media_file_id "
+            f"WHERE {' AND '.join(conditions)} ORDER BY rp.id",
+            params,
+        ).fetchall()
+    return match_rename_previews_metadata(
+        settings,
+        [int(row[0]) for row in rows],
+        provider=provider,
+        metadata_match_source=metadata_match_source,
     )

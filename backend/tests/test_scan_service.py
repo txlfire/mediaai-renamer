@@ -1,12 +1,19 @@
 import tempfile
 import unittest
+import sqlite3
+from contextlib import closing
 from unittest.mock import patch
 from pathlib import Path
 
 from app.core.config import AppSettings, LoggingSettings, ScanSettings
 from app.core.database import ensure_database
 from app.service.media_source_service import create_media_source
-from app.service.scan_service import list_media_files, list_scan_jobs, run_full_scan
+from app.service.scan_service import (
+    list_media_files,
+    list_scan_jobs,
+    recover_interrupted_scan_jobs,
+    run_full_scan,
+)
 from app.service.settings_service import update_setting_values
 
 
@@ -86,6 +93,33 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(1, job.video_count)
             self.assertEqual(["visible.mkv"], [file.file_name for file in files])
 
+    def test_run_full_scan_passes_nfs_operation_timeout_to_stat(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            media_file = media_dir / "movie.mkv"
+            media_file.write_text("visible", encoding="utf-8")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {"shared.nfs_operation_timeout_seconds": 12, "scan.batch_interval_seconds": 0},
+                operator="test",
+            )
+            source = create_media_source(settings, "media", media_dir, True)
+            captured_timeouts: list[int] = []
+
+            def fake_stat(file_path: Path, retry_count: int, timeout_seconds: int) -> object:
+                captured_timeouts.append(timeout_seconds)
+                return file_path.stat()
+
+            with patch("app.service.scan_service._stat_with_nfs_retry", side_effect=fake_stat):
+                job = run_full_scan(settings, source.id)
+
+            self.assertEqual("completed", job.status)
+            self.assertEqual([12], captured_timeouts)
+
     def test_run_full_scan_marks_partial_completed_when_files_are_filtered(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -160,7 +194,7 @@ class ScanServiceTest(unittest.TestCase):
 
             self.assertEqual([], list_scan_jobs(settings))
 
-    def test_run_full_scan_marks_connection_lost_for_nfs_timeout(self):
+    def test_run_full_scan_marks_partial_completed_for_file_level_nfs_timeout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             media_dir = root / "media"
@@ -171,12 +205,44 @@ class ScanServiceTest(unittest.TestCase):
             source = create_media_source(settings, "nfs", media_dir, True, path_type="mounted_nfs")
 
             with patch("app.service.scan_service._stat_with_nfs_retry", side_effect=TimeoutError("timed out")):
-                with self.assertRaises(TimeoutError):
-                    run_full_scan(settings, source.id)
+                job = run_full_scan(settings, source.id)
 
             jobs = list_scan_jobs(settings)
-            self.assertEqual("connection_lost", jobs[0].status)
-            self.assertIn("timed out", jobs[0].error_message)
+            self.assertEqual("partial_completed", job.status)
+            self.assertEqual("partial_completed", jobs[0].status)
+            self.assertEqual(1, jobs[0].warning_count)
+            self.assertEqual(0, jobs[0].video_count)
+            self.assertTrue(jobs[0].error_message)
+
+    def test_recover_interrupted_scan_jobs_marks_running_jobs_failed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = AppSettings(
+                data_dir=root,
+                database_path=root / "mediaai.sqlite3",
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute(
+                    "INSERT INTO media_sources (id, name, path, enabled, created_at, updated_at) "
+                    "VALUES (1, 'test', ?, 1, 'now', 'now')",
+                    (str(root),),
+                )
+                connection.execute(
+                    "INSERT INTO scan_jobs "
+                    "(id, media_source_id, status, batch_size, batch_interval_seconds, started_at, created_at) "
+                    "VALUES (1, 1, 'running', 100, 0, 'now', 'now')"
+                )
+                connection.commit()
+
+            recovered_count = recover_interrupted_scan_jobs(settings)
+            jobs = list_scan_jobs(settings)
+
+            self.assertEqual(1, recovered_count)
+            self.assertEqual("failed", jobs[0].status)
+            self.assertIsNotNone(jobs[0].ended_at)
+            self.assertTrue(jobs[0].error_message)
 
 
 if __name__ == "__main__":

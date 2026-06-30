@@ -36,7 +36,7 @@ const pagination = computed(() => paginationStore.getState(props.paginationKey))
       :page-size="pagination.pageSize"
       :total="total"
       background
-      layout="prev, pager, next"
+      layout="prev, pager, next, jumper"
       @current-change="(page: number) => paginationStore.setPage(paginationKey, page)"
     />
   </div>

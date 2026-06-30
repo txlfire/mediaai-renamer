@@ -206,8 +206,8 @@ describe("rename preview API client", () => {
     await generateRenamePreviews({ scan_job_id: 1 }, httpClient);
     await fetchRenamePreviews({ status: "generated", keyword: "Matrix" }, httpClient);
     await updateRenamePreview(1, "Matrix.Custom", httpClient);
-    await matchRenamePreviewMetadata(1, httpClient);
-    await fetchRenamePreviewMetadataCandidates(1, httpClient);
+    await matchRenamePreviewMetadata(1, "parsed_title", httpClient);
+    await fetchRenamePreviewMetadataCandidates(1, "parsed_title", httpClient);
     await applyRenamePreviewMetadataCandidate(
       1,
       {
@@ -232,8 +232,8 @@ describe("rename preview API client", () => {
       'POST /rename-previews/generate:{"scan_job_id":1}',
       "GET /rename-previews?status=generated&keyword=Matrix",
       'PUT /rename-previews/1:{"target_name":"Matrix.Custom"}',
-      "POST /rename-previews/1/metadata-match:{}",
-      "GET /rename-previews/1/metadata-candidates",
+      "POST /rename-previews/1/metadata-match?metadata_match_source=parsed_title:{}",
+      "GET /rename-previews/1/metadata-candidates?metadata_match_source=parsed_title",
       'POST /rename-previews/1/metadata-candidate:{"candidate":{"provider":"TMDB","provider_id":"603","media_type":"movie","title":"黑客帝国","original_title":"The Matrix","year":1999,"season":null,"episode":null,"overview":""},"score":91}',
     ]);
   });

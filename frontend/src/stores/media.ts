@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 
 import {
   bulkDeleteMediaSources,
+  cleanupLogs,
   createMediaSource,
   createScanJob,
   deleteMediaSource,
@@ -13,6 +14,7 @@ import {
   updateMediaSource,
   type CleanupSummary,
   type LogItem,
+  type LogCleanupSummary,
   type MediaFile,
   type MediaFileFilters,
   type MediaSource,
@@ -100,6 +102,12 @@ export const useMediaStore = defineStore("media", {
 
     async loadLogs() {
       this.logItems = await fetchLogs();
+    },
+
+    async cleanupLogs(): Promise<LogCleanupSummary> {
+      const result = await cleanupLogs();
+      await this.loadLogs();
+      return result;
     },
 
     async openLogDrawer() {

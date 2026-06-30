@@ -4,7 +4,18 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.service.settings_service import (
+    TMDB_TEST_PAGE_KEY,
+    build_imdb_config_snapshot,
+    build_tmdb_config_snapshot,
+    get_imdb_test_result,
+    get_page_test_result,
+    imdb_test_result_to_dict,
     list_setting_values,
+    page_test_result_to_dict,
+    save_imdb_connection_test_result,
+    save_tmdb_connection_test_result,
+    test_imdb_connection,
+    test_tmdb_channel,
     test_tmdb_connection,
     update_setting_values,
 )
@@ -16,6 +27,28 @@ class UpdateSettingsRequest(BaseModel):
     """Hot settings update payload."""
 
     values: dict[str, object]
+
+
+class SaveTmdbTestResultRequest(BaseModel):
+    """Persist per-channel TMDB test results."""
+
+    v4: dict[str, object]
+    v3: dict[str, object]
+
+
+class SaveImdbTestResultRequest(BaseModel):
+    """Persist IMDb test result."""
+
+    status: str
+    message: str | None = None
+    response_ms: int | None = None
+    error_message: str | None = None
+
+
+def _model_payload(model: BaseModel) -> dict[str, object]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
 
 
 @router.get("")
@@ -39,6 +72,26 @@ def update_settings(payload: UpdateSettingsRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/tmdb/test-result")
+def get_tmdb_test_result(request: Request):
+    """Return the latest persisted TMDB connection test result."""
+
+    result = get_page_test_result(request.app.state.settings, TMDB_TEST_PAGE_KEY)
+    current_snapshot = build_tmdb_config_snapshot(request.app.state.settings)
+    payload = page_test_result_to_dict(result)
+    if payload is None:
+        return {
+            "result": None,
+            "current_snapshot": current_snapshot,
+            "matches_current": False,
+        }
+    return {
+        "result": payload,
+        "current_snapshot": current_snapshot,
+        "matches_current": payload["config_snapshot"] == current_snapshot,
+    }
+
+
 @router.post("/tmdb/test")
 def test_tmdb_settings(request: Request):
     """Validate current TMDB settings by calling TMDB."""
@@ -47,3 +100,63 @@ def test_tmdb_settings(request: Request):
         return test_tmdb_connection(request.app.state.settings)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tmdb/test/{channel}")
+def test_tmdb_settings_channel(channel: str, request: Request):
+    """Validate one TMDB channel."""
+
+    if channel not in {"v4", "v3"}:
+        raise HTTPException(status_code=400, detail="Unsupported TMDB channel")
+    try:
+        return test_tmdb_channel(request.app.state.settings, channel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tmdb/test-result")
+def save_tmdb_test_result(payload: SaveTmdbTestResultRequest, request: Request):
+    """Persist the latest TMDB connection test result."""
+
+    return save_tmdb_connection_test_result(
+        request.app.state.settings,
+        payload.v4,
+        payload.v3,
+    )
+
+
+@router.get("/imdb/test-result")
+def get_imdb_connection_test_result(request: Request):
+    """Return the latest persisted IMDb connection test result."""
+
+    result = get_imdb_test_result(request.app.state.settings)
+    current_snapshot = build_imdb_config_snapshot(request.app.state.settings)
+    payload = imdb_test_result_to_dict(result)
+    if payload is None:
+        return {
+            "result": None,
+            "current_snapshot": current_snapshot,
+            "matches_current": False,
+        }
+    return {
+        "result": payload,
+        "current_snapshot": current_snapshot,
+        "matches_current": bool(payload["is_valid"]) and payload["config_snapshot"] == current_snapshot,
+    }
+
+
+@router.post("/imdb/test")
+def test_imdb_settings(request: Request):
+    """Validate current IMDb reachability."""
+
+    return test_imdb_connection(request.app.state.settings)
+
+
+@router.post("/imdb/test-result")
+def save_imdb_test_result(payload: SaveImdbTestResultRequest, request: Request):
+    """Persist the latest IMDb connection test result."""
+
+    return save_imdb_connection_test_result(
+        request.app.state.settings,
+        _model_payload(payload),
+    )

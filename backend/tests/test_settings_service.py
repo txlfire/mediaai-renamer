@@ -10,7 +10,9 @@ from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
 from app.service.settings_service import (
     get_effective_settings,
+    get_imdb_test_result,
     list_setting_values,
+    save_imdb_connection_test_result,
     update_setting_values,
 )
 
@@ -34,9 +36,12 @@ class SettingsServiceTest(unittest.TestCase):
 
             self.assertEqual("zh-CN", effective["tmdb.language"])
             self.assertEqual("CN", effective["tmdb.region"])
-            self.assertEqual(10000, effective["tmdb.timeout_ms"])
+            self.assertEqual(15000, effective["tmdb.timeout_ms"])
             self.assertEqual(False, effective["tmdb.enabled"])
             self.assertEqual(0, effective["scan.minimum_file_size"])
+            self.assertEqual(False, effective["imdb.enabled"])
+            self.assertEqual("tmdb_first", effective["imdb.priority"])
+            self.assertEqual(10000, effective["imdb.timeout_ms"])
 
     def test_default_m5_non_tmdb_settings_are_available(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -127,6 +132,9 @@ class SettingsServiceTest(unittest.TestCase):
                 {"tmdb.language": "bad"},
                 {"tmdb.region": "China"},
                 {"tmdb.enabled": "yes"},
+                {"imdb.priority": "bad"},
+                {"imdb.timeout_ms": "4000"},
+                {"imdb.timeout_ms": "31000"},
                 {"scan.minimum_file_size": "-1"},
             ]
 
@@ -136,10 +144,13 @@ class SettingsServiceTest(unittest.TestCase):
                         update_setting_values(settings, payload, operator="admin")
 
             effective = get_effective_settings(settings)
-            self.assertEqual(10000, effective["tmdb.timeout_ms"])
+            self.assertEqual(15000, effective["tmdb.timeout_ms"])
             self.assertEqual("zh-CN", effective["tmdb.language"])
             self.assertEqual("CN", effective["tmdb.region"])
             self.assertEqual(False, effective["tmdb.enabled"])
+            self.assertEqual(False, effective["imdb.enabled"])
+            self.assertEqual("tmdb_first", effective["imdb.priority"])
+            self.assertEqual(10000, effective["imdb.timeout_ms"])
             self.assertEqual(0, effective["scan.minimum_file_size"])
 
     def test_m5_non_tmdb_settings_validate_and_persist(self):
@@ -152,7 +163,7 @@ class SettingsServiceTest(unittest.TestCase):
                 {
                     "scan.batch_size": "50",
                     "scan.batch_interval_seconds": "0",
-                    "naming.movie_template": "{title}",
+                    "naming.movie_template": '[{"key":"title","label":"标题","variable":"title"}]',
                     "naming.separator": "-",
                     "operations.log_retention_days": "7",
                     "shared.default_path_type": "mounted_nfs",
@@ -164,7 +175,7 @@ class SettingsServiceTest(unittest.TestCase):
             effective = get_effective_settings(settings)
             self.assertEqual(50, effective["scan.batch_size"])
             self.assertEqual(0, effective["scan.batch_interval_seconds"])
-            self.assertEqual("{title}", effective["naming.movie_template"])
+            self.assertEqual('[{"key":"title","label":"标题","variable":"title"}]', effective["naming.movie_template"])
             self.assertEqual("-", effective["naming.separator"])
             self.assertEqual(7, effective["operations.log_retention_days"])
             self.assertEqual("mounted_nfs", effective["shared.default_path_type"])
@@ -180,6 +191,8 @@ class SettingsServiceTest(unittest.TestCase):
                 {"scan.batch_interval_seconds": "-1"},
                 {"naming.movie_template": ""},
                 {"naming.movie_template": "***"},
+                {"naming.movie_template": "[]"},
+                {"naming.movie_template": '[{"label":"标题"}]'},
                 {"naming.separator": ""},
                 {"operations.batch_limit": "0"},
                 {"shared.default_path_type": "webdav"},
@@ -205,6 +218,42 @@ class SettingsServiceTest(unittest.TestCase):
 
             self.assertEqual(15000, first["tmdb.timeout_ms"])
             self.assertEqual(25000, second["tmdb.timeout_ms"])
+
+    def test_imdb_test_result_is_persisted_and_invalidated_by_config_save(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "imdb.enabled": "true",
+                    "imdb.priority": "imdb_first",
+                    "imdb.timeout_ms": "12000",
+                },
+                operator="admin",
+            )
+
+            saved = save_imdb_connection_test_result(
+                settings,
+                {
+                    "status": "success",
+                    "message": "IMDb连接成功",
+                    "response_ms": 123,
+                },
+            )
+            loaded = get_imdb_test_result(settings)
+
+            self.assertEqual("success", saved["connection_status"])
+            self.assertEqual(123, saved["response_time"])
+            self.assertTrue(saved["is_valid"])
+            self.assertIsNotNone(loaded)
+            self.assertEqual("imdb_first", loaded["config_snapshot"]["imdb.priority"])
+
+            update_setting_values(settings, {"imdb.timeout_ms": "15000"}, operator="admin")
+            invalidated = get_imdb_test_result(settings)
+
+            self.assertIsNotNone(invalidated)
+            self.assertFalse(invalidated["is_valid"])
 
 
 if __name__ == "__main__":

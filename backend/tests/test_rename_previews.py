@@ -17,6 +17,7 @@ from app.service.preview_service import (
     list_rename_previews,
     update_rename_preview,
 )
+from app.service.settings_service import update_setting_values
 
 
 class RenamePreviewTestCase(unittest.TestCase):
@@ -98,6 +99,14 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
         )
         self.assertTrue(self.media_file.exists())
         self.assertEqual("The.Matrix.1999.1080p.mkv", self.media_file.name)
+
+    def test_generate_preview_uses_latest_database_naming_settings(self):
+        update_setting_values(self.settings, {"naming.keep_year": False}, operator="admin")
+
+        generate_rename_previews(self.settings)
+        previews = list_rename_previews(self.settings)
+
+        self.assertIn("The.Matrix.mkv", {preview.suggested_name for preview in previews})
 
     def test_update_preview_sets_edited_name_and_keeps_extension(self):
         generate_rename_previews(self.settings)

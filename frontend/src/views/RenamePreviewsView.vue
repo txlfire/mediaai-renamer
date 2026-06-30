@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { Connection, Delete, Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
-import type { MetadataMatchResult, RenamePreview } from "../api/client";
+import type { MetadataMatchResult, MetadataMatchSource, RenamePreview } from "../api/client";
+import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
+import OperationProgressLog from "../components/OperationProgressLog.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
@@ -51,75 +53,22 @@ const pendingRenamePreviews = ref<RenamePreview[]>([]);
 const metadataCandidates = ref<MetadataMatchResult[]>([]);
 const pendingMoveTargetDirectory = ref("");
 const activePreviewTab = ref("previews");
+const operationProgressVisible = ref(false);
+const operationProgressText = ref("");
+const operationProgressPercent = ref(0);
+const operationProgressLogs = ref<string[]>([]);
+const operationProgressSummary = ref("");
+const metadataMatchSource = ref<MetadataMatchSource>("parsed_title");
 const defaultSort = { prop: "updated_at", order: "descending" as const };
-const previewTableTopScroll = ref<HTMLElement | null>(null);
-const previewTable = ref();
-const previewTopScrollWidth = ref(0);
-const previewTopScrollVisible = ref(false);
-let syncingPreviewScroll = false;
-
 const pagedPreviews = computed(() =>
   paginationStore.paginate(
     "rename-previews",
     tableSortStore.applySort("rename-previews", previewStore.previews),
   ),
 );
-
-function getPreviewScrollBody() {
-  return previewTable.value?.$el?.querySelector(".el-scrollbar__wrap") as HTMLElement | null;
-}
-
-async function syncPreviewTopScrollWidth() {
-  await nextTick();
-  const scrollBody = previewTable.value?.$el?.querySelector(".el-scrollbar__wrap") as HTMLElement | null;
-  const scrollContent = previewTable.value?.$el?.querySelector(".el-table__body") as HTMLElement | null;
-  const scrollWidth = Math.max(scrollContent?.scrollWidth ?? 0, scrollBody?.scrollWidth ?? 0);
-  previewTopScrollWidth.value = previewStore.previews.length > 0 ? scrollWidth : 0;
-  previewTopScrollVisible.value = previewStore.previews.length > 0 && scrollBody ? scrollWidth > scrollBody.clientWidth : false;
-  if (previewTableTopScroll.value) {
-    previewTableTopScroll.value.scrollLeft = 0;
-  }
-  if (scrollBody && !previewTopScrollVisible.value) {
-    scrollBody.scrollLeft = 0;
-  }
-}
-
-function handleTopPreviewScroll(event: Event) {
-  if (syncingPreviewScroll) {
-    return;
-  }
-  const scrollBody = getPreviewScrollBody();
-  if (!scrollBody) {
-    return;
-  }
-  syncingPreviewScroll = true;
-  const topScroll = event.currentTarget as HTMLElement;
-  const topMax = Math.max(topScroll.scrollWidth - topScroll.clientWidth, 0);
-  const bodyMax = Math.max(scrollBody.scrollWidth - scrollBody.clientWidth, 0);
-  scrollBody.scrollLeft = topMax > 0 ? (topScroll.scrollLeft / topMax) * bodyMax : 0;
-  window.requestAnimationFrame(() => {
-    syncingPreviewScroll = false;
-  });
-}
-
-function bindPreviewBodyScroll() {
-  const scrollBody = getPreviewScrollBody();
-  if (!scrollBody) {
-    return;
-  }
-  scrollBody.addEventListener("scroll", () => {
-    if (syncingPreviewScroll || !previewTableTopScroll.value) {
-      return;
-    }
-    syncingPreviewScroll = true;
-    const topMax = Math.max(previewTableTopScroll.value.scrollWidth - previewTableTopScroll.value.clientWidth, 0);
-    const bodyMax = Math.max(scrollBody.scrollWidth - scrollBody.clientWidth, 0);
-    previewTableTopScroll.value.scrollLeft = bodyMax > 0 ? (scrollBody.scrollLeft / bodyMax) * topMax : 0;
-    window.requestAnimationFrame(() => {
-      syncingPreviewScroll = false;
-    });
-  });
-}
+const pagedMetadataCandidates = computed(() =>
+  paginationStore.paginate("metadata-candidates", metadataCandidates.value),
+);
 
 const sourceOptions = computed(() =>
   mediaStore.mediaSources.map((source) => ({
@@ -255,11 +204,57 @@ const detailRows = computed(() => {
   ];
 });
 
+const operationHasExecuted = computed(() => {
+  const status = renameOperationStore.currentOperation?.status;
+  return Boolean(status && status !== "dry_run");
+});
+
+const operationDialogTitle = computed(() =>
+  operationHasExecuted.value
+    ? messages.renamePreviews.operationDialog.resultTitle
+    : messages.renamePreviews.operationDialog.title,
+);
+
+const operationResultAlert = computed(() => {
+  const operation = renameOperationStore.currentOperation;
+  if (!operation || !operationHasExecuted.value) {
+    return null;
+  }
+
+  const summary = formatMessage(messages.renamePreviews.operationDialog.summary, {
+    total: operation.total_count,
+    renamed: operation.renamed_count,
+    failed: operation.failed_count,
+    conflict: operation.conflict_count,
+  });
+
+  if (operation.failed_count > 0 && operation.renamed_count > 0) {
+    return {
+      type: "warning" as const,
+      title: messages.renamePreviews.operationDialog.partialFailed,
+      description: `${summary} ${messages.renamePreviews.operationDialog.fixSuggestion}`,
+    };
+  }
+
+  if (operation.failed_count > 0) {
+    return {
+      type: "error" as const,
+      title: messages.renamePreviews.operationDialog.failed,
+      description: `${summary} ${messages.renamePreviews.operationDialog.fixSuggestion}`,
+    };
+  }
+
+  return {
+    type: "success" as const,
+    title: messages.renamePreviews.operationDialog.success,
+    description: summary,
+  };
+});
+
 async function refreshPreviews() {
   if (!previewStore.filters.scan_job_id) {
     previewStore.previews = [];
     pendingFileStore.pendingFiles = [];
-    await syncPreviewTopScrollWidth();
     return;
   }
   await previewStore.loadPreviews(previewStore.filters);
@@ -267,25 +262,31 @@ async function refreshPreviews() {
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
-  await syncPreviewTopScrollWidth();
 }
 
 async function generatePreviews() {
   if (!previewStore.filters.scan_job_id) {
     return;
   }
+  const count = Math.max(previewStore.previews.length, 1);
+  await confirmResourceOperation(messages.renamePreviews.generate, count);
+  resetOperationProgress(count, messages.renamePreviews.generate);
   await previewStore.generatePreviews({
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
-  await syncPreviewTopScrollWidth();
+  const summary = previewStore.generationSummary;
+  finishOperationProgress(
+    count,
+    (summary?.generated_count ?? 0) + (summary?.needs_review_count ?? 0),
+    0,
+  );
 }
 
 async function loadScanJobsForSelectedSource() {
   previewStore.filters.scan_job_id = undefined;
   previewStore.previews = [];
   pendingFileStore.pendingFiles = [];
-  await syncPreviewTopScrollWidth();
   if (!previewStore.filters.media_source_id) {
     mediaStore.scanJobs = [];
     return;
@@ -299,7 +300,6 @@ async function resetRenamePreviews() {
   pendingFileStore.pendingFiles = [];
   selectedPreviewIds.value = [];
   selectedPreviewRows.value = [];
-  await syncPreviewTopScrollWidth();
   await mediaStore.loadMediaSources();
 }
 
@@ -310,6 +310,35 @@ function handleSelectionChange(rows: RenamePreview[]) {
 
 function handlePendingSelectionChange(rows: Array<{ id: number }>) {
   selectedPendingFileIds.value = rows.map((row) => row.id);
+}
+
+function resetOperationProgress(total = 0, operation = "") {
+  operationProgressVisible.value = total > 0;
+  operationProgressPercent.value = total > 0 ? 5 : 0;
+  operationProgressText.value = total > 0
+    ? formatMessage(messages.renamePreviews.processing, { current: 0, total })
+    : operation;
+  operationProgressLogs.value = [];
+  operationProgressSummary.value = "";
+}
+
+function finishOperationProgress(total: number, success: number, failed: number) {
+  operationProgressVisible.value = true;
+  operationProgressPercent.value = 100;
+  operationProgressText.value = formatMessage(messages.renamePreviews.processing, { current: total, total });
+  operationProgressSummary.value = formatMessage(messages.renamePreviews.operationSummary, { success, failed });
+}
+
+async function confirmResourceOperation(operation: string, count: number) {
+  await ElMessageBox.confirm(
+    formatMessage(messages.renamePreviews.confirmOperation, { count, operation }),
+    messages.renamePreviews.confirmOperationTitle,
+    {
+      type: "warning",
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+    },
+  );
 }
 
 async function runRenameDryRun() {
@@ -338,12 +367,19 @@ async function runRenameDryRunForPreviews(previews: RenamePreview[]) {
 }
 
 async function executeSelectedPreviews() {
+  if (selectedPreviewRows.value.length > 0) {
+    await confirmResourceOperation(messages.renamePreviews.rename, selectedPreviewRows.value.length);
+  }
   await runRenameDryRunForPreviews(selectedPreviewRows.value);
 }
 
 async function executeAllPreviews() {
   const renameableIds = new Set(getRenameablePreviewIds(previewStore.previews));
-  await runRenameDryRunForPreviews(previewStore.previews.filter((preview) => renameableIds.has(preview.id)));
+  const renameablePreviews = previewStore.previews.filter((preview) => renameableIds.has(preview.id));
+  if (renameablePreviews.length > 0) {
+    await confirmResourceOperation(messages.renamePreviews.executeAll, renameablePreviews.length);
+  }
+  await runRenameDryRunForPreviews(renameablePreviews);
 }
 
 async function executeSinglePreview(row: RenamePreview) {
@@ -351,14 +387,62 @@ async function executeSinglePreview(row: RenamePreview) {
 }
 
 async function matchMetadata(row: RenamePreview) {
+  await confirmResourceOperation(messages.renamePreviews.tmdbMatch, 1);
   metadataPreviewId.value = row.id;
-  const updated = await previewStore.matchMetadata(row.id);
-  if (updated.metadata_match_status === "low_confidence") {
-    metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id);
+  const updated = await previewStore.matchMetadata(row.id, metadataMatchSource.value);
+  if (updated.metadata_match_status === "high_confidence") {
+    ElMessage.success(messages.renamePreviews.metadataDialog.matched);
+    return;
+  }
+  metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id, metadataMatchSource.value);
+  if (metadataCandidates.value.length > 0) {
     metadataDialogVisible.value = true;
     return;
   }
-  ElMessage.success(messages.renamePreviews.metadataDialog.matched);
+  ElMessage.warning(updated.metadata_message || messages.renamePreviews.metadataDialog.empty);
+}
+
+function appendMetadataLogs(result: { items: RenamePreview[]; failed_items: Array<{ id: number; message: string }> }) {
+  result.items.forEach((item) => {
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.metadataDialog.matchSuccessLog, {
+        name: item.current_target_name,
+        score: item.metadata_match_score ?? 0,
+      }),
+    );
+  });
+  result.failed_items.forEach((item) => {
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.metadataDialog.matchFailedLog, {
+        id: item.id,
+        reason: item.message,
+      }),
+    );
+  });
+}
+
+async function matchSelectedMetadata() {
+  if (selectedPreviewIds.value.length === 0) {
+    return;
+  }
+  await confirmResourceOperation(messages.renamePreviews.tmdbMatch, selectedPreviewIds.value.length);
+  resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.tmdbMatch);
+  const result = await previewStore.matchMetadataBatch(selectedPreviewIds.value, metadataMatchSource.value);
+  appendMetadataLogs(result);
+  finishOperationProgress(result.total_count, result.success_count, result.failed_count);
+}
+
+async function matchAllMetadata() {
+  const unmatchedCount = previewStore.previews.filter((preview) => !preview.metadata_match_status).length;
+  if (unmatchedCount === 0) {
+    ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
+    return;
+  }
+  await confirmResourceOperation(messages.renamePreviews.tmdbMatchAll, unmatchedCount);
+  resetOperationProgress(unmatchedCount, messages.renamePreviews.tmdbMatchAll);
+  const result = await previewStore.matchAllUnmatched(metadataMatchSource.value);
+  appendMetadataLogs(result);
+  finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
 
 async function applyMetadataCandidate(match: MetadataMatchResult) {
@@ -377,10 +461,18 @@ async function removePendingFile(row: { id: number }) {
 }
 
 async function clearPendingFiles() {
+  const count = pendingFileStore.pendingFiles.length;
+  if (count > 0) {
+    await confirmResourceOperation(messages.renamePreviews.pendingFiles.clear, count);
+    resetOperationProgress(count, messages.renamePreviews.pendingFiles.clear);
+  }
   await pendingFileStore.clearPendingFiles({
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
+  if (count > 0) {
+    finishOperationProgress(count, count, 0);
+  }
   ElMessage.success(messages.renamePreviews.pendingFiles.cleared);
 }
 
@@ -398,7 +490,10 @@ async function moveSelectedPendingFiles() {
     ElMessage.warning(messages.renamePreviews.pendingFiles.targetDirectoryPlaceholder);
     return;
   }
+  await confirmResourceOperation(messages.renamePreviews.pendingFiles.move, selectedPendingFileIds.value.length);
+  resetOperationProgress(selectedPendingFileIds.value.length, messages.renamePreviews.pendingFiles.move);
   await pendingFileStore.movePendingFiles(selectedPendingFileIds.value, pendingMoveTargetDirectory.value.trim());
+  finishOperationProgress(selectedPendingFileIds.value.length, selectedPendingFileIds.value.length, 0);
   selectedPendingFileIds.value = [];
   pendingMoveDialogVisible.value = false;
   ElMessage.success(messages.renamePreviews.pendingFiles.moved);
@@ -419,7 +514,27 @@ async function continueWithoutEmptyTargets() {
 }
 
 async function executeRenameOperation() {
+  const total = renameOperationStore.currentOperation?.ready_count ?? 0;
+  resetOperationProgress(total, messages.renamePreviews.rename);
   await renameOperationStore.executeCurrentOperation();
+  const operation = renameOperationStore.currentOperation;
+  if (renameOperationStore.errorMessage) {
+    ElMessage.error(renameOperationStore.errorMessage);
+    return;
+  }
+  if (operation?.failed_count && operation.renamed_count > 0) {
+    ElMessage.warning(messages.renamePreviews.operationDialog.partialFailed);
+  } else if (operation?.failed_count) {
+    ElMessage.error(messages.renamePreviews.operationDialog.failed);
+  } else if (operation) {
+    ElMessage.success(messages.renamePreviews.operationDialog.success);
+  }
+  if (operation) {
+    operation.items.forEach((item) => {
+      operationProgressLogs.value.push(`${operationStatusLabel(item.status)}：${item.target_path}${item.message ? `，${item.message}` : ""}`);
+    });
+    finishOperationProgress(operation.total_count, operation.renamed_count, operation.failed_count);
+  }
   await refreshPreviews();
 }
 
@@ -449,10 +564,6 @@ onMounted(async () => {
     previewStore.filters.scan_job_id = routeScanJobId;
     await refreshPreviews();
   }
-  window.requestAnimationFrame(() => {
-    void syncPreviewTopScrollWidth();
-    bindPreviewBodyScroll();
-  });
 });
 </script>
 
@@ -473,9 +584,11 @@ onMounted(async () => {
         <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
       <el-select v-model="previewStore.filters.status" class="rename-filter-select" :placeholder="messages.renamePreviews.status" clearable>
+        <el-option :label="messages.common.all" value="" />
         <el-option :label="messages.status.generated" value="generated" />
-        <el-option :label="messages.status.edited" value="edited" />
         <el-option :label="messages.status.needsReview" value="needs_review" />
+        <el-option :label="messages.status.edited" value="edited" />
+        <el-option :label="messages.status.renamed" value="renamed" />
       </el-select>
       <el-select v-model="previewStore.filters.media_type" class="rename-filter-select" :placeholder="messages.renamePreviews.type" clearable>
         <el-option :label="messages.renamePreviews.mediaTypes.movie" value="movie" />
@@ -492,58 +605,90 @@ onMounted(async () => {
       <el-button @click="resetRenamePreviews">{{ messages.common.reset }}</el-button>
     </template>
 
-    <template #stats>
-      <ListStatItem :label="messages.common.total" :value="previewStore.stats.total" />
-      <ListStatItem :label="messages.status.generated" :value="previewStore.stats.generated" tone="success" />
-      <ListStatItem :label="messages.status.needsReview" :value="previewStore.stats.needsReview" tone="warning" />
-      <ListStatItem :label="messages.status.edited" :value="previewStore.stats.edited" tone="edited" />
-      <ListStatItem :label="messages.status.renamed" :value="previewStore.stats.renamed" tone="renamed" />
-    </template>
-
     <template #actions>
-      <el-button
-        type="success"
-        :icon="Select"
-        :disabled="selectedPreviewIds.length === 0"
-        :loading="renameOperationStore.loading"
-        @click="executeSelectedPreviews"
-      >
-        {{ messages.renamePreviews.executeSelected }}
-      </el-button>
-      <el-button type="primary" :icon="MagicStick" :loading="previewStore.loading" @click="generatePreviews">
-        {{ messages.renamePreviews.generate }}
-      </el-button>
-      <el-button
-        type="warning"
-        :icon="Select"
-        :disabled="previewStore.previews.length === 0"
-        :loading="renameOperationStore.loading"
-        @click="executeAllPreviews"
-      >
-        {{ messages.renamePreviews.executeAll }}
-      </el-button>
-      <el-button :icon="Refresh" @click="refreshPreviews">{{ messages.common.refresh }}</el-button>
+      <div class="rename-action-groups">
+        <div class="rename-action-group">
+          <el-button :icon="Refresh" :disabled="previewStore.loading || renameOperationStore.loading" @click="refreshPreviews">
+            {{ messages.common.refresh }}
+          </el-button>
+          <el-button type="primary" :icon="MagicStick" :loading="previewStore.loading" @click="generatePreviews">
+            {{ messages.renamePreviews.generate }}
+          </el-button>
+        </div>
+        <div class="rename-action-group">
+          <el-select
+            v-model="metadataMatchSource"
+            class="metadata-source-select"
+            :placeholder="messages.renamePreviews.metadataMatchSource"
+            :disabled="previewStore.loading"
+          >
+            <el-option :label="messages.renamePreviews.metadataSourceParsedTitle" value="parsed_title" />
+            <el-option :label="messages.renamePreviews.metadataSourceOriginalFileName" value="original_file_name" />
+          </el-select>
+          <el-button
+            :icon="Connection"
+            :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+            :loading="previewStore.loading"
+            @click="matchSelectedMetadata"
+          >
+            {{ messages.renamePreviews.tmdbMatch }}
+          </el-button>
+          <el-button
+            :icon="Connection"
+            :disabled="previewStore.previews.length === 0 || previewStore.loading"
+            :loading="previewStore.loading"
+            @click="matchAllMetadata"
+          >
+            {{ messages.renamePreviews.tmdbMatchAll }}
+          </el-button>
+        </div>
+        <div class="rename-action-group">
+          <el-button
+            type="success"
+            :icon="Select"
+            :disabled="selectedPreviewIds.length === 0"
+            :loading="renameOperationStore.loading"
+            @click="executeSelectedPreviews"
+          >
+            {{ messages.renamePreviews.rename }}
+          </el-button>
+          <el-button
+            type="warning"
+            :icon="Select"
+            :disabled="previewStore.previews.length === 0"
+            :loading="renameOperationStore.loading"
+            @click="executeAllPreviews"
+          >
+            {{ messages.renamePreviews.executeAll }}
+          </el-button>
+        </div>
+      </div>
     </template>
 
     <el-alert v-if="previewStore.errorMessage" type="error" :title="previewStore.errorMessage" show-icon />
 
     <template #table>
+      <OperationProgressLog
+        :visible="operationProgressVisible"
+        :percentage="operationProgressPercent"
+        :text="operationProgressText"
+        :logs="operationProgressLogs"
+        :summary="operationProgressSummary"
+      />
       <el-tabs v-model="activePreviewTab" class="rename-preview-tabs">
         <el-tab-pane :label="messages.renamePreviews.tabs.previews" name="previews">
-          <div v-show="previewTopScrollVisible" ref="previewTableTopScroll" class="table-top-scroll" @scroll="handleTopPreviewScroll">
-          <div class="table-top-scroll-track" :style="{ width: `${previewTopScrollWidth}px` }" />
-          </div>
+          <FullscreenTablePanel :title="messages.renamePreviews.tableTitle">
           <el-table
-          ref="previewTable"
           :data="pagedPreviews"
           class="data-table rename-previews-table"
+          height="100%"
           table-layout="auto"
           :default-sort="defaultSort"
           @row-click="openDetailDialog"
           @selection-change="handleSelectionChange"
           @sort-change="handleSortChange"
           >
-          <el-table-column type="selection" width="44" align="center" />
+          <el-table-column type="selection" width="44" align="center" fixed="left" />
           <el-table-column
           prop="status"
           :label="messages.common.status"
@@ -674,7 +819,17 @@ onMounted(async () => {
           </template>
           </el-table-column>
           </el-table>
-          <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" />
+          <div class="rename-table-footer">
+            <div class="rename-footer-stats">
+              <ListStatItem :label="messages.common.total" :value="previewStore.stats.total" />
+              <ListStatItem :label="messages.status.generated" :value="previewStore.stats.generated" tone="success" />
+              <ListStatItem :label="messages.status.needsReview" :value="previewStore.stats.needsReview" tone="warning" />
+              <ListStatItem :label="messages.status.edited" :value="previewStore.stats.edited" tone="edited" />
+              <ListStatItem :label="messages.status.renamed" :value="previewStore.stats.renamed" tone="renamed" />
+            </div>
+            <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" />
+          </div>
+          </FullscreenTablePanel>
         </el-tab-pane>
 
         <el-tab-pane :label="messages.renamePreviews.tabs.pendingFiles" name="pending">
@@ -703,10 +858,11 @@ onMounted(async () => {
           <el-table
           :data="pendingFileStore.pendingFiles"
           class="data-table"
+          height="100%"
           table-layout="auto"
           @selection-change="handlePendingSelectionChange"
           >
-          <el-table-column type="selection" width="44" align="center" />
+          <el-table-column type="selection" width="44" align="center" fixed="left" />
           <el-table-column :label="messages.renamePreviews.pendingFiles.columns.reason" width="108" align="center" header-align="center">
           <template #default="{ row }">
           <el-tag type="warning" effect="light">{{ pendingReasonLabel(row.reason) }}</el-tag>
@@ -785,7 +941,7 @@ onMounted(async () => {
 
     <el-dialog v-model="metadataDialogVisible" :title="messages.renamePreviews.metadataDialog.title" width="860px">
       <el-empty v-if="metadataCandidates.length === 0" :description="messages.renamePreviews.metadataDialog.empty" />
-      <el-table v-else :data="metadataCandidates" class="data-table" table-layout="auto">
+      <el-table v-else :data="pagedMetadataCandidates" class="data-table" table-layout="auto">
         <el-table-column :label="messages.renamePreviews.columns.metadataScore" width="96" align="center" header-align="center">
           <template #default="{ row }">{{ row.score }}%</template>
         </el-table-column>
@@ -817,6 +973,11 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+      <TablePagination
+        v-if="metadataCandidates.length > 0"
+        pagination-key="metadata-candidates"
+        :total="metadataCandidates.length"
+      />
       <template #footer>
         <el-button @click="metadataDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>
@@ -849,13 +1010,21 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="operationDialogVisible" :title="messages.renamePreviews.operationDialog.title" width="860px">
+    <el-dialog v-model="operationDialogVisible" :title="operationDialogTitle" width="860px">
       <div class="rename-operation-dialog">
         <el-alert
           v-if="renameOperationStore.errorMessage"
           :title="renameOperationStore.errorMessage"
           type="error"
           show-icon
+        />
+        <el-alert
+          v-if="operationResultAlert"
+          :title="operationResultAlert.title"
+          :description="operationResultAlert.description"
+          :type="operationResultAlert.type"
+          show-icon
+          :closable="false"
         />
         <div v-if="renameOperationStore.currentOperation" class="preview-stats operation-stats">
           <div>
@@ -912,6 +1081,7 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="operationDialogVisible = false">{{ messages.common.close }}</el-button>
         <el-button
+          v-if="!operationHasExecuted"
           type="danger"
           :disabled="!renameOperationStore.canExecute"
           :loading="renameOperationStore.loading"

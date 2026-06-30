@@ -3,13 +3,36 @@
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
+import json
 import os
 import re
 import sqlite3
+import time
+from urllib import request as url_request
+from urllib.error import URLError
 
 from app.core.config import AppSettings
-from app.schema.settings import SettingValue
+from app.schema.settings import PageTestResult, SettingValue
 from app.service.tmdb_client import TmdbClient
+
+
+TMDB_TEST_PAGE_KEY = "settings.tmdb"
+TMDB_TEST_SNAPSHOT_KEYS = (
+    "tmdb.v4_token",
+    "tmdb.api_key",
+    "tmdb.language",
+    "tmdb.region",
+    "tmdb.timeout_ms",
+    "tmdb.enabled",
+    "tmdb.priority",
+    "scan.minimum_file_size",
+)
+IMDB_TEST_SNAPSHOT_KEYS = (
+    "imdb.enabled",
+    "imdb.priority",
+    "imdb.timeout_ms",
+)
 
 
 @dataclass(frozen=True)
@@ -66,11 +89,11 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
     "tmdb.timeout_ms": SettingDefinition(
         key="tmdb.timeout_ms",
         category="tmdb",
-        default=10000,
+        default=15000,
         value_type="int",
         description="TMDB request timeout in milliseconds",
         env_var="TMDB_TIMEOUT_MS",
-        min_value=1000,
+        min_value=10000,
         max_value=30000,
     ),
     "tmdb.enabled": SettingDefinition(
@@ -90,6 +113,30 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         env_var="TMDB_PRIORITY",
         min_value=0,
         max_value=100,
+    ),
+    "imdb.enabled": SettingDefinition(
+        key="imdb.enabled",
+        category="imdb",
+        default=False,
+        value_type="bool",
+        description="Enable IMDb supplemental scraping",
+    ),
+    "imdb.priority": SettingDefinition(
+        key="imdb.priority",
+        category="imdb",
+        default="tmdb_first",
+        value_type="string",
+        description="IMDb supplemental data priority",
+        allowed_values=("tmdb_first", "imdb_first"),
+    ),
+    "imdb.timeout_ms": SettingDefinition(
+        key="imdb.timeout_ms",
+        category="imdb",
+        default=10000,
+        value_type="int",
+        description="IMDb request timeout in milliseconds",
+        min_value=5000,
+        max_value=30000,
     ),
     "scan.minimum_file_size": SettingDefinition(
         key="scan.minimum_file_size",
@@ -200,6 +247,39 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         value_type="int",
         description="Log retention days",
         min_value=0,
+        max_value=3650,
+    ),
+    "logging.retention_days": SettingDefinition(
+        key="logging.retention_days",
+        category="logging",
+        default=30,
+        value_type="int",
+        description="Log retention days",
+        min_value=1,
+        max_value=3650,
+    ),
+    "logging.level": SettingDefinition(
+        key="logging.level",
+        category="logging",
+        default="INFO",
+        value_type="string",
+        description="Runtime log level",
+        allowed_values=("DEBUG", "INFO", "WARNING", "ERROR"),
+    ),
+    "logging.path": SettingDefinition(
+        key="logging.path",
+        category="logging",
+        default="logs",
+        value_type="string",
+        description="Log storage path",
+    ),
+    "logging.archive_after_days": SettingDefinition(
+        key="logging.archive_after_days",
+        category="logging",
+        default=7,
+        value_type="int",
+        description="Archive logs older than days",
+        min_value=1,
         max_value=3650,
     ),
     "operations.log_default_limit": SettingDefinition(
@@ -328,6 +408,336 @@ def _serialize_value(value: object) -> str:
     return str(value)
 
 
+def _stable_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _snapshot_hash(snapshot: dict[str, object]) -> str:
+    return hashlib.sha256(_stable_json(snapshot).encode("utf-8")).hexdigest()
+
+
+def _tmdb_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
+    return {key: effective.get(key) for key in TMDB_TEST_SNAPSHOT_KEYS}
+
+
+def _imdb_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
+    return {key: effective.get(key) for key in IMDB_TEST_SNAPSHOT_KEYS}
+
+
+def build_tmdb_config_snapshot(settings: AppSettings) -> dict[str, object]:
+    """Return the effective TMDB settings snapshot used by connection tests."""
+
+    return _tmdb_config_snapshot(get_effective_settings(settings))
+
+
+def build_imdb_config_snapshot(settings: AppSettings) -> dict[str, object]:
+    """Return the effective IMDb settings snapshot used by connection tests."""
+
+    return _imdb_config_snapshot(get_effective_settings(settings))
+
+
+def _classify_tmdb_error(reason: str) -> tuple[str, int | None]:
+    status_match = re.search(r"HTTP\s+(\d{3})", reason)
+    if status_match:
+        status_code = int(status_match.group(1))
+        if 500 <= status_code <= 599:
+            return "server", status_code
+        return "client", status_code
+    lowered = reason.lower()
+    if any(token in lowered for token in ("timed out", "timeout", "??")):
+        return "timeout", None
+    if any(token in lowered for token in ("name or service", "nodename", "dns", "refused", "unreachable", "network")):
+        return "network", None
+    return "unknown", None
+
+
+def _tmdb_error_message(channel: str, error_type: str, http_status: int | None, reason: str) -> str:
+    if error_type == "network":
+        return f"{channel} 网络不可达，请检查网络连接或代理设置"
+    if error_type in ("server", "timeout"):
+        return f"{channel} TMDB 服务繁忙或响应超时，请稍后重试"
+    if error_type == "client" and http_status:
+        return f"{channel} 请求失败（{http_status}），请检查 API 密钥是否正确"
+    return f"{channel} 连接失败：{reason}"
+
+
+def _test_tmdb_channel(channel: str, effective: dict[str, object]) -> dict[str, object]:
+    timeout_ms = int(effective.get("tmdb.timeout_ms") or 15000)
+    started_at = time.perf_counter()
+    if channel == "v4":
+        token = str(effective.get("tmdb.v4_token") or "").strip()
+        if not token:
+            return {"status": "skipped", "message": "未配置 V4 令牌", "response_ms": None}
+        client = TmdbClient(
+            v4_token=token,
+            language=str(effective.get("tmdb.language") or "zh-CN"),
+            region=str(effective.get("tmdb.region") or "CN"),
+            timeout_ms=timeout_ms,
+        )
+        label = "V4"
+    elif channel == "v3":
+        api_key = str(effective.get("tmdb.api_key") or "").strip()
+        if not api_key:
+            return {"status": "skipped", "message": "未配置 V3 API 密钥", "response_ms": None}
+        client = TmdbClient(
+            api_key=api_key,
+            language=str(effective.get("tmdb.language") or "zh-CN"),
+            region=str(effective.get("tmdb.region") or "CN"),
+            timeout_ms=timeout_ms,
+        )
+        label = "V3"
+    else:
+        raise ValueError(f"Unknown TMDB channel: {channel}")
+
+    try:
+        client.test_connection()
+        return {
+            "status": "success",
+            "message": f"{label} 连接成功",
+            "response_ms": round((time.perf_counter() - started_at) * 1000),
+        }
+    except RuntimeError as exc:
+        response_ms = round((time.perf_counter() - started_at) * 1000)
+        reason = str(exc)
+        error_type, http_status = _classify_tmdb_error(reason)
+        return {
+            "status": "failed",
+            "message": _tmdb_error_message(label, error_type, http_status, reason),
+            "response_ms": response_ms,
+            "error_type": error_type,
+            "http_status": http_status,
+            "raw_error": reason,
+        }
+
+
+def _page_test_result_from_row(row: sqlite3.Row) -> PageTestResult:
+    return PageTestResult(
+        page_key=str(row["page_key"]),
+        config_snapshot=json.loads(str(row["config_snapshot"])),
+        config_hash=str(row["config_hash"]),
+        v4=json.loads(str(row["v4_result"])),
+        v3=json.loads(str(row["v3_result"])),
+        effective=str(row["effective_channel"]),
+        tested_at=str(row["tested_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def get_page_test_result(settings: AppSettings, page_key: str) -> PageTestResult | None:
+    """Return the latest test result for a page."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT page_key, config_snapshot, config_hash, v4_result, v3_result, "
+            "effective_channel, tested_at, updated_at "
+            "FROM page_test_results WHERE page_key = ?",
+            (page_key,),
+        ).fetchone()
+    return _page_test_result_from_row(row) if row else None
+
+
+def delete_page_test_result(settings: AppSettings, page_key: str) -> None:
+    """Delete the latest test result for a page."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.execute("DELETE FROM page_test_results WHERE page_key = ?", (page_key,))
+        connection.commit()
+
+
+def _save_page_test_result(
+    settings: AppSettings,
+    page_key: str,
+    snapshot: dict[str, object],
+    result: dict[str, object],
+) -> PageTestResult:
+    now = _utc_now()
+    v4 = result.get("v4") if isinstance(result.get("v4"), dict) else {}
+    v3 = result.get("v3") if isinstance(result.get("v3"), dict) else {}
+    effective = str(result.get("effective") or "none")
+    config_hash = _snapshot_hash(snapshot)
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.execute(
+            "INSERT INTO page_test_results "
+            "(page_key, config_snapshot, config_hash, v4_result, v3_result, "
+            "effective_channel, tested_at, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(page_key) DO UPDATE SET "
+            "config_snapshot = excluded.config_snapshot, "
+            "config_hash = excluded.config_hash, "
+            "v4_result = excluded.v4_result, "
+            "v3_result = excluded.v3_result, "
+            "effective_channel = excluded.effective_channel, "
+            "tested_at = excluded.tested_at, "
+            "updated_at = excluded.updated_at",
+            (
+                page_key,
+                _stable_json(snapshot),
+                config_hash,
+                _stable_json(v4),
+                _stable_json(v3),
+                effective,
+                now,
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+
+    saved = get_page_test_result(settings, page_key)
+    if saved is None:
+        raise RuntimeError("Failed to persist page test result.")
+    return saved
+
+
+def save_tmdb_connection_test_result(
+    settings: AppSettings,
+    v4_result: dict[str, object],
+    v3_result: dict[str, object],
+) -> dict[str, object]:
+    effective = get_effective_settings(settings)
+    snapshot = _tmdb_config_snapshot(effective)
+    effective_channel = "none"
+    if v4_result.get("status") == "success":
+        effective_channel = "v4"
+    elif v3_result.get("status") == "success":
+        effective_channel = "v3"
+    result: dict[str, object] = {
+        "v4": v4_result,
+        "v3": v3_result,
+        "effective": effective_channel,
+    }
+    saved = _save_page_test_result(settings, TMDB_TEST_PAGE_KEY, snapshot, result)
+    result["tested_at"] = saved.tested_at
+    result["config_snapshot"] = saved.config_snapshot
+    result["config_hash"] = saved.config_hash
+    return result
+
+
+def test_tmdb_channel(settings: AppSettings, channel: str) -> dict[str, object]:
+    """Test one TMDB channel for frontend progress reporting."""
+
+    return _test_tmdb_channel(channel, get_effective_settings(settings))
+
+
+def page_test_result_to_dict(result: PageTestResult | None) -> dict[str, object] | None:
+    if result is None:
+        return None
+    return {
+        "page_key": result.page_key,
+        "config_snapshot": result.config_snapshot,
+        "config_hash": result.config_hash,
+        "v4": result.v4,
+        "v3": result.v3,
+        "effective": result.effective,
+        "tested_at": result.tested_at,
+        "updated_at": result.updated_at,
+    }
+
+
+def get_imdb_test_result(settings: AppSettings) -> dict[str, object] | None:
+    """Return the latest persisted IMDb test result."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT id, connection_status, response_time, error_message, "
+            "config_snapshot, test_time, is_valid "
+            "FROM imdb_test_result WHERE id = 1",
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"]),
+        "connection_status": str(row["connection_status"]),
+        "response_time": row["response_time"],
+        "error_message": row["error_message"],
+        "config_snapshot": json.loads(str(row["config_snapshot"])),
+        "test_time": str(row["test_time"]),
+        "is_valid": bool(row["is_valid"]),
+    }
+
+
+def save_imdb_connection_test_result(
+    settings: AppSettings,
+    result: dict[str, object],
+) -> dict[str, object]:
+    """Persist the latest IMDb connection test result."""
+
+    effective = get_effective_settings(settings)
+    snapshot = _imdb_config_snapshot(effective)
+    now = _utc_now()
+    status = str(result.get("status") or result.get("connection_status") or "failed")
+    if status not in {"success", "failed"}:
+        status = "failed"
+    response_time = result.get("response_ms", result.get("response_time"))
+    error_message = None if status == "success" else str(result.get("message") or result.get("error_message") or "")
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.execute(
+            "INSERT INTO imdb_test_result "
+            "(id, connection_status, response_time, error_message, config_snapshot, test_time, is_valid) "
+            "VALUES (1, ?, ?, ?, ?, ?, 1) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "connection_status = excluded.connection_status, "
+            "response_time = excluded.response_time, "
+            "error_message = excluded.error_message, "
+            "config_snapshot = excluded.config_snapshot, "
+            "test_time = excluded.test_time, "
+            "is_valid = 1",
+            (
+                status,
+                int(response_time) if response_time is not None else None,
+                error_message,
+                _stable_json(snapshot),
+                now,
+            ),
+        )
+        connection.commit()
+
+    saved = get_imdb_test_result(settings)
+    if saved is None:
+        raise RuntimeError("Failed to persist IMDb test result.")
+    return saved
+
+
+def imdb_test_result_to_dict(result: dict[str, object] | None) -> dict[str, object] | None:
+    if result is None:
+        return None
+    return dict(result)
+
+
+def test_imdb_connection(settings: AppSettings) -> dict[str, object]:
+    """Test IMDb reachability for frontend progress reporting."""
+
+    effective = get_effective_settings(settings)
+    timeout_seconds = int(effective.get("imdb.timeout_ms") or 10000) / 1000
+    started_at = time.perf_counter()
+    try:
+        req = url_request.Request(
+            "https://www.imdb.com/",
+            headers={"User-Agent": "MediaAI-Renamer/1.0"},
+            method="GET",
+        )
+        with url_request.urlopen(req, timeout=timeout_seconds) as response:
+            status_code = getattr(response, "status", 200)
+            if status_code >= 400:
+                raise RuntimeError(f"HTTP {status_code}")
+        return {
+            "status": "success",
+            "message": "IMDb连接成功",
+            "response_ms": round((time.perf_counter() - started_at) * 1000),
+        }
+    except (RuntimeError, OSError, URLError) as exc:
+        return {
+            "status": "failed",
+            "message": "IMDb连接失败请检查网络或代理设置",
+            "response_ms": round((time.perf_counter() - started_at) * 1000),
+            "error_message": str(exc),
+        }
+
+
 def _parse_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -382,6 +792,17 @@ def _parse_template(value: object, definition: SettingDefinition) -> str:
     parsed = str(value).strip()
     if not parsed:
         raise ValueError(f"{definition.key} 不能为空")
+    if parsed.startswith("["):
+        try:
+            template_items = json.loads(parsed)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{definition.key} JSON format is invalid") from exc
+        if not isinstance(template_items, list) or not template_items:
+            raise ValueError(f"{definition.key} must include naming elements")
+        for item in template_items:
+            if not isinstance(item, dict) or not (item.get("variable") or item.get("key")):
+                raise ValueError(f"{definition.key} naming element format is invalid")
+        return parsed
     if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", parsed):
         raise ValueError(f"{definition.key} 必须包含有效文本或变量")
     return parsed
@@ -522,6 +943,13 @@ def update_setting_values(
                     now,
                 ),
             )
+        if any(key in TMDB_TEST_SNAPSHOT_KEYS for key in parsed_values):
+            connection.execute(
+                "DELETE FROM page_test_results WHERE page_key = ?",
+                (TMDB_TEST_PAGE_KEY,),
+            )
+        if any(key in IMDB_TEST_SNAPSHOT_KEYS for key in parsed_values):
+            connection.execute("UPDATE imdb_test_result SET is_valid = 0 WHERE id = 1")
         connection.commit()
 
     return list_setting_values(settings)
@@ -530,59 +958,8 @@ def update_setting_values(
 def test_tmdb_connection(settings: AppSettings) -> dict[str, object]:
     """Test V4 token and V3 API key separately, return per-channel results."""
 
-    effective = get_effective_settings(settings)
-    v4_token = str(effective.get("tmdb.v4_token") or "").strip()
-    api_key = str(effective.get("tmdb.api_key") or "").strip()
-
-    v4_result: dict[str, object] = {"status": "skipped", "message": "未配置 V4 令牌"}
-    v3_result: dict[str, object] = {"status": "skipped", "message": "未配置 V3 API 密钥"}
-    effective_channel = "none"
-
-    # Test V4
-    if v4_token:
-        client = TmdbClient(
-            v4_token=v4_token,
-            language=str(effective.get("tmdb.language") or "zh-CN"),
-            region=str(effective.get("tmdb.region") or "CN"),
-            timeout_ms=int(effective.get("tmdb.timeout_ms") or 10000),
-        )
-        try:
-            client.test_connection()
-            v4_result = {"status": "success", "message": "V4 连接成功"}
-            effective_channel = "v4"
-        except RuntimeError as exc:
-            reason = str(exc)
-            if "HTTP 401" in reason:
-                v4_result = {"status": "failed", "message": "V4 鉴权失败：令牌无效或无权访问"}
-            else:
-                v4_result = {"status": "failed", "message": f"V4 连接失败：{reason}"}
-
-    # Test V3
-    if api_key:
-        client = TmdbClient(
-            api_key=api_key,
-            language=str(effective.get("tmdb.language") or "zh-CN"),
-            region=str(effective.get("tmdb.region") or "CN"),
-            timeout_ms=int(effective.get("tmdb.timeout_ms") or 10000),
-        )
-        try:
-            client.test_connection()
-            v3_result = {"status": "success", "message": "V3 连接成功"}
-            if effective_channel == "none":
-                effective_channel = "v3"
-        except RuntimeError as exc:
-            reason = str(exc)
-            if "HTTP 401" in reason:
-                v3_result = {"status": "failed", "message": "V3 鉴权失败：API Key 无效或无权访问"}
-            else:
-                v3_result = {"status": "failed", "message": f"V3 连接失败：{reason}"}
-
-    # If V4 failed but V3 succeeded, effective channel is V3
-    if v4_result["status"] == "failed" and v3_result["status"] == "success":
-        effective_channel = "v3"
-
-    return {
-        "v4": v4_result,
-        "v3": v3_result,
-        "effective": effective_channel,
-    }
+    return save_tmdb_connection_test_result(
+        settings,
+        test_tmdb_channel(settings, "v4"),
+        test_tmdb_channel(settings, "v3"),
+    )

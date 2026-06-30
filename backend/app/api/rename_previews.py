@@ -5,11 +5,15 @@ from pydantic import BaseModel
 
 from app.schema.metadata import MetadataCandidate
 from app.service.preview_service import (
+    METADATA_MATCH_SOURCE_PARSED_TITLE,
+    METADATA_MATCH_SOURCES,
     apply_metadata_candidate,
     generate_rename_previews,
     list_metadata_candidates,
     list_rename_previews,
+    match_all_unmatched_metadata,
     match_rename_preview_metadata,
+    match_rename_previews_metadata,
     update_rename_preview,
 )
 
@@ -36,6 +40,27 @@ class ApplyMetadataCandidateRequest(BaseModel):
 
     candidate: MetadataCandidate
     score: int
+
+
+class BatchMetadataMatchRequest(BaseModel):
+    """Batch metadata match request."""
+
+    rename_preview_ids: list[int]
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
+
+
+class AllMetadataMatchRequest(BaseModel):
+    """Match all currently scoped unmatched previews."""
+
+    media_source_id: int | None = None
+    scan_job_id: int | None = None
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
+
+
+def _validate_metadata_match_source(value: str) -> str:
+    if value not in METADATA_MATCH_SOURCES:
+        raise HTTPException(status_code=400, detail="涓嶆敮鎸佺殑 TMDB 鍖归厤鏉ユ簮")
+    return value
 
 
 @router.post("/generate")
@@ -87,21 +112,60 @@ def update_preview(preview_id: int, payload: UpdateRenamePreviewRequest, request
 
 
 @router.post("/{preview_id}/metadata-match")
-def match_preview_metadata(preview_id: int, request: Request):
+def match_preview_metadata(
+    preview_id: int,
+    request: Request,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+):
     """Run TMDB metadata matching for one preview."""
 
     try:
-        return match_rename_preview_metadata(request.app.state.settings, preview_id)
+        return match_rename_preview_metadata(
+            request.app.state.settings,
+            preview_id,
+            metadata_match_source=_validate_metadata_match_source(metadata_match_source),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/metadata-match")
+def match_previews_metadata(payload: BatchMetadataMatchRequest, request: Request):
+    """Run TMDB metadata matching for selected previews."""
+
+    return match_rename_previews_metadata(
+        request.app.state.settings,
+        payload.rename_preview_ids,
+        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+    )
+
+
+@router.post("/metadata-match/all")
+def match_all_metadata(payload: AllMetadataMatchRequest, request: Request):
+    """Run TMDB metadata matching for all unmatched previews in current scope."""
+
+    return match_all_unmatched_metadata(
+        request.app.state.settings,
+        media_source_id=payload.media_source_id,
+        scan_job_id=payload.scan_job_id,
+        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+    )
+
+
 @router.get("/{preview_id}/metadata-candidates")
-def get_preview_metadata_candidates(preview_id: int, request: Request):
+def get_preview_metadata_candidates(
+    preview_id: int,
+    request: Request,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+):
     """List sorted metadata candidates for one preview."""
 
     try:
-        return list_metadata_candidates(request.app.state.settings, preview_id)
+        return list_metadata_candidates(
+            request.app.state.settings,
+            preview_id,
+            metadata_match_source=_validate_metadata_match_source(metadata_match_source),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

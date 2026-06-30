@@ -18,6 +18,8 @@ from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
 from app.core.logger import get_logger, setup_logging
+from app.service.log_service import cleanup_logs
+from app.service.scan_service import recover_interrupted_scan_jobs
 
 logger = get_logger(__name__)
 
@@ -34,6 +36,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     setup_logging(settings.logging)
     logger.info("开始创建 FastAPI 应用")
     ensure_database(settings)
+    cleanup_logs(settings)
+    recovered_scan_jobs = recover_interrupted_scan_jobs(settings)
+    if recovered_scan_jobs:
+        logger.warning("已恢复 %s 个未完成扫描任务", recovered_scan_jobs)
 
     app = FastAPI(title=settings.app_name, version=settings.version)
     app.state.settings = settings

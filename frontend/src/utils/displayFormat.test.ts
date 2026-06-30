@@ -50,6 +50,6 @@ describe("display format helpers", () => {
     expect(formatScanJobStatus("running")).toBe("扫描中");
     expect(formatScanJobStatus("completed")).toBe("已完成");
     expect(formatScanJobStatus("failed")).toBe("失败");
-    expect(formatScanJobStatus("custom")).toBe("custom");
+    expect(formatScanJobStatus("custom")).toBe("未知状态");
   });
 });

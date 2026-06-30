@@ -74,6 +74,25 @@ def _fetch_scan_job(connection: sqlite3.Connection, job_id: int) -> ScanJob:
     return _row_to_scan_job(row)
 
 
+def recover_interrupted_scan_jobs(settings: AppSettings) -> int:
+    """Mark scan jobs left running before process restart as failed."""
+
+    ended_at = _utc_now()
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        cursor = connection.execute(
+            "UPDATE scan_jobs SET status = ?, error_message = ?, ended_at = ? "
+            "WHERE status = ? AND ended_at IS NULL",
+            (
+                "failed",
+                "服务重启后任务未完成，已标记为失败，请重新发起扫描",
+                ended_at,
+                "running",
+            ),
+        )
+        connection.commit()
+        return int(cursor.rowcount or 0)
+
+
 def _is_hidden_path(path: Path, root: Path) -> bool:
     try:
         relative_parts = path.relative_to(root).parts
@@ -94,6 +113,8 @@ def _scan_failure_status(exc: Exception) -> str:
 
 def _scan_error_message(exc: Exception) -> str:
     error_number = getattr(exc, "errno", None)
+    if isinstance(exc, TimeoutError):
+        return "共享目录连接中断：文件系统操作超时，请检查网络或 NAS 状态"
     if error_number == errno.ESTALE:
         return "共享目录连接中断：NFS 文件句柄过期，请检查挂载状态后重试"
     if error_number == errno.ETIMEDOUT:
@@ -103,11 +124,16 @@ def _scan_error_message(exc: Exception) -> str:
     return str(exc)
 
 
-def _stat_with_nfs_retry(file_path: Path, retry_count: int) -> object:
+def _stat_with_nfs_retry(file_path: Path, retry_count: int, timeout_seconds: int) -> object:
     attempts = 0
     while True:
         try:
-            return file_path.stat()
+            started_at = time.monotonic()
+            stat = file_path.stat()
+            elapsed_seconds = time.monotonic() - started_at
+            if elapsed_seconds > timeout_seconds:
+                raise TimeoutError(f"NFS operation timed out after {timeout_seconds} seconds")
+            return stat
         except OSError as exc:
             attempts += 1
             if getattr(exc, "errno", None) != errno.ESTALE or attempts > retry_count:
@@ -148,6 +174,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
     skip_hidden_files = bool(effective_settings.get("scan.skip_hidden_files", True))
     recursive = bool(effective_settings.get("scan.recursive", True))
     nfs_retry_count = int(effective_settings.get("shared.nfs_retry_count") or 1)
+    nfs_operation_timeout_seconds = int(effective_settings.get("shared.nfs_operation_timeout_seconds") or 30)
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
@@ -170,6 +197,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
         scanned_count = 0
         video_count = 0
         warning_count = 0
+        warning_details: list[str] = []
         try:
             path_iterator = source_path.rglob("*") if recursive else source_path.iterdir()
             for file_path in sorted(path_iterator):
@@ -178,17 +206,23 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                 try:
                     if not file_path.is_file():
                         continue
-                except OSError:
+                except OSError as exc:
                     warning_count += 1
+                    warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
                     continue
 
                 scanned_count += 1
                 if is_video_file(file_path):
                     try:
-                        stat = _stat_with_nfs_retry(file_path, nfs_retry_count)
-                    except OSError as exc:
+                        stat = _stat_with_nfs_retry(file_path, nfs_retry_count, nfs_operation_timeout_seconds)
+                    except (OSError, TimeoutError) as exc:
                         if getattr(exc, "errno", None) in {errno.EACCES, errno.ESTALE, errno.ETIMEDOUT}:
                             warning_count += 1
+                            warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
+                            continue
+                        if isinstance(exc, TimeoutError):
+                            warning_count += 1
+                            warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
                             continue
                         raise
                     if stat.st_size < minimum_file_size:
@@ -201,6 +235,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                             "size_filtered",
                         )
                         warning_count += 1
+                        warning_details.append(f"{file_path.name}: 文件小于最小扫描大小")
                         continue
                     now = _utc_now()
                     connection.execute(
@@ -231,14 +266,20 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
 
             ended_at = _utc_now()
             completed_status = "partial_completed" if warning_count else "completed"
+            warning_message = None
+            if warning_count:
+                detail_text = "，".join(warning_details[:5])
+                more_text = f" 等{warning_count}个文件" if warning_count > len(warning_details[:5]) else ""
+                warning_message = f"部分完成：{warning_count}个文件扫描失败（{detail_text}{more_text}）"
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
-                "video_count = ?, warning_count = ?, ended_at = ? WHERE id = ?",
+                "video_count = ?, warning_count = ?, error_message = ?, ended_at = ? WHERE id = ?",
                 (
                     completed_status,
                     scanned_count,
                     video_count,
                     warning_count,
+                    warning_message,
                     ended_at,
                     job_id,
                 ),

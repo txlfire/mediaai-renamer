@@ -73,6 +73,7 @@ TAG="v$CLEAN_VERSION"
 DIST_DIR="$ROOT/frontend/dist"
 RELEASE_DIR="$ROOT/releases"
 ARTIFACT="$RELEASE_DIR/mediaai-renamer-frontend-$TAG.zip"
+PACKAGE_ROOT="$RELEASE_DIR/package-$TAG"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   npm run frontend:build
@@ -85,11 +86,15 @@ fi
 
 mkdir -p "$RELEASE_DIR"
 rm -f "$ARTIFACT"
+rm -rf "$PACKAGE_ROOT"
+mkdir -p "$PACKAGE_ROOT/config"
+cp -R "$DIST_DIR"/. "$PACKAGE_ROOT"/
+cp "$ROOT/config/config.example.toml" "$PACKAGE_ROOT/config/config.example.toml"
 
 if command -v zip >/dev/null 2>&1; then
-  (cd "$DIST_DIR" && zip -qr "$ARTIFACT" .)
+  (cd "$PACKAGE_ROOT" && zip -qr "$ARTIFACT" .)
 else
-  python3 - "$DIST_DIR" "$ARTIFACT" <<'PY'
+  python3 - "$PACKAGE_ROOT" "$ARTIFACT" <<'PY'
 import pathlib
 import sys
 import zipfile
@@ -103,6 +108,7 @@ with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as package:
             package.write(path, path.relative_to(dist).as_posix())
 PY
 fi
+rm -rf "$PACKAGE_ROOT"
 
 echo "Release package created: $ARTIFACT"
 
