@@ -61,8 +61,17 @@ GET http://127.0.0.1:8970/api/health
 
 ## 3. Docker 启动
 
+源码构建启动：
+
 ```powershell
 docker compose up --build
+```
+
+镜像方式启动：
+
+```bash
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 默认地址：
@@ -71,6 +80,8 @@ docker compose up --build
 Web: http://localhost:8971
 API: http://localhost:8970
 ```
+
+fnOS 推荐使用镜像方式部署，避免在 NAS 上执行前后端构建。详细步骤见 `docs/deployment/fnos-ghcr-docker.md`。
 
 ## 4. 测试命令
 
@@ -244,6 +255,14 @@ npm audit --audit-level=moderate
 ```powershell
 docker compose up --build
 ```
+
+如果变更 Docker 镜像发布流程，还需要检查：
+
+```powershell
+git status --short --branch
+```
+
+并确认 `.github/workflows/docker-ghcr.yml` 能在推送 `main` 或 `v*` 标签后自动发布 GHCR 镜像。
 
 ## 11. 文档更新
 

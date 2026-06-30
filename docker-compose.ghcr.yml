@@ -1,0 +1,22 @@
+services:
+  backend:
+    image: ghcr.io/txlfire/mediaai-renamer-backend:${MEDIAAI_IMAGE_TAG:-v0.5.3}
+    container_name: mediaai-renamer-backend
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+      # fnOS / NAS 媒体目录示例：左侧改为宿主机真实路径，右侧作为系统内媒体源路径填写。
+      # - /vol1/1000/Movies:/app/media/Movies
+    ports:
+      - "8970:8970"
+
+  frontend:
+    image: ghcr.io/txlfire/mediaai-renamer-frontend:${MEDIAAI_IMAGE_TAG:-v0.5.3}
+    container_name: mediaai-renamer-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8971:80"

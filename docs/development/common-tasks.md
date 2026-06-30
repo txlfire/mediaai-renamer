@@ -219,8 +219,17 @@ npm run release:publish
 
 ## 6. Docker 启动
 
+源码构建启动：
+
 ```powershell
 docker compose up --build
+```
+
+GHCR 镜像启动：
+
+```bash
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 默认地址：
@@ -228,4 +237,41 @@ docker compose up --build
 ```text
 Web: http://localhost:8971
 API: http://localhost:8970
+```
+
+指定镜像版本：
+
+```bash
+MEDIAAI_IMAGE_TAG=v0.5.3 docker compose -f docker-compose.ghcr.yml up -d
+```
+
+fnOS 部署说明见：
+
+```text
+docs/deployment/fnos-ghcr-docker.md
+```
+
+## 7. Docker 镜像自动发布
+
+推送 `main` 或 `v*` 标签时，GitHub Actions 会自动构建并推送：
+
+```text
+ghcr.io/txlfire/mediaai-renamer-backend:<tag>
+ghcr.io/txlfire/mediaai-renamer-frontend:<tag>
+```
+
+版本标签示例：
+
+```bash
+git tag -a v0.5.4 -m "Release v0.5.4"
+git push origin v0.5.4
+```
+
+发布后在 fnOS 更新：
+
+```bash
+cd /vol1/1000/docker/mediaai-renamer
+export MEDIAAI_IMAGE_TAG=v0.5.4
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
 ```

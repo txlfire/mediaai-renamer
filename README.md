@@ -92,8 +92,17 @@ GET http://127.0.0.1:8970/api/health
 
 ## Docker 启动
 
+源码构建启动：
+
 ```powershell
 docker compose up --build
+```
+
+使用 GHCR 镜像启动：
+
+```bash
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 默认访问地址：
@@ -102,6 +111,8 @@ docker compose up --build
 Web: http://localhost:8971
 API: http://localhost:8970
 ```
+
+fnOS / NAS 部署建议使用 GHCR 镜像方式，详见 [docs/deployment/fnos-ghcr-docker.md](docs/deployment/fnos-ghcr-docker.md)。
 
 ## 配置文件
 
@@ -175,6 +186,7 @@ npm run release:publish
 - 多语言技术选型评估：[docs/design/MediaAI Renamer 多语言技术选型评估报告.md](docs/design/MediaAI%20Renamer%20多语言技术选型评估报告.md)
 - 开发规范：[docs/development/development-guide.md](docs/development/development-guide.md)
 - Agent 开发规范：[docs/development/agent.md](docs/development/agent.md)
+- fnOS Docker 镜像部署：[docs/deployment/fnos-ghcr-docker.md](docs/deployment/fnos-ghcr-docker.md)
 - 初版开发里程碑计划：[docs/development/MediaAI Renamer 初版开发里程碑计划.md](docs/development/MediaAI%20Renamer%20初版开发里程碑计划.md)
 - 常用脚本和任务：[docs/development/common-tasks.md](docs/development/common-tasks.md)
 - 当前完整用户手册：[docs/manuals/MediaAI-Renamer-用户手册.md](docs/manuals/MediaAI-Renamer-用户手册.md)
