@@ -8,6 +8,7 @@ export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
 
 const THEME_STORAGE_KEY = "mediaai-theme-mode";
+const SIDEBAR_STORAGE_KEY = "mediaai-sidebar-collapsed";
 
 function isThemeMode(value: string | null): value is ThemeMode {
   return value === "system" || value === "light" || value === "dark";
@@ -38,6 +39,15 @@ export const useAppStore = defineStore("app", {
     resolvedTheme: "light" as ResolvedTheme,
   }),
   actions: {
+    loadSidebarCollapsed() {
+      this.sidebarCollapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+    },
+
+    setSidebarCollapsed(collapsed: boolean) {
+      this.sidebarCollapsed = collapsed;
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
+    },
+
     loadThemeMode() {
       const storedMode = localStorage.getItem(THEME_STORAGE_KEY);
       this.themeMode = isThemeMode(storedMode) ? storedMode : "system";
@@ -58,7 +68,7 @@ export const useAppStore = defineStore("app", {
     },
 
     toggleSidebar() {
-      this.sidebarCollapsed = !this.sidebarCollapsed;
+      this.setSidebarCollapsed(!this.sidebarCollapsed);
     },
 
     async refreshHealth() {

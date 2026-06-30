@@ -16,6 +16,8 @@ export const zhCnMessages = {
     sidebar: {
       expand: "展开菜单",
       collapse: "收起菜单",
+      expandTooltip: "点击展开侧边栏",
+      collapseTooltip: "点击收起侧边栏",
     },
     theme: {
       toLight: "切换亮色",
@@ -213,9 +215,27 @@ export const zhCnMessages = {
     confirmOperation: "即将对 {count} 个文件执行 {operation}，是否继续？",
     processing: "正在处理 {current}/{total}...",
     operationSummary: "完成：成功 {success} 个，失败 {failed} 个",
+    operationResultDialog: {
+      completedTitle: "{operation}完成",
+      runningButton: "{operation} {percent}%",
+      runningGenerate: "生成中",
+      runningMatch: "匹配中",
+      runningRename: "重命名中",
+      success: "成功",
+      failed: "失败",
+      skipped: "跳过",
+      emptyLogs: "暂无详细日志",
+      viewFullLog: "查看完整日志",
+      collapseLog: "收起日志",
+    },
     tableTitle: "重命名预览表格",
     noExecutable: "没有可执行重命名的预览记录",
     noExecutableAfterRemove: "剔除空名条目后没有可执行条目",
+    emptyPreviewAction: {
+      title: "当前扫描任务还没有重命名预览",
+      description: "已扫描到 {count} 个视频文件，请先生成重命名预览后再进行匹配或重命名。",
+      button: "生成重命名预览",
+    },
     detailTitle: "重命名详情",
     tabs: {
       previews: "预览列表",

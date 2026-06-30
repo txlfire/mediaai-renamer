@@ -55,4 +55,25 @@ describe("theme state", () => {
 
     expect(store.themeMode satisfies ThemeMode).toBe("system");
   });
+
+  it("persists sidebar collapsed state", () => {
+    const store = useAppStore();
+
+    store.setSidebarCollapsed(true);
+
+    expect(store.sidebarCollapsed).toBe(true);
+    expect(localStorage.getItem("mediaai-sidebar-collapsed")).toBe("true");
+  });
+
+  it("loads and toggles sidebar collapsed state through one path", () => {
+    localStorage.setItem("mediaai-sidebar-collapsed", "true");
+    const store = useAppStore();
+
+    store.loadSidebarCollapsed();
+    expect(store.sidebarCollapsed).toBe(true);
+
+    store.toggleSidebar();
+    expect(store.sidebarCollapsed).toBe(false);
+    expect(localStorage.getItem("mediaai-sidebar-collapsed")).toBe("false");
+  });
 });

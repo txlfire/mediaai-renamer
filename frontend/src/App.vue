@@ -43,8 +43,8 @@ const connectionLabel = computed(() => {
   return messages.app.connection.offline;
 });
 
-const collapseLabel = computed(() =>
-  appStore.sidebarCollapsed ? messages.app.sidebar.expand : messages.app.sidebar.collapse,
+const sidebarToggleLabel = computed(() =>
+  appStore.sidebarCollapsed ? messages.app.sidebar.expandTooltip : messages.app.sidebar.collapseTooltip,
 );
 
 const themeLabel = computed(() => (isDarkTheme.value ? messages.app.theme.toLight : messages.app.theme.toDark));
@@ -60,6 +60,7 @@ function toggleLightDarkTheme() {
 }
 
 onMounted(() => {
+  appStore.loadSidebarCollapsed();
   appStore.loadThemeMode();
   void appStore.refreshHealth();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateSystemTheme);
@@ -73,17 +74,15 @@ onUnmounted(() => {
 <template>
   <div class="app-layout" :class="{ 'is-collapsed': appStore.sidebarCollapsed }">
     <aside class="app-sidebar">
-      <div class="brand-block">
-        <div class="brand-logo">MR</div>
-        <div v-if="!appStore.sidebarCollapsed" class="brand-copy">
-          <strong>{{ messages.app.name }}</strong>
-          <span>{{ messages.app.tagline }}</span>
-        </div>
-      </div>
-
-      <button type="button" class="collapse-button" :aria-label="collapseLabel" :title="collapseLabel" @click="appStore.toggleSidebar">
-        <span class="collapse-chevron" aria-hidden="true"></span>
-      </button>
+      <el-tooltip :content="sidebarToggleLabel" placement="right">
+        <button type="button" class="brand-block" :aria-label="sidebarToggleLabel" @click="appStore.toggleSidebar">
+          <div class="brand-logo">MR</div>
+          <div v-if="!appStore.sidebarCollapsed" class="brand-copy">
+            <strong>{{ messages.app.name }}</strong>
+            <span>{{ messages.app.tagline }}</span>
+          </div>
+        </button>
+      </el-tooltip>
 
       <nav class="side-menu">
         <el-tooltip
