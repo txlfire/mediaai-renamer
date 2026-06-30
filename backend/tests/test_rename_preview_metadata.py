@@ -12,6 +12,8 @@ from app.core.database import ensure_database
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult, MetadataMatchSummary
 from app.service.preview_service import (
+    METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME,
+    METADATA_MATCH_SOURCE_PARSED_TITLE,
     apply_metadata_candidate,
     generate_rename_previews,
     list_metadata_candidates,
@@ -25,8 +27,10 @@ from app.service.settings_service import update_setting_values
 class FakeMetadataProvider:
     def __init__(self, candidates: list[MetadataCandidate]):
         self.candidates = candidates
+        self.searched: list[ParsedMediaName] = []
 
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:
+        self.searched.append(parsed)
         return self.candidates
 
 
@@ -98,6 +102,7 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("TMDB", updated.metadata_source)
         self.assertEqual("high_confidence", updated.metadata_match_status)
         self.assertEqual(100, updated.metadata_match_score)
+        self.assertEqual(1999, updated.parsed_year)
         self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
 
     def test_high_confidence_match_records_effective_metadata_source(self):
@@ -140,7 +145,92 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("TMDB", updated.metadata_source)
         self.assertEqual("manual_selected", updated.metadata_match_status)
         self.assertEqual(72, updated.metadata_match_score)
+        self.assertEqual(1999, updated.parsed_year)
         self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
+
+    def test_manual_candidate_selection_overrides_existing_edited_name(self):
+        candidate = MetadataCandidate("TMDB", "603", "movie", "Matrix CN", "The Matrix", 1999, None, None, "")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET edited_name = ? WHERE id = ?",
+                ("Manual.Name.mkv", self.preview.id),
+            )
+            connection.commit()
+
+        updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=72)
+
+        self.assertEqual("Matrix.CN.1999.mkv", updated.current_target_name)
+        self.assertIsNone(updated.edited_name)
+        self.assertEqual("Matrix CN", updated.parsed_title)
+        self.assertEqual(1999, updated.parsed_year)
+
+    def test_metadata_match_uses_parsed_title_by_default(self):
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "movie", "The Matrix", "The Matrix", 1999, None, None, ""),
+            ]
+        )
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET edited_name = ?, media_type = ?, parsed_title = ?, parsed_year = ? WHERE id = ?",
+                ("Better.Title.2001.mkv", "movie", "The Matrix", 1999, self.preview.id),
+            )
+            connection.commit()
+
+        match_rename_preview_metadata(self.settings, self.preview.id, provider=provider)
+
+        self.assertEqual("The Matrix", provider.searched[0].title)
+        self.assertEqual(1999, provider.searched[0].year)
+
+    def test_metadata_match_can_use_original_file_name(self):
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "movie", "The Matrix", "The Matrix", 1999, None, None, ""),
+            ]
+        )
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET edited_name = ?, media_type = ?, parsed_title = ?, parsed_year = ? WHERE id = ?",
+                ("Better.Title.2001.mkv", "movie", "Wrong Title", 2001, self.preview.id),
+            )
+            connection.commit()
+
+        match_rename_preview_metadata(
+            self.settings,
+            self.preview.id,
+            provider=provider,
+            metadata_match_source=METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME,
+        )
+
+        self.assertEqual("The Matrix", provider.searched[0].title)
+        self.assertEqual(1999, provider.searched[0].year)
+
+    def test_metadata_match_rejects_unknown_source(self):
+        provider = FakeMetadataProvider([])
+
+        with self.assertRaises(ValueError):
+            match_rename_preview_metadata(
+                self.settings,
+                self.preview.id,
+                provider=provider,
+                metadata_match_source="target_name",
+            )
+
+    def test_metadata_candidate_list_uses_requested_source(self):
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "movie", "The Matrix", "The Matrix", 1999, None, None, ""),
+            ]
+        )
+
+        list_metadata_candidates(
+            self.settings,
+            self.preview.id,
+            provider=provider,
+            metadata_match_source=METADATA_MATCH_SOURCE_PARSED_TITLE,
+        )
+
+        self.assertEqual("The Matrix", provider.searched[0].title)
 
     def test_batch_metadata_match_updates_selected_previews(self):
         provider = FakeMetadataProvider(

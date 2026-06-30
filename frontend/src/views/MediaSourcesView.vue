@@ -109,6 +109,32 @@ function connectionErrorMessage(message: string, suggestion?: string | null) {
   return detail;
 }
 
+function unsupportedPathProtocol(path: string): string | null {
+  const value = path.trim().toLowerCase();
+  if (/^https?:\/\/.+\/dav(\/|$)/.test(value) || /^webdav:\/\//.test(value)) {
+    return "WebDAV";
+  }
+  if (/^sftp:\/\//.test(value)) {
+    return "SFTP";
+  }
+  if (/^ftp:\/\//.test(value)) {
+    return "FTP";
+  }
+  if (/^s3:\/\//.test(value)) {
+    return "S3";
+  }
+  return null;
+}
+
+function warnUnsupportedPathProtocol(path: string): boolean {
+  const protocol = unsupportedPathProtocol(path);
+  if (!protocol) {
+    return false;
+  }
+  ElMessage.warning(pageText.unsupportedProtocolPath.replace("{protocol}", protocol));
+  return true;
+}
+
 watch(
   () => form.path_type,
   (pathType) => {
@@ -131,6 +157,9 @@ async function submitSource() {
   }
   if (!form.path.trim()) {
     ElMessage.warning(`${pageText.targetPath}${messages.validation.requiredSuffix}`);
+    return;
+  }
+  if (warnUnsupportedPathProtocol(form.path)) {
     return;
   }
   if (form.path_type === "unc" && !form.path.trim().startsWith("\\\\")) {
@@ -273,6 +302,9 @@ async function testConnection(row: MediaSource) {
 async function testEditConnection() {
   if (!editForm.path.trim()) {
     ElMessage.warning(`${pageText.targetPath}${messages.validation.requiredSuffix}`);
+    return;
+  }
+  if (warnUnsupportedPathProtocol(editForm.path)) {
     return;
   }
   if (editForm.path_type === "unc" && !editForm.path.trim().startsWith("\\\\")) {
@@ -519,7 +551,12 @@ onMounted(() => {
               </el-form-item>
               <el-form-item class="media-source-path-item" :label="messages.mediaSources.targetPath" required>
                 <div class="media-source-path-control">
-                  <el-input v-model="form.path" class="media-source-path-input" :placeholder="messages.mediaSources.pathPlaceholder" />
+                  <el-input
+                    v-model="form.path"
+                    class="media-source-path-input"
+                    :placeholder="messages.mediaSources.pathPlaceholder"
+                    @blur="warnUnsupportedPathProtocol(form.path)"
+                  />
                   <el-button
                     v-if="form.path_type !== 'unc'"
                     class="media-source-path-picker"
@@ -671,7 +708,12 @@ onMounted(() => {
         </el-form-item>
         <el-form-item :label="messages.mediaSources.targetPath" required>
           <div class="media-source-path-control">
-            <el-input v-model="editForm.path" class="media-source-path-input" :placeholder="messages.mediaSources.pathPlaceholder" />
+            <el-input
+              v-model="editForm.path"
+              class="media-source-path-input"
+              :placeholder="messages.mediaSources.pathPlaceholder"
+              @blur="warnUnsupportedPathProtocol(editForm.path)"
+            />
             <el-button
               v-if="editForm.path_type !== 'unc'"
               class="media-source-path-picker"

@@ -11,6 +11,7 @@ import {
   updateRenamePreview,
   type BatchMetadataMatchResult,
   type GenerateRenamePreviewsPayload,
+  type MetadataMatchSource,
   type MetadataMatchResult,
   type PreviewGenerationSummary,
   type RenamePreview,
@@ -69,11 +70,11 @@ export const usePreviewStore = defineStore("preview", {
       }
     },
 
-    async matchMetadata(previewId: number) {
+    async matchMetadata(previewId: number, metadataMatchSource: MetadataMatchSource = "parsed_title") {
       this.loading = true;
       this.errorMessage = "";
       try {
-        const updated = await matchRenamePreviewMetadata(previewId);
+        const updated = await matchRenamePreviewMetadata(previewId, metadataMatchSource);
         this.replacePreview(updated);
         return updated;
       } catch (error) {
@@ -84,11 +85,14 @@ export const usePreviewStore = defineStore("preview", {
       }
     },
 
-    async matchMetadataBatch(previewIds: number[]): Promise<BatchMetadataMatchResult> {
+    async matchMetadataBatch(
+      previewIds: number[],
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<BatchMetadataMatchResult> {
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchRenamePreviewsMetadata(previewIds);
+        const result = await matchRenamePreviewsMetadata(previewIds, metadataMatchSource);
         result.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
@@ -99,14 +103,19 @@ export const usePreviewStore = defineStore("preview", {
       }
     },
 
-    async matchAllUnmatched(): Promise<BatchMetadataMatchResult> {
+    async matchAllUnmatched(
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<BatchMetadataMatchResult> {
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchAllUnmatchedMetadata({
-          media_source_id: this.filters.media_source_id,
-          scan_job_id: this.filters.scan_job_id,
-        });
+        const result = await matchAllUnmatchedMetadata(
+          {
+            media_source_id: this.filters.media_source_id,
+            scan_job_id: this.filters.scan_job_id,
+          },
+          metadataMatchSource,
+        );
         result.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
@@ -117,8 +126,11 @@ export const usePreviewStore = defineStore("preview", {
       }
     },
 
-    async loadMetadataCandidates(previewId: number): Promise<MetadataMatchResult[]> {
-      return fetchRenamePreviewMetadataCandidates(previewId);
+    async loadMetadataCandidates(
+      previewId: number,
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<MetadataMatchResult[]> {
+      return fetchRenamePreviewMetadataCandidates(previewId, metadataMatchSource);
     },
 
     async applyMetadataCandidate(previewId: number, match: MetadataMatchResult) {

@@ -209,6 +209,8 @@ export type MetadataMatchResult = {
   status: string;
 };
 
+export type MetadataMatchSource = "parsed_title" | "original_file_name";
+
 export type BatchMetadataMatchResult = {
   total_count: number;
   success_count: number;
@@ -659,42 +661,51 @@ export async function fetchMediaSourceDirectories(
 
 export async function matchRenamePreviewMetadata(
   previewId: number,
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<RenamePreview> {
   const post = requirePost(httpClient);
-  const response = await post<RenamePreview>(`/rename-previews/${previewId}/metadata-match`, {});
+  const response = await post<RenamePreview>(
+    `/rename-previews/${previewId}/metadata-match?metadata_match_source=${encodeURIComponent(metadataMatchSource)}`,
+    {},
+  );
   return response.data;
 }
 
 export async function matchRenamePreviewsMetadata(
   renamePreviewIds: number[],
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<BatchMetadataMatchResult> {
   const post = requirePost(httpClient);
   const response = await post<BatchMetadataMatchResult>("/rename-previews/metadata-match", {
     rename_preview_ids: renamePreviewIds,
+    metadata_match_source: metadataMatchSource,
   });
   return response.data;
 }
 
 export async function matchAllUnmatchedMetadata(
   filters: Pick<RenamePreviewFilters, "media_source_id" | "scan_job_id"> = {},
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<BatchMetadataMatchResult> {
   const post = requirePost(httpClient);
   const response = await post<BatchMetadataMatchResult>("/rename-previews/metadata-match/all", {
     media_source_id: filters.media_source_id,
     scan_job_id: filters.scan_job_id,
+    metadata_match_source: metadataMatchSource,
   });
   return response.data;
 }
 
 export async function fetchRenamePreviewMetadataCandidates(
   previewId: number,
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<MetadataMatchResult[]> {
   const response = await httpClient.get<MetadataMatchResult[]>(
-    `/rename-previews/${previewId}/metadata-candidates`,
+    `/rename-previews/${previewId}/metadata-candidates?metadata_match_source=${encodeURIComponent(metadataMatchSource)}`,
   );
   return response.data;
 }

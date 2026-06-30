@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
-import type { MetadataMatchResult, RenamePreview } from "../api/client";
+import type { MetadataMatchResult, MetadataMatchSource, RenamePreview } from "../api/client";
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
@@ -58,6 +58,7 @@ const operationProgressText = ref("");
 const operationProgressPercent = ref(0);
 const operationProgressLogs = ref<string[]>([]);
 const operationProgressSummary = ref("");
+const metadataMatchSource = ref<MetadataMatchSource>("parsed_title");
 const defaultSort = { prop: "updated_at", order: "descending" as const };
 const pagedPreviews = computed(() =>
   paginationStore.paginate(
@@ -388,13 +389,17 @@ async function executeSinglePreview(row: RenamePreview) {
 async function matchMetadata(row: RenamePreview) {
   await confirmResourceOperation(messages.renamePreviews.tmdbMatch, 1);
   metadataPreviewId.value = row.id;
-  const updated = await previewStore.matchMetadata(row.id);
-  if (updated.metadata_match_status === "low_confidence") {
-    metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id);
+  const updated = await previewStore.matchMetadata(row.id, metadataMatchSource.value);
+  if (updated.metadata_match_status === "high_confidence") {
+    ElMessage.success(messages.renamePreviews.metadataDialog.matched);
+    return;
+  }
+  metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id, metadataMatchSource.value);
+  if (metadataCandidates.value.length > 0) {
     metadataDialogVisible.value = true;
     return;
   }
-  ElMessage.success(messages.renamePreviews.metadataDialog.matched);
+  ElMessage.warning(updated.metadata_message || messages.renamePreviews.metadataDialog.empty);
 }
 
 function appendMetadataLogs(result: { items: RenamePreview[]; failed_items: Array<{ id: number; message: string }> }) {
@@ -422,7 +427,7 @@ async function matchSelectedMetadata() {
   }
   await confirmResourceOperation(messages.renamePreviews.tmdbMatch, selectedPreviewIds.value.length);
   resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.tmdbMatch);
-  const result = await previewStore.matchMetadataBatch(selectedPreviewIds.value);
+  const result = await previewStore.matchMetadataBatch(selectedPreviewIds.value, metadataMatchSource.value);
   appendMetadataLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
@@ -435,7 +440,7 @@ async function matchAllMetadata() {
   }
   await confirmResourceOperation(messages.renamePreviews.tmdbMatchAll, unmatchedCount);
   resetOperationProgress(unmatchedCount, messages.renamePreviews.tmdbMatchAll);
-  const result = await previewStore.matchAllUnmatched();
+  const result = await previewStore.matchAllUnmatched(metadataMatchSource.value);
   appendMetadataLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
@@ -611,6 +616,15 @@ onMounted(async () => {
           </el-button>
         </div>
         <div class="rename-action-group">
+          <el-select
+            v-model="metadataMatchSource"
+            class="metadata-source-select"
+            :placeholder="messages.renamePreviews.metadataMatchSource"
+            :disabled="previewStore.loading"
+          >
+            <el-option :label="messages.renamePreviews.metadataSourceParsedTitle" value="parsed_title" />
+            <el-option :label="messages.renamePreviews.metadataSourceOriginalFileName" value="original_file_name" />
+          </el-select>
           <el-button
             :icon="Connection"
             :disabled="selectedPreviewIds.length === 0 || previewStore.loading"

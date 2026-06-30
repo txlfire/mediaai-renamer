@@ -12,6 +12,7 @@ from app.service.media_source_service import (
     bulk_delete_media_sources,
     create_media_source,
     delete_media_source,
+    get_media_source_protocol_context,
     list_local_directories,
     list_media_sources,
     list_source_directories,
@@ -244,6 +245,36 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertEqual(["A", "B"], [item.name for item in result.entries])
             self.assertTrue(all(item.readable for item in result.entries))
             self.assertTrue(all(item.writable for item in result.entries))
+
+    def test_protocol_context_reads_shared_timeout_settings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "shared.connection_timeout_seconds": 9,
+                    "shared.nfs_operation_timeout_seconds": 45,
+                },
+                operator="test",
+            )
+            source = create_media_source(
+                settings,
+                "nfs",
+                media_dir,
+                True,
+                path_type="mounted_nfs",
+                nfs_host="192.168.1.10",
+                nfs_export="/volume1/media",
+            )
+
+            context = get_media_source_protocol_context(settings, source.id)
+
+            self.assertEqual(9, context.connection_timeout_seconds)
+            self.assertEqual(45, context.nfs_operation_timeout_seconds)
 
     def test_set_media_source_enabled_updates_status_independently(self):
         with tempfile.TemporaryDirectory() as temp_dir:

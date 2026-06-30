@@ -104,7 +104,7 @@ export const DEFAULT_NAMING_SAMPLE_DATA: Record<string, string | number> = {
 
 const EPISODE_NAMING_SAMPLE_DATA: Record<string, string | number> = {
   ...DEFAULT_NAMING_SAMPLE_DATA,
-  title: "权力的游戏",
+  title: "\u6743\u529b\u7684\u6e38\u620f",
   original_title: "Game of Thrones",
   year: 2011,
   tmdb_id: 1399,

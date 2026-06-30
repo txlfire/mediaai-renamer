@@ -61,7 +61,8 @@ def _fetch_media_source(connection: sqlite3.Connection, source_id: int) -> Media
     return _row_to_media_source(row)
 
 
-def _media_source_context(source: MediaSource) -> SharedPathContext:
+def _media_source_context(source: MediaSource, effective_settings: dict[str, object] | None = None) -> SharedPathContext:
+    effective = effective_settings or {}
     return SharedPathContext(
         path_type=source.path_type,
         username=source.username,
@@ -75,10 +76,13 @@ def _media_source_context(source: MediaSource) -> SharedPathContext:
         nfs_version=source.nfs_version,
         nfs_options=source.nfs_options,
         local_mount_path=source.local_mount_path,
+        connection_timeout_seconds=int(effective.get("shared.connection_timeout_seconds") or 5),
+        nfs_operation_timeout_seconds=int(effective.get("shared.nfs_operation_timeout_seconds") or 30),
     )
 
 
 def get_media_source_protocol_context(settings: AppSettings, source_id: int) -> SharedPathContext:
+    effective_settings = get_effective_settings(settings)
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         source = _fetch_media_source(connection, source_id)
@@ -99,6 +103,8 @@ def get_media_source_protocol_context(settings: AppSettings, source_id: int) -> 
         nfs_version=source.nfs_version,
         nfs_options=source.nfs_options,
         local_mount_path=source.local_mount_path,
+        connection_timeout_seconds=int(effective_settings.get("shared.connection_timeout_seconds") or 5),
+        nfs_operation_timeout_seconds=int(effective_settings.get("shared.nfs_operation_timeout_seconds") or 30),
     )
 
 
@@ -330,8 +336,9 @@ def list_source_directories(
 ) -> LocalDirectoryListing:
     source = get_media_source(settings, source_id)
     protocol = get_protocol(source.path_type)
-    listing = protocol.list_directories(path or source.path, _media_source_context(source))
-    browse_limit = int(get_effective_settings(settings).get("shared.directory_browse_limit") or 500)
+    effective_settings = get_effective_settings(settings)
+    listing = protocol.list_directories(path or source.path, _media_source_context(source, effective_settings))
+    browse_limit = int(effective_settings.get("shared.directory_browse_limit") or 500)
     return LocalDirectoryListing(
         current_path=listing.current_path,
         parent_path=listing.parent_path,
@@ -354,7 +361,7 @@ def test_media_source_connection(
 ) -> ConnectionTestResult:
     source = get_media_source(settings, source_id)
     protocol = get_protocol(source.path_type)
-    result = protocol.test_connection(source.path, _media_source_context(source))
+    result = protocol.test_connection(source.path, _media_source_context(source, get_effective_settings(settings)))
     status = "成功" if result.success else "失败"
     get_batch_logger().info(
         "媒体源连接测试%s source_id=%s path_type=%s path=%s message=%s suggestion=%s",

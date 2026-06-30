@@ -42,6 +42,8 @@ class SharedPathContext:
     nfs_version: str | None = None
     nfs_options: str | None = None
     local_mount_path: str | None = None
+    connection_timeout_seconds: int = 5
+    nfs_operation_timeout_seconds: int = 30
 
 
 @dataclass(frozen=True)

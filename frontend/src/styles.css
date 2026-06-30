@@ -1673,6 +1673,11 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   min-width: 10rem;
 }
 
+.rename-preview-page .metadata-source-select {
+  flex: 0 0 7.5rem;
+  width: 7.5rem;
+}
+
 .rename-preview-page .list-summary-row {
   align-items: center;
   flex-wrap: nowrap;
@@ -1811,8 +1816,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   white-space: nowrap;
 }
 
-.list-table-card .rename-previews-table.data-table td.preview-compact-column .cell,
-.list-table-card .rename-previews-table.data-table td.preview-compact-column.el-table__cell .cell {
+.rename-previews-table.data-table td.preview-compact-column .cell,
+.rename-previews-table.data-table td.preview-compact-column.el-table__cell .cell {
   overflow: hidden;
   padding-right: 0;
   padding-left: 0;
@@ -1820,22 +1825,25 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   white-space: nowrap;
 }
 
-.list-table-card .rename-previews-table.data-table .preview-status-column .cell,
-.list-table-card .rename-previews-table.data-table .preview-type-column .cell,
-.list-table-card .rename-previews-table.data-table .preview-year-column .cell {
+.rename-previews-table.data-table .preview-status-column .cell,
+.rename-previews-table.data-table .preview-type-column .cell,
+.rename-previews-table.data-table .preview-year-column .cell,
+.rename-previews-table.data-table .metadata-score-column .cell {
   white-space: nowrap;
+  word-break: keep-all;
 }
 
-.list-table-card .rename-previews-table.data-table th.preview-status-column .cell,
-.list-table-card .rename-previews-table.data-table th.preview-type-column .cell,
-.list-table-card .rename-previews-table.data-table th.preview-year-column .cell {
+.rename-previews-table.data-table th.preview-status-column .cell,
+.rename-previews-table.data-table th.preview-type-column .cell,
+.rename-previews-table.data-table th.preview-year-column .cell,
+.rename-previews-table.data-table th.metadata-score-column .cell {
   overflow: visible;
   max-width: none;
   text-overflow: clip;
 }
 
-.list-table-card .rename-previews-table.data-table .preview-season-episode-column .cell,
-.list-table-card .rename-previews-table.data-table .preview-season-episode-column.el-table__cell .cell {
+.rename-previews-table.data-table .preview-season-episode-column .cell,
+.rename-previews-table.data-table .preview-season-episode-column.el-table__cell .cell {
   overflow: hidden;
   min-width: 6ch;
   text-overflow: ellipsis;
@@ -2047,6 +2055,17 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 .fullscreen-table-panel.is-table-fullscreen .el-table__body-wrapper,
 .fullscreen-table-panel.is-table-fullscreen .el-scrollbar__wrap {
   overflow: auto !important;
+}
+
+.fullscreen-table-panel.is-table-fullscreen .data-table .el-table__header .cell,
+.fullscreen-table-panel.is-table-fullscreen .data-table .el-table__cell .cell {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.fullscreen-table-panel.is-table-fullscreen .data-table .el-table__header .cell {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .rename-table-footer {
