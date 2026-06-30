@@ -5,8 +5,11 @@ import {
   fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   generateRenamePreviews,
+  matchAllUnmatchedMetadata,
   matchRenamePreviewMetadata,
+  matchRenamePreviewsMetadata,
   updateRenamePreview,
+  type BatchMetadataMatchResult,
   type GenerateRenamePreviewsPayload,
   type MetadataMatchResult,
   type PreviewGenerationSummary,
@@ -73,6 +76,39 @@ export const usePreviewStore = defineStore("preview", {
         const updated = await matchRenamePreviewMetadata(previewId);
         this.replacePreview(updated);
         return updated;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async matchMetadataBatch(previewIds: number[]): Promise<BatchMetadataMatchResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await matchRenamePreviewsMetadata(previewIds);
+        result.items.forEach((item) => this.replacePreview(item));
+        return result;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async matchAllUnmatched(): Promise<BatchMetadataMatchResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await matchAllUnmatchedMetadata({
+          media_source_id: this.filters.media_source_id,
+          scan_job_id: this.filters.scan_job_id,
+        });
+        result.items.forEach((item) => this.replacePreview(item));
+        return result;
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;

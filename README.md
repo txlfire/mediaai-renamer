@@ -2,7 +2,7 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与安全重命名工具。项目目标是先安全整理本地或服务端可访问目录中的媒体文件，再逐步接入智能解析、元数据匹配、命名规则和共享目录能力。
 
-当前版本：`0.5.2`
+当前版本：`0.5.3`
 
 当前开发阶段：M5 NAS / SMB / NFS 共享目录支持已完成基础闭环，进入实机验收与后续 M6 准备。
 
@@ -44,10 +44,23 @@ M5 实机验收边界：
 建议使用一键局域网启动：
 
 ```powershell
-npm run dev:lan
+npm run dev:start
 ```
 
-该命令会后台启动前后端，并将日志写入 `.codex/run-logs/`。如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，脚本会在当前进程内临时规整，避免 Windows 后台启动时报环境变量重复键错误。
+停止服务：
+
+```powershell
+npm run dev:stop
+```
+
+Linux 环境：
+
+```bash
+npm run dev:start:linux
+npm run dev:stop:linux
+```
+
+启动脚本会先检查 Node.js、npm、`.venv`、前端依赖、后端依赖和关键入口文件；依赖不满足时会直接停止并给出安装提示。启动后脚本会后台启动前后端，并将日志和 PID 写入 `.codex/run-logs/`。如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，脚本会在当前进程内临时规整，避免 Windows 后台启动时报环境变量重复键错误。
 
 手动启动后端：
 

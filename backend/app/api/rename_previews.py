@@ -9,7 +9,9 @@ from app.service.preview_service import (
     generate_rename_previews,
     list_metadata_candidates,
     list_rename_previews,
+    match_all_unmatched_metadata,
     match_rename_preview_metadata,
+    match_rename_previews_metadata,
     update_rename_preview,
 )
 
@@ -36,6 +38,19 @@ class ApplyMetadataCandidateRequest(BaseModel):
 
     candidate: MetadataCandidate
     score: int
+
+
+class BatchMetadataMatchRequest(BaseModel):
+    """Batch metadata match request."""
+
+    rename_preview_ids: list[int]
+
+
+class AllMetadataMatchRequest(BaseModel):
+    """Match all currently scoped unmatched previews."""
+
+    media_source_id: int | None = None
+    scan_job_id: int | None = None
 
 
 @router.post("/generate")
@@ -94,6 +109,27 @@ def match_preview_metadata(preview_id: int, request: Request):
         return match_rename_preview_metadata(request.app.state.settings, preview_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/metadata-match")
+def match_previews_metadata(payload: BatchMetadataMatchRequest, request: Request):
+    """Run TMDB metadata matching for selected previews."""
+
+    return match_rename_previews_metadata(
+        request.app.state.settings,
+        payload.rename_preview_ids,
+    )
+
+
+@router.post("/metadata-match/all")
+def match_all_metadata(payload: AllMetadataMatchRequest, request: Request):
+    """Run TMDB metadata matching for all unmatched previews in current scope."""
+
+    return match_all_unmatched_metadata(
+        request.app.state.settings,
+        media_source_id=payload.media_source_id,
+        scan_job_id=payload.scan_job_id,
+    )
 
 
 @router.get("/{preview_id}/metadata-candidates")

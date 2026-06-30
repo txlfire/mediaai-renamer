@@ -18,6 +18,7 @@ from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
 from app.core.logger import get_logger, setup_logging
+from app.service.log_service import cleanup_logs
 
 logger = get_logger(__name__)
 
@@ -34,6 +35,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     setup_logging(settings.logging)
     logger.info("开始创建 FastAPI 应用")
     ensure_database(settings)
+    cleanup_logs(settings)
 
     app = FastAPI(title=settings.app_name, version=settings.version)
     app.state.settings = settings

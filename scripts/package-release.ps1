@@ -43,6 +43,7 @@ $Tag = "v$CleanVersion"
 $DistDir = Join-Path $Root "frontend\dist"
 $ReleaseDir = Join-Path $Root "releases"
 $Artifact = Join-Path $ReleaseDir "mediaai-renamer-frontend-$Tag.zip"
+$PackageRoot = Join-Path $ReleaseDir "package-$Tag"
 
 if (-not $SkipBuild) {
     Invoke-NativeCommand "npm.cmd" @("run", "frontend:build")
@@ -53,7 +54,16 @@ if (-not (Test-Path $DistDir)) {
 }
 
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
-Compress-Archive -Path (Join-Path $DistDir "*") -DestinationPath $Artifact -Force
+if (Test-Path $PackageRoot) {
+    Remove-Item -Path $PackageRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
+Copy-Item -Path (Join-Path $DistDir "*") -Destination $PackageRoot -Recurse -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "config") | Out-Null
+Copy-Item -Path (Join-Path $Root "config\config.example.toml") -Destination (Join-Path $PackageRoot "config\config.example.toml") -Force
+
+Compress-Archive -Path (Join-Path $PackageRoot "*") -DestinationPath $Artifact -Force
+Remove-Item -Path $PackageRoot -Recurse -Force
 
 Write-Host "Release package created: $Artifact"
 

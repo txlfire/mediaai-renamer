@@ -17,6 +17,7 @@ from app.service.preview_service import (
     list_metadata_candidates,
     list_rename_previews,
     match_rename_preview_metadata,
+    match_rename_previews_metadata,
 )
 from app.service.settings_service import update_setting_values
 
@@ -140,6 +141,20 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("manual_selected", updated.metadata_match_status)
         self.assertEqual(72, updated.metadata_match_score)
         self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
+
+    def test_batch_metadata_match_updates_selected_previews(self):
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "movie", "黑客帝国", "The Matrix", 1999, None, None, ""),
+            ]
+        )
+
+        result = match_rename_previews_metadata(self.settings, [self.preview.id], provider=provider)
+
+        self.assertEqual(1, result["total_count"])
+        self.assertEqual(1, result["success_count"])
+        self.assertEqual(0, result["failed_count"])
+        self.assertEqual("tmdb_matched", result["items"][0].status)
 
 
 if __name__ == "__main__":

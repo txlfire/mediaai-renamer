@@ -32,13 +32,28 @@ npm run frontend:dev:lan
 一键启动局域网可访问的前后端：
 
 ```powershell
-npm run dev:lan
+npm run dev:start
+```
+
+停止前后端：
+
+```powershell
+npm run dev:stop
+```
+
+Linux 环境一键启动 / 停止：
+
+```bash
+npm run dev:start:linux
+npm run dev:stop:linux
 ```
 
 说明：
 
 - `npm run frontend:dev` 和 `npm run frontend:dev:lan` 适合在独立终端中前台运行。
-- `npm run dev:lan` 会后台启动前后端，并将日志写入 `.codex/run-logs/`。
+- `npm run dev:lan` 仍保留兼容；新命令统一使用 `npm run dev:start` 和 `npm run dev:stop`。
+- 启动脚本会先检查 Node.js、npm、`.venv`、前端依赖、后端依赖和关键入口文件；依赖不满足时会直接停止并给出安装提示。
+- 一键启动会后台启动前后端，并将日志和 PID 写入 `.codex/run-logs/`。
 - 如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，启动脚本会只在当前进程内临时规整，避免 Windows `Start-Process` 报重复键错误。
 
 局域网内其他机器访问：
@@ -64,7 +79,7 @@ http://127.0.0.1:8970/api/health
 停止占用端口的本地服务：
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8970,5173 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
+npm run dev:stop
 ```
 
 ## 2. 测试和构建

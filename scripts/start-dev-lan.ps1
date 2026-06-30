@@ -13,6 +13,42 @@ function Normalize-ProcessPathVariable {
     }
 }
 
+function Find-NodeExecutable {
+    $Node = Get-Command node.exe -ErrorAction SilentlyContinue
+    if ($Node) {
+        return $Node.Source
+    }
+
+    $Node = Get-Command node -ErrorAction SilentlyContinue
+    if ($Node) {
+        return $Node.Source
+    }
+
+    throw "Node.js was not found in PATH. Install Node.js, then run npm install."
+}
+
+function Assert-CommandAvailable {
+    param(
+        [string]$Name,
+        [string]$Hint
+    )
+
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "$Name was not found. $Hint"
+    }
+}
+
+function Assert-FileExists {
+    param(
+        [string]$Path,
+        [string]$Hint
+    )
+
+    if (-not (Test-Path $Path)) {
+        throw "$Path was not found. $Hint"
+    }
+}
+
 function Stop-PortProcess {
     param([int]$Port)
 
@@ -25,12 +61,32 @@ function Stop-PortProcess {
     }
 }
 
+function Assert-DevDependencies {
+    param([string]$RootPath)
+
+    Assert-CommandAvailable -Name "npm" -Hint "Install Node.js/npm and reopen the terminal."
+    $script:Node = Find-NodeExecutable
+
+    $Python = Join-Path $RootPath ".venv\Scripts\python.exe"
+    Assert-FileExists -Path $Python -Hint "Create the virtual environment and install backend dependencies: python -m venv .venv; .\.venv\Scripts\pip.exe install -r backend\requirements.txt"
+    Assert-FileExists -Path (Join-Path $RootPath "backend\app\main.py") -Hint "Run this script from the project root."
+    Assert-FileExists -Path (Join-Path $RootPath "backend\requirements.txt") -Hint "Backend dependency manifest is missing."
+    Assert-FileExists -Path (Join-Path $RootPath "node_modules\vite\bin\vite.js") -Hint "Frontend dependencies are missing. Run npm install."
+
+    & $Python -c "import uvicorn, fastapi" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Backend Python dependencies are incomplete. Run .\.venv\Scripts\pip.exe install -r backend\requirements.txt"
+    }
+
+    return $Python
+}
+
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
 Normalize-ProcessPathVariable
-Stop-PortProcess -Port $FrontendPort
-Stop-PortProcess -Port $BackendPort
+$Python = Assert-DevDependencies -RootPath $Root
+& (Join-Path $Root "scripts\stop-dev-lan.ps1") -FrontendPort $FrontendPort -BackendPort $BackendPort
 
 $LogDir = Join-Path $Root ".codex\run-logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -44,7 +100,7 @@ $env:PYTHONPATH = "backend"
 $env:CI = "true"
 
 $Backend = Start-Process `
-    -FilePath ".\.venv\Scripts\python.exe" `
+    -FilePath $Python `
     -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--app-dir", "backend") `
     -WorkingDirectory $Root `
     -WindowStyle Hidden `
@@ -52,15 +108,30 @@ $Backend = Start-Process `
     -RedirectStandardError $BackendErr `
     -PassThru
 
-$FrontendScript = Join-Path $Root "scripts\start-frontend-dev.ps1"
+$ViteEntry = Join-Path $Root "node_modules\vite\bin\vite.js"
+$FrontendArguments = @(
+    $ViteEntry,
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "$FrontendPort",
+    "--config",
+    "frontend/vite.config.ts"
+)
+
 $Frontend = Start-Process `
-    -FilePath "powershell.exe" `
-    -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", $FrontendScript, "-HostName", "0.0.0.0", "-Port", "$FrontendPort", "-Background") `
+    -FilePath $Node `
+    -ArgumentList $FrontendArguments `
     -WorkingDirectory $Root `
     -WindowStyle Hidden `
+    -RedirectStandardOutput $FrontendOut `
+    -RedirectStandardError $FrontendErr `
     -PassThru
 
+Set-Content -Path (Join-Path $LogDir "backend.pid") -Value $Backend.Id -Encoding ascii
+Set-Content -Path (Join-Path $LogDir "frontend.pid") -Value $Frontend.Id -Encoding ascii
+
 Write-Host "Backend started. PID: $($Backend.Id), URL: http://127.0.0.1:$BackendPort/api/health"
-Write-Host "Frontend launcher started. PID: $($Frontend.Id), URL: http://127.0.0.1:$FrontendPort"
+Write-Host "Frontend started. PID: $($Frontend.Id), URL: http://127.0.0.1:$FrontendPort"
 Write-Host "LAN URL: http://<this-machine-lan-ip>:$FrontendPort"
 Write-Host "Logs: $LogDir"

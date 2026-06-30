@@ -49,10 +49,34 @@ def _build_summary(
     )
 
 
+def _build_supplemented_summary(
+    settings: dict[str, object],
+    parsed: ParsedMediaName,
+    tmdb_candidates: list[MetadataCandidate],
+    source_label: str,
+    imdb_provider: MetadataProvider | None,
+) -> MetadataMatchSummary:
+    if not settings.get("imdb.enabled") or imdb_provider is None:
+        return _build_summary(parsed, tmdb_candidates, source_label)
+
+    try:
+        imdb_candidates = imdb_provider.search(parsed)
+    except Exception as exc:
+        logger.warning("IMDb 补充刮削失败，继续使用 TMDB 结果: %s", exc)
+        return _build_summary(parsed, tmdb_candidates, source_label)
+
+    if settings.get("imdb.priority") == "imdb_first":
+        candidates = [*imdb_candidates, *tmdb_candidates]
+    else:
+        candidates = [*tmdb_candidates, *imdb_candidates]
+    return _build_summary(parsed, candidates, "TMDB + IMDb")
+
+
 def match_metadata_candidates(
     settings: AppSettings,
     parsed: ParsedMediaName,
     provider: MetadataProvider | None = None,
+    imdb_provider: MetadataProvider | None = None,
 ) -> MetadataMatchSummary:
     """Search candidates and return them sorted by weighted match score."""
 
@@ -71,7 +95,7 @@ def match_metadata_candidates(
             candidates = provider.search(parsed)
         except Exception as exc:
             return _failed(f"TMDB 搜索失败: {exc}")
-        return _build_summary(parsed, candidates, "custom")
+        return _build_supplemented_summary(effective, parsed, candidates, "custom", imdb_provider)
 
     candidates = []
 
@@ -84,7 +108,7 @@ def match_metadata_candidates(
         )
         try:
             candidates = v4_client.search(parsed)
-            return _build_summary(parsed, candidates, "TMDB (V4)")
+            return _build_supplemented_summary(effective, parsed, candidates, "TMDB (V4)", imdb_provider)
         except Exception as exc:
             logger.warning("V4 请求失败，准备降级至 V3: %s", exc)
 
@@ -98,7 +122,7 @@ def match_metadata_candidates(
         try:
             candidates = v3_client.search(parsed)
             channel = "TMDB (V3)" if v4_token else "TMDB (V3-only)"
-            return _build_summary(parsed, candidates, channel)
+            return _build_supplemented_summary(effective, parsed, candidates, channel, imdb_provider)
         except Exception as exc:
             logger.error("V3 搜索也失败: %s", exc)
             return _failed(f"TMDB 搜索失败: {exc}")

@@ -162,6 +162,13 @@ export type LogItem = {
   message: string;
 };
 
+export type LogCleanupSummary = {
+  archived_count: number;
+  deleted_count: number;
+  skipped_count: number;
+  archive_dir: string;
+};
+
 export type RenamePreview = {
   id: number;
   media_file_id: number;
@@ -200,6 +207,14 @@ export type MetadataMatchResult = {
   candidate: MetadataCandidate;
   score: number;
   status: string;
+};
+
+export type BatchMetadataMatchResult = {
+  total_count: number;
+  success_count: number;
+  failed_count: number;
+  items: RenamePreview[];
+  failed_items: Array<{ id: number; message: string }>;
 };
 
 export type RenamePreviewFilters = {
@@ -264,10 +279,62 @@ export type SystemSetting = {
   updated_at: string | null;
 };
 
+export type TmdbChannelTestResult = {
+  status: string;
+  message: string;
+  response_ms?: number | null;
+  error_type?: "network" | "server" | "timeout" | "client" | "unknown" | string;
+  http_status?: number | null;
+  raw_error?: string | null;
+};
+
 export type TmdbConnectionTestResult = {
-  v4: { status: string; message: string };
-  v3: { status: string; message: string };
+  v4: TmdbChannelTestResult;
+  v3: TmdbChannelTestResult;
   effective: string;
+  tested_at?: string;
+  config_snapshot?: Record<string, unknown>;
+  config_hash?: string;
+};
+
+export type TmdbStoredConnectionTestResult = TmdbConnectionTestResult & {
+  page_key: string;
+  config_snapshot: Record<string, unknown>;
+  config_hash: string;
+  tested_at: string;
+  updated_at: string;
+};
+
+export type TmdbConnectionTestHistory = {
+  result: TmdbStoredConnectionTestResult | null;
+  current_snapshot: Record<string, unknown>;
+  matches_current: boolean;
+};
+
+export type ImdbConnectionTestResult = {
+  status: "success" | "failed" | string;
+  message: string;
+  response_ms?: number | null;
+  error_message?: string | null;
+  tested_at?: string;
+  config_snapshot?: Record<string, unknown>;
+  is_valid?: boolean;
+};
+
+export type ImdbStoredConnectionTestResult = {
+  id: number;
+  connection_status: "success" | "failed" | string;
+  response_time: number | null;
+  error_message: string | null;
+  config_snapshot: Record<string, unknown>;
+  test_time: string;
+  is_valid: boolean;
+};
+
+export type ImdbConnectionTestHistory = {
+  result: ImdbStoredConnectionTestResult | null;
+  current_snapshot: Record<string, unknown>;
+  matches_current: boolean;
 };
 
 export type PendingFile = {
@@ -474,6 +541,12 @@ export async function fetchLogs(httpClient: ApiHttpClient = apiClient): Promise<
   return response.data.items;
 }
 
+export async function cleanupLogs(httpClient: ApiHttpClient = apiClient): Promise<LogCleanupSummary> {
+  const post = requirePost(httpClient);
+  const response = await post<LogCleanupSummary>("/logs/cleanup", {});
+  return response.data;
+}
+
 export async function generateRenamePreviews(
   payload: GenerateRenamePreviewsPayload,
   httpClient: ApiHttpClient = apiClient,
@@ -593,6 +666,29 @@ export async function matchRenamePreviewMetadata(
   return response.data;
 }
 
+export async function matchRenamePreviewsMetadata(
+  renamePreviewIds: number[],
+  httpClient: ApiHttpClient = apiClient,
+): Promise<BatchMetadataMatchResult> {
+  const post = requirePost(httpClient);
+  const response = await post<BatchMetadataMatchResult>("/rename-previews/metadata-match", {
+    rename_preview_ids: renamePreviewIds,
+  });
+  return response.data;
+}
+
+export async function matchAllUnmatchedMetadata(
+  filters: Pick<RenamePreviewFilters, "media_source_id" | "scan_job_id"> = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<BatchMetadataMatchResult> {
+  const post = requirePost(httpClient);
+  const response = await post<BatchMetadataMatchResult>("/rename-previews/metadata-match/all", {
+    media_source_id: filters.media_source_id,
+    scan_job_id: filters.scan_job_id,
+  });
+  return response.data;
+}
+
 export async function fetchRenamePreviewMetadataCandidates(
   previewId: number,
   httpClient: ApiHttpClient = apiClient,
@@ -632,6 +728,20 @@ export async function updateSettings(
   return response.data;
 }
 
+export async function fetchTmdbTestResult(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TmdbConnectionTestHistory> {
+  const response = await httpClient.get<TmdbConnectionTestHistory>("/settings/tmdb/test-result");
+  return response.data;
+}
+
+export async function fetchImdbTestResult(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ImdbConnectionTestHistory> {
+  const response = await httpClient.get<ImdbConnectionTestHistory>("/settings/imdb/test-result");
+  return response.data;
+}
+
 export async function testTmdbSettings(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<TmdbConnectionTestResult> {
@@ -642,6 +752,50 @@ export async function testTmdbSettings(
   } catch (error) {
     throw new Error(apiErrorMessage(error));
   }
+}
+
+export async function testImdbSettings(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ImdbConnectionTestResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<ImdbConnectionTestResult>("/settings/imdb/test", {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function testTmdbSettingsChannel(
+  channel: "v4" | "v3",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TmdbChannelTestResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<TmdbChannelTestResult>(`/settings/tmdb/test/${channel}`, {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function saveTmdbTestResult(
+  v4: TmdbChannelTestResult,
+  v3: TmdbChannelTestResult,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TmdbConnectionTestResult> {
+  const post = requirePost(httpClient);
+  const response = await post<TmdbConnectionTestResult>("/settings/tmdb/test-result", { v4, v3 });
+  return response.data;
+}
+
+export async function saveImdbTestResult(
+  result: ImdbConnectionTestResult,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ImdbStoredConnectionTestResult> {
+  const post = requirePost(httpClient);
+  const response = await post<ImdbStoredConnectionTestResult>("/settings/imdb/test-result", result);
+  return response.data;
 }
 
 export async function fetchPendingFiles(

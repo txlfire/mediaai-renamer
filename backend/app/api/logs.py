@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request, Response
 
-from app.service.log_service import export_logs_text, read_log_items
+from app.service.log_service import cleanup_logs, export_logs_text, read_log_items
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -22,3 +22,10 @@ def export_logs(request: Request) -> Response:
         content=export_logs_text(request.app.state.settings),
         media_type="text/plain; charset=utf-8",
     )
+
+
+@router.post("/cleanup")
+def cleanup_log_files(request: Request):
+    """Clean and archive log files."""
+
+    return cleanup_logs(request.app.state.settings)

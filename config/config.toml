@@ -3,11 +3,11 @@ host = "0.0.0.0"
 port = 8970
 
 [paths]
-data_dir = "/app/data"
+data_dir = "data"
 
 [logging]
 level = "INFO"
-log_dir = "/app/logs"
+log_dir = "logs"
 max_size_mb = 10
 backup_count = 5
 console_output = true

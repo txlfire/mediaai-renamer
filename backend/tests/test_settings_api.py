@@ -34,9 +34,12 @@ class SettingsApiTest(unittest.TestCase):
             values = {item["key"]: item for item in response.json()}
             self.assertEqual("zh-CN", values["tmdb.language"]["value"])
             self.assertEqual("CN", values["tmdb.region"]["value"])
-            self.assertEqual(10000, values["tmdb.timeout_ms"]["value"])
+            self.assertEqual(15000, values["tmdb.timeout_ms"]["value"])
             self.assertEqual(False, values["tmdb.enabled"]["value"])
             self.assertTrue(values["tmdb.api_key"]["sensitive"])
+            self.assertEqual(False, values["imdb.enabled"]["value"])
+            self.assertEqual("tmdb_first", values["imdb.priority"]["value"])
+            self.assertEqual(10000, values["imdb.timeout_ms"]["value"])
 
     def test_update_settings_persists_values_and_masks_secret(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -74,7 +77,7 @@ class SettingsApiTest(unittest.TestCase):
 
             self.assertEqual(400, response.status_code)
             values = {item["key"]: item for item in client.get("/api/settings").json()}
-            self.assertEqual(10000, values["tmdb.timeout_ms"]["value"])
+            self.assertEqual(15000, values["tmdb.timeout_ms"]["value"])
 
     def test_tmdb_connection_test_returns_success_message(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -84,8 +87,9 @@ class SettingsApiTest(unittest.TestCase):
 
             original = settings_api.test_tmdb_connection
             settings_api.test_tmdb_connection = lambda app_settings: {
-                "success": True,
-                "message": "连接成功！信息有效！",
+                "v4": {"status": "success", "message": "V4 ok"},
+                "v3": {"status": "skipped", "message": "V3 skipped"},
+                "effective": "v4",
             }
             try:
                 response = client.post("/api/settings/tmdb/test")
@@ -93,10 +97,8 @@ class SettingsApiTest(unittest.TestCase):
                 settings_api.test_tmdb_connection = original
 
             self.assertEqual(200, response.status_code)
-            self.assertEqual(
-                {"success": True, "message": "连接成功！信息有效！"},
-                response.json(),
-            )
+            self.assertEqual("success", response.json()["v4"]["status"])
+            self.assertEqual("v4", response.json()["effective"])
 
     def test_tmdb_connection_test_returns_chinese_error(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -123,6 +125,35 @@ class SettingsApiTest(unittest.TestCase):
             data = response.json()
             self.assertEqual("failed", data["v4"]["status"])
             self.assertEqual("none", data["effective"])
+
+    def test_imdb_connection_result_can_be_saved_and_loaded(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            save_response = client.post(
+                "/api/settings/imdb/test-result",
+                json={
+                    "status": "success",
+                    "message": "IMDb连接成功",
+                    "response_ms": 88,
+                },
+            )
+            history_response = client.get("/api/settings/imdb/test-result")
+
+            self.assertEqual(200, save_response.status_code)
+            self.assertEqual(200, history_response.status_code)
+            history = history_response.json()
+            self.assertEqual("success", history["result"]["connection_status"])
+            self.assertEqual(88, history["result"]["response_time"])
+            self.assertTrue(history["matches_current"])
+
+            client.put("/api/settings", json={"values": {"imdb.timeout_ms": "15000"}})
+            invalidated = client.get("/api/settings/imdb/test-result").json()
+            self.assertFalse(invalidated["result"]["is_valid"])
+            self.assertFalse(invalidated["matches_current"])
+
 
 
 if __name__ == "__main__":

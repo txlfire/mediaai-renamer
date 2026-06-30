@@ -130,6 +130,39 @@ class TmdbMetadataServiceTest(unittest.TestCase):
             self.assertEqual("603", result.matches[0].candidate.provider_id)
             self.assertEqual(100, result.matches[0].score)
 
+    def test_enabled_imdb_supplement_searches_tmdb_first_and_applies_priority(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "tmdb.enabled": "true",
+                    "tmdb.api_key": "abcdef123456",
+                    "imdb.enabled": "true",
+                    "imdb.priority": "imdb_first",
+                },
+                operator="admin",
+            )
+            tmdb_provider = FakeMetadataProvider(
+                [MetadataCandidate("TMDB", "603", "movie", "The Matrix", "", 1999, None, None, "tmdb")]
+            )
+            imdb_provider = FakeMetadataProvider(
+                [MetadataCandidate("IMDb", "tt0133093", "movie", "The Matrix", "", 1999, None, None, "imdb")]
+            )
+
+            result = match_metadata_candidates(
+                settings,
+                ParsedMediaName("movie", "The Matrix", 1999, None, None),
+                provider=tmdb_provider,
+                imdb_provider=imdb_provider,
+            )
+
+            self.assertTrue(tmdb_provider.called)
+            self.assertTrue(imdb_provider.called)
+            self.assertEqual("TMDB + IMDb", result.metadata_source)
+            self.assertEqual("IMDb", result.matches[0].candidate.provider)
+
     def test_v4_token_takes_priority_over_v3_key(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = self.build_settings(Path(temp_dir))

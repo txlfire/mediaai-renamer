@@ -170,6 +170,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
         scanned_count = 0
         video_count = 0
         warning_count = 0
+        warning_details: list[str] = []
         try:
             path_iterator = source_path.rglob("*") if recursive else source_path.iterdir()
             for file_path in sorted(path_iterator):
@@ -178,8 +179,9 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                 try:
                     if not file_path.is_file():
                         continue
-                except OSError:
+                except OSError as exc:
                     warning_count += 1
+                    warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
                     continue
 
                 scanned_count += 1
@@ -189,6 +191,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                     except OSError as exc:
                         if getattr(exc, "errno", None) in {errno.EACCES, errno.ESTALE, errno.ETIMEDOUT}:
                             warning_count += 1
+                            warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
                             continue
                         raise
                     if stat.st_size < minimum_file_size:
@@ -201,6 +204,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                             "size_filtered",
                         )
                         warning_count += 1
+                        warning_details.append(f"{file_path.name}: 文件小于最小扫描大小")
                         continue
                     now = _utc_now()
                     connection.execute(
@@ -231,14 +235,20 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
 
             ended_at = _utc_now()
             completed_status = "partial_completed" if warning_count else "completed"
+            warning_message = None
+            if warning_count:
+                detail_text = "，".join(warning_details[:5])
+                more_text = f" 等{warning_count}个文件" if warning_count > len(warning_details[:5]) else ""
+                warning_message = f"部分完成：{warning_count}个文件扫描失败（{detail_text}{more_text}）"
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
-                "video_count = ?, warning_count = ?, ended_at = ? WHERE id = ?",
+                "video_count = ?, warning_count = ?, error_message = ?, ended_at = ? WHERE id = ?",
                 (
                     completed_status,
                     scanned_count,
                     video_count,
                     warning_count,
+                    warning_message,
                     ended_at,
                     job_id,
                 ),

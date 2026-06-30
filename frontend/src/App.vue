@@ -82,7 +82,7 @@ onUnmounted(() => {
       </div>
 
       <button type="button" class="collapse-button" :aria-label="collapseLabel" :title="collapseLabel" @click="appStore.toggleSidebar">
-        <span class="collapse-chevrons">{{ appStore.sidebarCollapsed ? ">>" : "<<" }}</span>
+        <span class="collapse-chevron" aria-hidden="true"></span>
       </button>
 
       <nav class="side-menu">

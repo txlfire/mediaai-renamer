@@ -6,7 +6,7 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend /app/backend
-COPY config /app/config
+COPY config/config.example.toml /app/config/config.example.toml
 
 ENV PYTHONPATH=/app/backend
 EXPOSE 8970

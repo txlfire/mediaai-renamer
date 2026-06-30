@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { Files, MagicStick, Notebook, Refresh, Search, VideoPlay } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import ListPageLayout from "../components/ListPageLayout.vue";
+import OperationProgressLog from "../components/OperationProgressLog.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
@@ -20,6 +21,13 @@ const tableSortStore = useTableSortStore();
 const route = useRoute();
 const router = useRouter();
 const selectedSourceId = ref<number>();
+const scanLogDialogVisible = ref(false);
+const selectedScanLog = ref("");
+const scanProgressVisible = ref(false);
+const scanProgressPercent = ref(0);
+const scanProgressText = ref("");
+const scanProgressLogs = ref<string[]>([]);
+const scanProgressSummary = ref("");
 const defaultSort = { prop: "id", order: "descending" as const };
 const pageText = messages.scanJobs;
 
@@ -53,7 +61,24 @@ async function startScan() {
     return;
   }
 
+  await ElMessageBox.confirm(
+    pageText.confirmScan,
+    messages.renamePreviews.confirmOperationTitle,
+    {
+      type: "warning",
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+    },
+  );
+  scanProgressVisible.value = true;
+  scanProgressPercent.value = 15;
+  scanProgressText.value = pageText.scanProgressStart;
+  scanProgressLogs.value = [formatMessage(pageText.scanLogStart, { name: selectedSource.value.name })];
+  scanProgressSummary.value = "";
   await mediaStore.startScan(selectedSourceId.value);
+  scanProgressPercent.value = 100;
+  scanProgressText.value = pageText.scanProgressDone;
+  scanProgressSummary.value = mediaStore.errorMessage ? pageText.scanFailedSummary : pageText.scanSuccessSummary;
 }
 
 async function queryScanJobs() {
@@ -87,6 +112,18 @@ function viewRenamePreviews(row: { id: number; media_source_id: number }) {
       scan_job_id: String(row.id),
     },
   });
+}
+
+function scanStatusText(row: { status: string; error_message?: string | null }) {
+  if (row.status === "partial_completed" && row.error_message) {
+    return row.error_message;
+  }
+  return formatScanJobStatus(row.status);
+}
+
+function openScanLog(row: { error_message?: string | null }) {
+  selectedScanLog.value = row.error_message || messages.common.emptyLogs;
+  scanLogDialogVisible.value = true;
 }
 
 onMounted(async () => {
@@ -135,6 +172,13 @@ onMounted(async () => {
     </template>
 
     <el-alert v-if="mediaStore.errorMessage" type="error" :title="mediaStore.errorMessage" show-icon />
+    <OperationProgressLog
+      :visible="scanProgressVisible"
+      :percentage="scanProgressPercent"
+      :text="scanProgressText"
+      :logs="scanProgressLogs"
+      :summary="scanProgressSummary"
+    />
 
     <template #table>
       <el-table
@@ -148,7 +192,7 @@ onMounted(async () => {
         <el-table-column prop="id" :label="messages.scanJobs.columns.taskId" min-width="92" align="center" header-align="center" sortable="custom" />
         <el-table-column :label="messages.common.status" min-width="88" align="center" header-align="center">
           <template #default="{ row }">
-            <TextCell :value="formatScanJobStatus(row.status)" :max-length="tableDisplayConfig.statusMaxLength" />
+            <TextCell :value="scanStatusText(row)" :max-length="tableDisplayConfig.statusMaxLength" />
           </template>
         </el-table-column>
         <el-table-column prop="scanned_count" :label="messages.scanJobs.columns.scanned" min-width="90" align="center" header-align="center" sortable="custom" />
@@ -212,6 +256,16 @@ onMounted(async () => {
                   @click="viewRenamePreviews(row)"
                 />
               </el-tooltip>
+              <el-tooltip :content="messages.scanJobs.viewLogs" placement="top">
+                <el-button
+                  class="table-action-button action-view"
+                  :disabled="!row.error_message"
+                  :icon="Notebook"
+                  text
+                  circle
+                  @click="openScanLog(row)"
+                />
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -221,5 +275,12 @@ onMounted(async () => {
     <template #pagination>
       <TablePagination pagination-key="scan-jobs" :total="mediaStore.scanJobs.length" />
     </template>
+
+    <el-dialog v-model="scanLogDialogVisible" :title="messages.scanJobs.viewLogs" width="640px">
+      <p class="scan-job-log-detail">{{ selectedScanLog }}</p>
+      <template #footer>
+        <el-button @click="scanLogDialogVisible = false">{{ messages.common.close }}</el-button>
+      </template>
+    </el-dialog>
   </ListPageLayout>
 </template>

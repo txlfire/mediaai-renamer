@@ -4,11 +4,13 @@
 """
 
 import logging
+import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.core.config import LoggingSettings
+from app.core.config import AppSettings, LoggingSettings
 from app.core.logger import (
     PROJECT_HANDLER_MARK,
     get_batch_logger,
@@ -17,6 +19,8 @@ from app.core.logger import (
     shutdown_logging,
     setup_logging,
 )
+from app.service.log_service import cleanup_logs
+from app.service.settings_service import update_setting_values
 
 
 class LoggerSetupTest(unittest.TestCase):
@@ -64,6 +68,38 @@ class LoggerSetupTest(unittest.TestCase):
 
             self.assertEqual(2, len(project_handlers))
             shutdown_logging()
+
+    def test_cleanup_logs_archives_old_rotated_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            log_dir = root / "logs"
+            log_dir.mkdir()
+            old_log = log_dir / "app.log.1"
+            old_log.write_text("old", encoding="utf-8")
+            old_time = (datetime.now(timezone.utc) - timedelta(days=8)).timestamp()
+            os.utime(old_log, (old_time, old_time))
+            settings = AppSettings(
+                data_dir=root,
+                database_path=root / "mediaai.sqlite3",
+                logging=LoggingSettings(log_dir=log_dir, console_output=False),
+            )
+            from app.core.database import ensure_database
+
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "logging.path": str(log_dir),
+                    "logging.archive_after_days": 7,
+                    "logging.retention_days": 30,
+                },
+            )
+
+            result = cleanup_logs(settings)
+
+            self.assertEqual(1, result["archived_count"])
+            self.assertFalse(old_log.exists())
+            self.assertTrue((log_dir / "archive" / "app.log.1.zip").exists())
 
 
 if __name__ == "__main__":

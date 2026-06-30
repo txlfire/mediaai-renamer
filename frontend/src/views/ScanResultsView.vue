@@ -3,6 +3,7 @@ import { Refresh, Search } from "@element-plus/icons-vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
+import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
@@ -149,74 +150,73 @@ onMounted(async () => {
     </template>
 
     <template #table>
-      <el-table
-        :data="pagedMediaFiles"
-        class="data-table scan-results-table"
-        height="100%"
-        table-layout="auto"
-        :default-sort="defaultSort"
-        @row-click="handleRowClick"
-        @sort-change="handleSortChange"
-      >
-        <el-table-column
-          prop="__sequence"
-          :label="messages.common.sequence"
-          width="76"
-          align="center"
-          header-align="center"
-          fixed="left"
-          sortable="custom"
+      <FullscreenTablePanel :title="messages.scanResults.title">
+        <el-table
+          :data="pagedMediaFiles"
+          class="data-table scan-results-table"
+          height="100%"
+          table-layout="auto"
+          :default-sort="defaultSort"
+          @row-click="handleRowClick"
+          @sort-change="handleSortChange"
         >
-          <template #default="{ $index }">
-            {{ sequenceNumber($index) }}
-          </template>
-        </el-table-column>
-        <el-table-column :label="messages.scanResults.columns.fileName" min-width="280" align="left" header-align="left">
-          <template #default="{ row }">
-            <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
-          </template>
-        </el-table-column>
-        <el-table-column :label="messages.scanResults.columns.format" width="72" align="center" header-align="center">
-          <template #default="{ row }">
-            <TextCell :value="row.extension" :max-length="6" />
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="file_size"
-          :label="messages.scanResults.columns.size"
-          width="112"
-          align="center"
-          header-align="center"
-          sortable="custom"
-        >
-          <template #default="{ row }">
-            {{ formatFileSize(row.file_size) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="scan_job_id" :label="messages.scanResults.columns.taskId" width="96" align="center" header-align="center" />
-        <el-table-column :label="messages.scanResults.columns.path" min-width="360" align="left" header-align="left">
-          <template #default="{ row }">
-            <TextCell :value="row.file_path" :max-length="tableDisplayConfig.pathMaxLength" />
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="modified_at"
-          :label="messages.scanResults.columns.modifiedAt"
-          width="168"
-          class-name="nowrap-column"
-          align="center"
-          header-align="center"
-          sortable="custom"
-        >
-          <template #default="{ row }">
-            {{ formatDateTime(row.modified_at) }}
-          </template>
-        </el-table-column>
-      </el-table>
-    </template>
-
-    <template #pagination>
-      <TablePagination pagination-key="scan-results" :total="mediaStore.mediaFiles.length" />
+          <el-table-column
+            prop="__sequence"
+            :label="messages.common.sequence"
+            width="76"
+            align="center"
+            header-align="center"
+            fixed="left"
+            sortable="custom"
+          >
+            <template #default="{ $index }">
+              {{ sequenceNumber($index) }}
+            </template>
+          </el-table-column>
+          <el-table-column :label="messages.scanResults.columns.fileName" min-width="280" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+            </template>
+          </el-table-column>
+          <el-table-column :label="messages.scanResults.columns.format" width="72" align="center" header-align="center">
+            <template #default="{ row }">
+              <TextCell :value="row.extension" :max-length="6" />
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="file_size"
+            :label="messages.scanResults.columns.size"
+            width="112"
+            align="center"
+            header-align="center"
+            sortable="custom"
+          >
+            <template #default="{ row }">
+              {{ formatFileSize(row.file_size) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="scan_job_id" :label="messages.scanResults.columns.taskId" width="96" align="center" header-align="center" />
+          <el-table-column :label="messages.scanResults.columns.path" min-width="360" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="row.file_path" :max-length="tableDisplayConfig.pathMaxLength" />
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="modified_at"
+            :label="messages.scanResults.columns.modifiedAt"
+            width="168"
+            class-name="nowrap-column"
+            align="center"
+            header-align="center"
+            sortable="custom"
+          >
+            <template #default="{ row }">
+              {{ formatDateTime(row.modified_at) }}
+            </template>
+          </el-table-column>
+        </el-table>
+        <TablePagination pagination-key="scan-results" :total="mediaStore.mediaFiles.length" />
+      </FullscreenTablePanel>
     </template>
 
     <el-dialog v-model="detailDialogVisible" :title="messages.scanResults.detailTitle" width="720px">

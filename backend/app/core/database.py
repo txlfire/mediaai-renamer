@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -65,6 +65,34 @@ def _ensure_system_settings_table(connection: sqlite3.Connection) -> None:
         "operator TEXT NOT NULL DEFAULT 'system', "
         "created_at TEXT NOT NULL, "
         "updated_at TEXT NOT NULL)"
+    )
+
+
+def _ensure_page_test_results_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS page_test_results "
+        "(page_key TEXT PRIMARY KEY, "
+        "config_snapshot TEXT NOT NULL, "
+        "config_hash TEXT NOT NULL, "
+        "v4_result TEXT NOT NULL, "
+        "v3_result TEXT NOT NULL, "
+        "effective_channel TEXT NOT NULL, "
+        "tested_at TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+
+
+def _ensure_imdb_test_result_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS imdb_test_result "
+        "(id INTEGER PRIMARY KEY, "
+        "connection_status TEXT NOT NULL, "
+        "response_time INTEGER, "
+        "error_message TEXT, "
+        "config_snapshot TEXT NOT NULL, "
+        "test_time TEXT NOT NULL, "
+        "is_valid INTEGER NOT NULL DEFAULT 1)"
     )
 
 
@@ -136,6 +164,14 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         )
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 7:
+        _ensure_page_test_results_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 8:
+        _ensure_imdb_test_result_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -155,6 +191,8 @@ def ensure_database(settings: AppSettings) -> Path:
             "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
         _ensure_system_settings_table(connection)
+        _ensure_page_test_results_table(connection)
+        _ensure_imdb_test_result_table(connection)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS media_sources "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
