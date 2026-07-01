@@ -66,6 +66,7 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("system_settings", tables)
             self.assertIn("page_test_results", tables)
             self.assertIn("imdb_test_result", tables)
+            self.assertIn("external_submission_blocks", tables)
             self.assertIn("metadata_source", preview_columns)
             self.assertIn("metadata_match_status", preview_columns)
             self.assertIn("metadata_match_score", preview_columns)
@@ -91,6 +92,7 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
             self.assertIn("page_test_results", tables)
             self.assertIn("imdb_test_result", tables)
+            self.assertIn("external_submission_blocks", tables)
 
     def test_existing_media_sources_are_migrated_to_m5_shared_path_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -199,6 +201,41 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("config_snapshot", columns)
             self.assertIn("test_time", columns)
             self.assertIn("is_valid", columns)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m8_database_is_migrated_to_external_submission_blocks_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            root.mkdir(parents=True, exist_ok=True)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute(
+                    "INSERT INTO app_meta (key, value) VALUES ('schema_version', '8')"
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(external_submission_blocks)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("source_module", columns)
+            self.assertIn("source_record_id", columns)
+            self.assertIn("file_name", columns)
+            self.assertIn("file_path", columns)
+            self.assertIn("match_title", columns)
+            self.assertIn("target_service", columns)
+            self.assertIn("block_rule_type", columns)
+            self.assertIn("matched_value_masked", columns)
+            self.assertIn("status", columns)
+            self.assertIn("override_reason", columns)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
 

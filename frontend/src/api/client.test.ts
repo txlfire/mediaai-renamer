@@ -285,11 +285,13 @@ describe("settings API client", () => {
 
     await fetchSettings(httpClient);
     await updateSettings({ "tmdb.timeout_ms": 12000 }, httpClient);
+    await updateSettings({ "privacy.custom_sensitive_words": ["自定义"] }, httpClient);
     await testTmdbSettings(httpClient);
 
     expect(calls).toEqual([
       "GET /settings",
       'PUT /settings:{"values":{"tmdb.timeout_ms":12000}}',
+      'PUT /settings:{"values":{"privacy.custom_sensitive_words":["自定义"]}}',
       "POST /settings/tmdb/test:{}",
     ]);
   });

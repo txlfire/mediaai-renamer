@@ -20,6 +20,7 @@ import {
   type NamingTemplateElement,
   validateNamingSeparator,
 } from "../utils/namingBuilder";
+import { formatSensitiveWordsInput, parseSensitiveWordsInput } from "../utils/sensitiveWords";
 
 const settingsStore = useSettingsStore();
 const activeCategory = ref("tmdb");
@@ -27,6 +28,8 @@ const pageText = messages.settings;
 const movieNamingElements = ref<NamingTemplateElement[]>([]);
 const episodeNamingElements = ref<NamingTemplateElement[]>([]);
 const imdbCardCollapsed = ref(localStorage.getItem("settings.imdb.cardCollapsed") !== "false");
+const customSensitiveWordsCollapsed = ref(localStorage.getItem("settings.privacy.customWordsCollapsed") !== "false");
+const defaultSensitiveWordsDialogVisible = ref(false);
 
 const form = reactive({
   v4Token: "",
@@ -39,6 +42,13 @@ const form = reactive({
   imdbEnabled: false,
   imdbPriority: "tmdb_first",
   imdbTimeoutSeconds: "10",
+  aiEnabled: false,
+  aiProvider: "deepseek",
+  aiModel: "deepseek-chat",
+  aiApiKey: "",
+  aiBaseUrl: "https://api.deepseek.com",
+  aiTimeoutSeconds: "30",
+  aiMaxRetries: "2",
   minimumFileSizeMb: "0",
   scanBatchSize: "100",
   scanBatchIntervalSeconds: "1",
@@ -70,14 +80,20 @@ const form = reactive({
   nfsRetryCount: "3",
   preferNfsv4: true,
   mountCheckIntervalSeconds: "60",
+  defaultSensitiveWordsEnabled: true,
+  defaultSensitiveWordsText: "",
+  customSensitiveWordsText: "",
 });
 
 const categories = computed(() => [
   { key: "tmdb", label: pageText.categories.tmdb },
+  { key: "privacy", label: pageText.categories.privacy },
+  { key: "ai", label: pageText.categories.ai },
   { key: "naming", label: pageText.categories.naming },
   { key: "scan", label: pageText.categories.scan },
-  { key: "operations", label: pageText.categories.operations },
   { key: "shared", label: pageText.categories.shared },
+  // 通用设置固定在最下方；后续新增设置分类应插入到它上方。
+  { key: "operations", label: pageText.categories.operations },
 ]);
 
 function settingValue<T>(key: string, fallback: T): T {
@@ -100,6 +116,32 @@ const savedApiKeyDisplay = computed(() => {
 
 const v4TokenPlaceholder = computed(() => savedV4TokenDisplay.value || pageText.tmdb.v4TokenPlaceholder);
 const apiKeyPlaceholder = computed(() => savedApiKeyDisplay.value || pageText.tmdb.apiKeyPlaceholder);
+const savedAiApiKeyDisplay = computed(() => {
+  const value = settingsStore.settingMap["ai.api_key"]?.value;
+  return isMaskedSecret(value) ? String(value) : "";
+});
+const aiApiKeyPlaceholder = computed(() => savedAiApiKeyDisplay.value || pageText.ai.apiKeyPlaceholder);
+const defaultSensitiveWordPreview = computed(() => parseSensitiveWordsInput(form.defaultSensitiveWordsText));
+const customSensitiveWordPreview = computed(() => parseSensitiveWordsInput(form.customSensitiveWordsText));
+const defaultSensitiveWordPreviewLimit = 30;
+const visibleDefaultSensitiveWords = computed(() => defaultSensitiveWordPreview.value.slice(0, defaultSensitiveWordPreviewLimit));
+const defaultSensitiveWordOverflowCount = computed(() =>
+  Math.max(0, defaultSensitiveWordPreview.value.length - defaultSensitiveWordPreviewLimit),
+);
+const sensitiveWordTotal = computed(() =>
+  new Set([
+    ...(form.defaultSensitiveWordsEnabled ? defaultSensitiveWordPreview.value : []),
+    ...customSensitiveWordPreview.value,
+  ].map((word) => word.toLocaleLowerCase())).size,
+);
+
+watch(customSensitiveWordsCollapsed, (collapsed) => {
+  localStorage.setItem("settings.privacy.customWordsCollapsed", String(collapsed));
+});
+
+function resetDefaultSensitiveWords() {
+  form.defaultSensitiveWordsText = formatSensitiveWordsInput(pageText.privacy.defaultWordsInitial);
+}
 
 function syncForm() {
   const v4Token = settingValue("tmdb.v4_token", "");
@@ -113,6 +155,13 @@ function syncForm() {
   form.imdbEnabled = Boolean(settingValue("imdb.enabled", false));
   form.imdbPriority = String(settingValue("imdb.priority", "tmdb_first"));
   form.imdbTimeoutSeconds = String(Math.max(5, Math.round(Number(settingValue("imdb.timeout_ms", 10000)) / 1000)));
+  form.aiEnabled = Boolean(settingValue("ai.enabled", false));
+  form.aiProvider = String(settingValue("ai.provider", "deepseek"));
+  form.aiModel = String(settingValue("ai.model", "deepseek-chat"));
+  form.aiApiKey = "";
+  form.aiBaseUrl = String(settingValue("ai.base_url", "https://api.deepseek.com"));
+  form.aiTimeoutSeconds = String(Math.max(5, Math.round(Number(settingValue("ai.timeout_ms", 30000)) / 1000)));
+  form.aiMaxRetries = String(settingValue("ai.max_retries", 2));
   form.minimumFileSizeMb = String(Math.round(Number(settingValue("scan.minimum_file_size", 0)) / 1024 / 1024));
   form.scanBatchSize = String(settingValue("scan.batch_size", 100));
   form.scanBatchIntervalSeconds = String(settingValue("scan.batch_interval_seconds", 1));
@@ -147,12 +196,17 @@ function syncForm() {
   form.nfsRetryCount = String(settingValue("shared.nfs_retry_count", 3));
   form.preferNfsv4 = Boolean(settingValue("shared.prefer_nfsv4", true));
   form.mountCheckIntervalSeconds = String(settingValue("shared.mount_check_interval_seconds", 60));
+  form.defaultSensitiveWordsEnabled = Boolean(settingValue("privacy.default_sensitive_words_enabled", true));
+  form.defaultSensitiveWordsText = formatSensitiveWordsInput(settingValue("privacy.default_sensitive_words", []));
+  form.customSensitiveWordsText = formatSensitiveWordsInput(settingValue("privacy.custom_sensitive_words", []));
 }
 
 function onlyDigits(
   key:
     | "timeoutSeconds"
     | "imdbTimeoutSeconds"
+    | "aiTimeoutSeconds"
+    | "aiMaxRetries"
     | "minimumFileSizeMb"
     | "scanBatchSize"
     | "scanBatchIntervalSeconds"
@@ -368,6 +422,45 @@ async function saveSharedSettings() {
       "shared.prefer_nfsv4": form.preferNfsv4,
       "shared.mount_check_interval_seconds": Number(form.mountCheckIntervalSeconds || 60),
     });
+    syncForm();
+    ElMessage.success(pageText.saved);
+  } catch (error) {
+    await notifySaveFailed(error);
+  }
+}
+
+async function savePrivacySettings() {
+  try {
+    await settingsStore.saveSettings({
+      "privacy.default_sensitive_words_enabled": form.defaultSensitiveWordsEnabled,
+      "privacy.default_sensitive_words": parseSensitiveWordsInput(form.defaultSensitiveWordsText),
+      "privacy.custom_sensitive_words": parseSensitiveWordsInput(form.customSensitiveWordsText),
+    });
+    syncForm();
+    ElMessage.success(pageText.saved);
+  } catch (error) {
+    await notifySaveFailed(error);
+  }
+}
+
+async function saveAiSettings() {
+  try {
+    const timeoutSeconds = Math.max(5, Number(form.aiTimeoutSeconds || 30));
+    const maxRetries = Math.max(0, Number(form.aiMaxRetries || 0));
+    form.aiTimeoutSeconds = String(timeoutSeconds);
+    form.aiMaxRetries = String(maxRetries);
+    const values: Record<string, string | number | boolean> = {
+      "ai.enabled": form.aiEnabled,
+      "ai.provider": form.aiProvider,
+      "ai.model": form.aiModel.trim() || "deepseek-chat",
+      "ai.base_url": form.aiBaseUrl.trim() || "https://api.deepseek.com",
+      "ai.timeout_ms": timeoutSeconds * 1000,
+      "ai.max_retries": maxRetries,
+    };
+    if (form.aiApiKey.trim()) {
+      values["ai.api_key"] = form.aiApiKey.trim();
+    }
+    await settingsStore.saveSettings(values);
     syncForm();
     ElMessage.success(pageText.saved);
   } catch (error) {
@@ -1275,6 +1368,202 @@ onMounted(async () => {
             </template>
             </el-dialog>
             </template>
+          </div>
+        </el-form>
+
+        <el-form v-else-if="activeCategory === 'privacy'" label-position="top" class="settings-form">
+          <div class="settings-config-card">
+            <div class="settings-config-card-title">{{ pageText.privacy.title }}</div>
+            <el-alert
+              :title="pageText.privacy.notice"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+
+            <div class="settings-inline-row">
+              <span class="settings-inline-label">{{ pageText.privacy.defaultEnabled }}</span>
+              <el-switch
+                v-model="form.defaultSensitiveWordsEnabled"
+                :active-text="messages.status.enabled"
+                :inactive-text="messages.status.disabled"
+              />
+              <span class="settings-inline-label">{{ pageText.privacy.effectiveCount }}</span>
+              <el-tag type="warning" effect="light">
+                {{ formatMessage(pageText.privacy.effectiveCountValue, { count: sensitiveWordTotal }) }}
+              </el-tag>
+            </div>
+
+            <el-form-item :label="pageText.privacy.defaultWords" class="settings-sensitive-textarea">
+              <el-input
+                v-model="form.defaultSensitiveWordsText"
+                type="textarea"
+                :rows="4"
+                :placeholder="pageText.privacy.defaultWordsPlaceholder"
+              />
+              <span class="setting-source">{{ pageText.privacy.defaultWordsHelp }}</span>
+            </el-form-item>
+
+            <div class="settings-word-preview">
+              <div class="settings-word-preview-heading">
+                <button
+                  type="button"
+                  class="settings-word-preview-link"
+                  @click="defaultSensitiveWordsDialogVisible = true"
+                >
+                  {{ pageText.privacy.defaultPreview }}
+                </button>
+                <div class="settings-inline-actions">
+                  <el-button type="warning" plain size="small" @click="resetDefaultSensitiveWords">
+                    {{ pageText.privacy.defaultWordsReset }}
+                  </el-button>
+                  <el-button size="small" :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
+                    {{ messages.common.refresh }}
+                  </el-button>
+                  <el-button type="primary" size="small" :loading="settingsStore.loading" @click="savePrivacySettings">
+                    {{ messages.common.save }}
+                  </el-button>
+                </div>
+              </div>
+              <div class="settings-word-tags">
+                <el-tag
+                  v-for="word in visibleDefaultSensitiveWords"
+                  :key="`default-${word}`"
+                  type="warning"
+                  effect="light"
+                >
+                  {{ word }}
+                </el-tag>
+                <el-tag v-if="defaultSensitiveWordOverflowCount > 0" type="warning" effect="plain">
+                  {{ formatMessage(pageText.privacy.defaultWordsTotal, { count: defaultSensitiveWordPreview.length }) }}
+                </el-tag>
+                <span v-if="defaultSensitiveWordPreview.length === 0" class="settings-word-empty">
+                  {{ pageText.privacy.emptyWords }}
+                </span>
+              </div>
+            </div>
+
+            <div class="settings-config-card settings-nested-card" :class="{ 'is-collapsed': customSensitiveWordsCollapsed }">
+              <button
+                type="button"
+                class="settings-config-card-title settings-config-card-toggle"
+                @click="customSensitiveWordsCollapsed = !customSensitiveWordsCollapsed"
+              >
+                <span>{{ pageText.privacy.customWords }}</span>
+                <span class="settings-collapse-icon" aria-hidden="true">
+                  {{ customSensitiveWordsCollapsed ? "+" : "-" }}
+                </span>
+              </button>
+              <template v-if="!customSensitiveWordsCollapsed">
+            <el-form-item :label="pageText.privacy.customWords" class="settings-sensitive-textarea">
+              <el-input
+                v-model="form.customSensitiveWordsText"
+                type="textarea"
+                :rows="4"
+                :placeholder="pageText.privacy.customWordsPlaceholder"
+              />
+              <span class="setting-source">{{ pageText.privacy.customWordsHelp }}</span>
+            </el-form-item>
+
+            <div class="settings-word-preview">
+              <span>{{ pageText.privacy.customPreview }}</span>
+              <div class="settings-word-tags">
+                <el-tag
+                  v-for="word in customSensitiveWordPreview"
+                  :key="`custom-${word}`"
+                  type="info"
+                  effect="light"
+                >
+                  {{ word }}
+                </el-tag>
+                <span v-if="customSensitiveWordPreview.length === 0" class="settings-word-empty">
+                  {{ pageText.privacy.emptyWords }}
+                </span>
+              </div>
+            </div>
+              </template>
+            </div>
+
+            <el-dialog
+              v-model="defaultSensitiveWordsDialogVisible"
+              :title="pageText.privacy.defaultWordsAllTitle"
+              width="min(720px, 92vw)"
+            >
+              <div class="settings-word-dialog-list">
+                <el-tag
+                  v-for="word in defaultSensitiveWordPreview"
+                  :key="`all-default-${word}`"
+                  type="warning"
+                  effect="light"
+                >
+                  {{ word }}
+                </el-tag>
+                <span v-if="defaultSensitiveWordPreview.length === 0" class="settings-word-empty">
+                  {{ pageText.privacy.emptyWords }}
+                </span>
+              </div>
+              <template #footer>
+                <el-button @click="defaultSensitiveWordsDialogVisible = false">{{ messages.common.close }}</el-button>
+              </template>
+            </el-dialog>
+          </div>
+        </el-form>
+
+        <el-form v-else-if="activeCategory === 'ai'" label-position="top" class="settings-form">
+          <div class="settings-config-card">
+            <div class="settings-config-card-title">{{ pageText.ai.title }}</div>
+            <el-alert
+              :title="pageText.ai.notice"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+            <div class="settings-grid">
+              <el-form-item :label="pageText.ai.enabled">
+                <el-switch
+                  v-model="form.aiEnabled"
+                  :active-text="messages.status.enabled"
+                  :inactive-text="messages.status.disabled"
+                />
+              </el-form-item>
+              <el-form-item :label="pageText.ai.provider">
+                <el-select v-model="form.aiProvider">
+                  <el-option :label="pageText.ai.providerDeepSeek" value="deepseek" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="pageText.ai.model">
+                <el-input v-model="form.aiModel" :placeholder="pageText.ai.modelPlaceholder" />
+              </el-form-item>
+              <el-form-item :label="pageText.ai.apiKey">
+                <el-input
+                  v-model="form.aiApiKey"
+                  show-password
+                  autocomplete="off"
+                  :placeholder="aiApiKeyPlaceholder"
+                />
+              </el-form-item>
+              <el-form-item :label="pageText.ai.baseUrl">
+                <el-input v-model="form.aiBaseUrl" />
+              </el-form-item>
+              <el-form-item :label="pageText.ai.timeout">
+                <el-input v-model="form.aiTimeoutSeconds" maxlength="4" @input="onlyDigits('aiTimeoutSeconds')">
+                  <template #append>{{ pageText.ai.seconds }}</template>
+                </el-input>
+              </el-form-item>
+              <el-form-item :label="pageText.ai.maxRetries">
+                <el-input v-model="form.aiMaxRetries" maxlength="2" @input="onlyDigits('aiMaxRetries')">
+                  <template #append>{{ pageText.ai.retryUnit }}</template>
+                </el-input>
+              </el-form-item>
+            </div>
+            <div class="settings-actions">
+              <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
+                {{ messages.common.refresh }}
+              </el-button>
+              <el-button type="primary" :loading="settingsStore.loading" @click="saveAiSettings">
+                {{ messages.common.save }}
+              </el-button>
+            </div>
           </div>
         </el-form>
 

@@ -1229,6 +1229,125 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   flex: 0 0 auto;
 }
 
+.settings-nested-card {
+  gap: 0.75rem;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.settings-nested-card:not(.is-collapsed) {
+  padding: 0.75rem;
+  border-color: var(--border-color);
+  background: rgba(64, 128, 255, 0.03);
+}
+
+.settings-nested-card .settings-config-card-toggle {
+  min-height: 2.5rem;
+  padding: 0.5rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
+}
+
+.settings-nested-card.is-collapsed .settings-config-card-toggle {
+  padding: 0;
+  border-bottom: 0;
+}
+
+.settings-collapse-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  color: var(--el-color-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.settings-sensitive-textarea .el-textarea__inner {
+  color: #333;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.settings-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+}
+
+.settings-inline-label {
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.settings-word-preview {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--el-text-color-secondary);
+  font-size: 0.85rem;
+}
+
+.settings-word-preview-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.settings-word-preview-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.settings-word-preview-link:hover {
+  color: var(--el-color-primary-light-3);
+}
+
+.settings-word-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.settings-word-empty {
+  color: var(--el-text-color-placeholder);
+}
+
+.settings-word-dialog-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-height: min(60vh, 520px);
+  overflow: auto;
+}
+
 .link-cell {
   display: inline-flex;
   max-width: 100%;

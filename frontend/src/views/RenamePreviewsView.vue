@@ -65,7 +65,7 @@ const operationResultFailed = ref(0);
 const operationResultSkipped = ref(0);
 const operationResultLogs = ref<string[]>([]);
 const metadataMatchSource = ref<MetadataMatchSource>("parsed_title");
-const defaultSort = { prop: "updated_at", order: "descending" as const };
+const defaultSort = { prop: "id", order: "ascending" as const };
 const pagedPreviews = computed(() =>
   paginationStore.paginate(
     "rename-previews",
@@ -192,6 +192,10 @@ function metadataStatusTagType(value: string | null) {
   return "info";
 }
 
+function metadataReason(row: RenamePreview) {
+  return row.metadata_message || metadataStatusLabel(row.metadata_match_status);
+}
+
 function seasonEpisode(row: { season: number | null; episode: number | null }) {
   if (!row.season && !row.episode) {
     return "-";
@@ -221,6 +225,7 @@ const detailRows = computed(() => {
     { label: messages.renamePreviews.columns.metadataSource, value: row.metadata_source ?? "-" },
     { label: messages.renamePreviews.columns.metadataScore, value: `${row.metadata_match_score ?? 0}%` },
     { label: messages.renamePreviews.columns.metadata, value: metadataStatusLabel(row.metadata_match_status) },
+    { label: messages.renamePreviews.columns.reason, value: row.metadata_message ?? "-" },
     { label: messages.renamePreviews.type, value: mediaTypeLabel(row.media_type) },
     { label: messages.renamePreviews.columns.year, value: row.parsed_year ?? "-" },
     { label: messages.renamePreviews.columns.seasonEpisode, value: seasonEpisode(row) },
@@ -825,9 +830,11 @@ onMounted(async () => {
           header-align="center"
           >
           <template #default="{ row }">
-          <el-tag :type="metadataStatusTagType(row.metadata_match_status)" effect="light">
-          {{ metadataStatusLabel(row.metadata_match_status) }}
-          </el-tag>
+          <el-tooltip :content="metadataReason(row)" placement="top" :disabled="!metadataReason(row) || metadataReason(row) === '-'">
+            <el-tag :type="metadataStatusTagType(row.metadata_match_status)" effect="light">
+            {{ metadataStatusLabel(row.metadata_match_status) }}
+            </el-tag>
+          </el-tooltip>
           </template>
           </el-table-column>
           <el-table-column
@@ -840,7 +847,11 @@ onMounted(async () => {
           header-align="center"
           sortable="custom"
           >
-          <template #default="{ row }">{{ row.metadata_match_score ?? 0 }}%</template>
+          <template #default="{ row }">
+            <el-tooltip :content="metadataReason(row)" placement="top" :disabled="!metadataReason(row) || metadataReason(row) === '-'">
+              <span>{{ row.metadata_match_score ?? 0 }}%</span>
+            </el-tooltip>
+          </template>
           </el-table-column>
           <el-table-column
           prop="media_type"

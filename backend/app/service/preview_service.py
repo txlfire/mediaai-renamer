@@ -12,7 +12,7 @@ from app.service.metadata_matcher import MATCH_STATUS_HIGH
 from app.service.metadata_service import MetadataProvider, match_metadata_candidates
 from app.service.settings_service import get_effective_settings
 from app.utils.filename_parser import parse_media_filename
-from app.utils.naming_template import build_preview_name_with_settings
+from app.utils.naming_template import build_preview_name_with_settings, template_variables_for_media_type
 
 METADATA_MATCH_SOURCE_PARSED_TITLE = "parsed_title"
 METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME = "original_file_name"
@@ -286,15 +286,50 @@ def _preview_by_id(settings: AppSettings, preview_id: int) -> RenamePreview:
         return _row_to_preview(_get_preview_row(connection, preview_id))
 
 
-def _candidate_preview_name(settings: AppSettings, candidate: MetadataCandidate, extension: str) -> str:
-    parsed = ParsedMediaName(
-        media_type=candidate.media_type,
-        title=candidate.title or candidate.original_title,
-        year=candidate.year,
-        season=candidate.season,
-        episode=candidate.episode,
+def _candidate_title(candidate: MetadataCandidate, fallback: str) -> str:
+    return candidate.title or candidate.original_title or fallback
+
+
+def _merged_candidate_parsed(
+    row: sqlite3.Row,
+    candidate: MetadataCandidate,
+    effective_settings: dict[str, object],
+) -> ParsedMediaName:
+    media_type = candidate.media_type or str(row["media_type"])
+    variables = template_variables_for_media_type(media_type, effective_settings)
+    needs_episode_fields = bool(variables.intersection({"season", "episode", "season_episode", "seasonEpisode"}))
+
+    season = candidate.season
+    episode = candidate.episode
+    if media_type == "episode" and needs_episode_fields:
+        season = season if season is not None else row["season"]
+        episode = episode if episode is not None else row["episode"]
+
+    return ParsedMediaName(
+        media_type=media_type,
+        title=_candidate_title(candidate, str(row["parsed_title"])),
+        year=candidate.year if candidate.year is not None else row["parsed_year"],
+        season=season,
+        episode=episode,
     )
-    return build_preview_name_with_settings(parsed, extension, get_effective_settings(settings))
+
+
+def _candidate_preview_name(parsed: ParsedMediaName, extension: str, effective_settings: dict[str, object]) -> str:
+    return build_preview_name_with_settings(parsed, extension, effective_settings)
+
+
+def _metadata_message(match_status: str, score: int, message: str | None) -> str | None:
+    if message:
+        return message
+    if match_status == "low_confidence":
+        return f"匹配度 {score}%，低于自动回填阈值 85%，请人工确认候选。"
+    if match_status == "manual_selected":
+        return f"已选择候选回填，匹配度 {score}%。"
+    if match_status == MATCH_STATUS_HIGH:
+        return f"匹配度 {score}%，已达到自动回填阈值。"
+    if match_status == "failed":
+        return "未找到可用候选或候选匹配度过低。"
+    return message
 
 
 def _update_preview_metadata(
@@ -320,13 +355,16 @@ def _update_preview_metadata(
         season = row["season"]
         episode = row["episode"]
         if candidate is not None and auto_backfill:
-            suggested_name = _candidate_preview_name(settings, candidate, str(row["original_extension"]))
+            effective_settings = get_effective_settings(settings)
+            candidate_parsed = _merged_candidate_parsed(row, candidate, effective_settings)
+            suggested_name = _candidate_preview_name(candidate_parsed, str(row["original_extension"]), effective_settings)
             edited_name = None
-            media_type = candidate.media_type
-            parsed_title = candidate.title or candidate.original_title
-            parsed_year = candidate.year
-            season = candidate.season
-            episode = candidate.episode
+            media_type = candidate_parsed.media_type
+            parsed_title = candidate_parsed.title
+            parsed_year = candidate_parsed.year
+            season = candidate_parsed.season
+            episode = candidate_parsed.episode
+        final_message = _metadata_message(match_status, score, message)
 
         connection.execute(
             "UPDATE rename_previews SET "
@@ -356,9 +394,9 @@ def _update_preview_metadata(
                 source_override or (candidate.provider if candidate else None),
                 match_status,
                 score,
-                message,
+                final_message,
                 preview_status,
-                message,
+                final_message,
                 now,
                 preview_id,
             ),

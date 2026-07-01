@@ -40,6 +40,16 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual(False, values["imdb.enabled"]["value"])
             self.assertEqual("tmdb_first", values["imdb.priority"]["value"])
             self.assertEqual(10000, values["imdb.timeout_ms"]["value"])
+            self.assertEqual(True, values["privacy.default_sensitive_words_enabled"]["value"])
+            self.assertIn("暴力", values["privacy.default_sensitive_words"]["value"])
+            self.assertEqual([], values["privacy.custom_sensitive_words"]["value"])
+            self.assertEqual(False, values["ai.enabled"]["value"])
+            self.assertEqual("deepseek", values["ai.provider"]["value"])
+            self.assertEqual("deepseek-chat", values["ai.model"]["value"])
+            self.assertTrue(values["ai.api_key"]["sensitive"])
+            self.assertEqual("https://api.deepseek.com", values["ai.base_url"]["value"])
+            self.assertEqual(30000, values["ai.timeout_ms"]["value"])
+            self.assertEqual(2, values["ai.max_retries"]["value"])
 
     def test_update_settings_persists_values_and_masks_secret(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -63,6 +73,36 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual("********3456", values["tmdb.api_key"]["value"])
             self.assertEqual(12000, values["tmdb.timeout_ms"]["value"])
             self.assertEqual(True, values["tmdb.enabled"]["value"])
+
+    def test_update_ai_settings_persists_values_and_masks_secret(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.put(
+                "/api/settings",
+                json={
+                    "values": {
+                        "ai.enabled": "true",
+                        "ai.provider": "deepseek",
+                        "ai.model": "deepseek-reasoner",
+                        "ai.api_key": "sk-ai123456",
+                        "ai.base_url": "https://api.deepseek.com/v1",
+                        "ai.timeout_ms": "45000",
+                        "ai.max_retries": "3",
+                    }
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            values = {item["key"]: item for item in response.json()}
+            self.assertEqual(True, values["ai.enabled"]["value"])
+            self.assertEqual("deepseek-reasoner", values["ai.model"]["value"])
+            self.assertEqual("********3456", values["ai.api_key"]["value"])
+            self.assertEqual("https://api.deepseek.com/v1", values["ai.base_url"]["value"])
+            self.assertEqual(45000, values["ai.timeout_ms"]["value"])
+            self.assertEqual(3, values["ai.max_retries"]["value"])
 
     def test_update_settings_rejects_invalid_values(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:

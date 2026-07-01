@@ -12,7 +12,7 @@ type SortState = {
 const DEFAULT_SORTS: Partial<Record<PaginationKey, SortState>> = {
   "scan-jobs": { prop: "id", order: "descending" },
   "scan-results": { prop: "modified_at", order: "descending" },
-  "rename-previews": { prop: "updated_at", order: "descending" },
+  "rename-previews": { prop: "id", order: "ascending" },
 };
 
 const naturalCollator = new Intl.Collator(undefined, {

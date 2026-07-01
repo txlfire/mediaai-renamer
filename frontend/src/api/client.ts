@@ -274,7 +274,7 @@ export type RenameOperation = {
 export type SystemSetting = {
   key: string;
   category: string;
-  value: string | number | boolean;
+  value: string | number | boolean | string[];
   description: string;
   sensitive: boolean;
   source: string;
@@ -731,7 +731,7 @@ export async function fetchSettings(
 }
 
 export async function updateSettings(
-  values: Record<string, string | number | boolean>,
+  values: Record<string, string | number | boolean | string[]>,
   httpClient: ApiHttpClient = apiClient,
 ): Promise<SystemSetting[]> {
   const put = requirePut(httpClient);

@@ -33,6 +33,61 @@ IMDB_TEST_SNAPSHOT_KEYS = (
     "imdb.priority",
     "imdb.timeout_ms",
 )
+DEFAULT_MEDIA_RISK_SENSITIVE_WORDS = [
+    "情色",
+    "色情",
+    "成人",
+    "成人向",
+    "三级片",
+    "限制级",
+    "裸露",
+    "性爱",
+    "激情",
+    "AV",
+    "av",
+    "FBI WARNING",
+    "fbi warning",
+    "FBIWARNING",
+    "ABP-",
+    "IPX-",
+    "SSNI-",
+    "MIDE-",
+    "STARS-",
+    "SONE-",
+    "HMN-",
+    "MEYD-",
+    "JUQ-",
+    "DASS-",
+    "ADN-",
+    "ATID-",
+    "SHKD-",
+    "RBD-",
+    "NTR-",
+    "MIRD-",
+    "PPPD-",
+    "EBOD-",
+    "MKV-",
+    "FC2-",
+    "HEYZO-",
+    "Carib-",
+    "Tokyo-Hot-",
+    "n0760-",
+    "1pondo-",
+    "暴力",
+    "血腥",
+    "强奸",
+    "性侵",
+    "虐杀",
+    "屠杀",
+    "凶杀",
+    "谋杀",
+    "肢解",
+    "酷刑",
+    "枪战",
+    "毒品",
+    "吸毒",
+    "自杀",
+]
 
 
 @dataclass(frozen=True)
@@ -137,6 +192,68 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         description="IMDb request timeout in milliseconds",
         min_value=5000,
         max_value=30000,
+    ),
+    "ai.enabled": SettingDefinition(
+        key="ai.enabled",
+        category="ai",
+        default=False,
+        value_type="bool",
+        description="Enable AI intelligent parsing",
+        env_var="AI_ENABLED",
+    ),
+    "ai.provider": SettingDefinition(
+        key="ai.provider",
+        category="ai",
+        default="deepseek",
+        value_type="string",
+        description="AI provider",
+        env_var="AI_PROVIDER",
+        allowed_values=("deepseek",),
+    ),
+    "ai.model": SettingDefinition(
+        key="ai.model",
+        category="ai",
+        default="deepseek-chat",
+        value_type="required_string",
+        description="AI model name",
+        env_var="AI_MODEL",
+    ),
+    "ai.api_key": SettingDefinition(
+        key="ai.api_key",
+        category="ai",
+        default="",
+        value_type="secret",
+        description="AI provider API key",
+        sensitive=True,
+        env_var="AI_API_KEY",
+    ),
+    "ai.base_url": SettingDefinition(
+        key="ai.base_url",
+        category="ai",
+        default="https://api.deepseek.com",
+        value_type="url",
+        description="AI provider base URL",
+        env_var="AI_BASE_URL",
+    ),
+    "ai.timeout_ms": SettingDefinition(
+        key="ai.timeout_ms",
+        category="ai",
+        default=30000,
+        value_type="int",
+        description="AI request timeout in milliseconds",
+        env_var="AI_TIMEOUT_MS",
+        min_value=5000,
+        max_value=120000,
+    ),
+    "ai.max_retries": SettingDefinition(
+        key="ai.max_retries",
+        category="ai",
+        default=2,
+        value_type="int",
+        description="AI request max retry count",
+        env_var="AI_MAX_RETRIES",
+        min_value=0,
+        max_value=10,
     ),
     "scan.minimum_file_size": SettingDefinition(
         key="scan.minimum_file_size",
@@ -386,6 +503,27 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         value_type="bool",
         description="Prefer NFSv4",
     ),
+    "privacy.custom_sensitive_words": SettingDefinition(
+        key="privacy.custom_sensitive_words",
+        category="privacy",
+        default=[],
+        value_type="json_list",
+        description="Custom sensitive words for external submission protection",
+    ),
+    "privacy.default_sensitive_words_enabled": SettingDefinition(
+        key="privacy.default_sensitive_words_enabled",
+        category="privacy",
+        default=True,
+        value_type="bool",
+        description="Enable default media risk sensitive words",
+    ),
+    "privacy.default_sensitive_words": SettingDefinition(
+        key="privacy.default_sensitive_words",
+        category="privacy",
+        default=DEFAULT_MEDIA_RISK_SENSITIVE_WORDS,
+        value_type="json_list",
+        description="Default media risk sensitive words",
+    ),
     "shared.mount_check_interval_seconds": SettingDefinition(
         key="shared.mount_check_interval_seconds",
         category="shared",
@@ -405,6 +543,8 @@ def _utc_now() -> str:
 def _serialize_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
     return str(value)
 
 
@@ -788,6 +928,22 @@ def _parse_string(value: object, definition: SettingDefinition) -> str:
     return parsed
 
 
+def _parse_required_string(value: object, definition: SettingDefinition) -> str:
+    parsed = str(value).strip()
+    if not parsed:
+        raise ValueError(f"{definition.key} 不能为空")
+    return parsed
+
+
+def _parse_url(value: object, definition: SettingDefinition) -> str:
+    parsed = str(value).strip().rstrip("/")
+    if not parsed:
+        raise ValueError(f"{definition.key} 不能为空")
+    if not re.match(r"^https?://[^\s]+$", parsed):
+        raise ValueError(f"{definition.key} 必须为 http 或 https 地址")
+    return parsed
+
+
 def _parse_template(value: object, definition: SettingDefinition) -> str:
     parsed = str(value).strip()
     if not parsed:
@@ -817,6 +973,45 @@ def _parse_separator(value: object, definition: SettingDefinition) -> str:
     return parsed
 
 
+def _split_sensitive_words_text(value: str) -> list[str]:
+    normalized = re.sub(r"\r\n|\r|\n", "||", value)
+    return [word.strip() for word in normalized.split("||") if word.strip()]
+
+
+def _parse_json_list(value: object, definition: SettingDefinition) -> list[str]:
+    if isinstance(value, list):
+        parsed = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            parsed = []
+        elif stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{definition.key} 必须为 JSON 数组") from exc
+        else:
+            parsed = _split_sensitive_words_text(stripped)
+    else:
+        raise ValueError(f"{definition.key} 必须为 JSON 数组")
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"{definition.key} 必须为 JSON 数组")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, str):
+            raise ValueError(f"{definition.key} 仅支持文本列表")
+        word = item.strip()
+        if not word:
+            raise ValueError(f"{definition.key} 不允许空敏感词")
+        lowered = word.casefold()
+        if lowered not in seen:
+            normalized.append(word)
+            seen.add(lowered)
+    return normalized
+
+
 def _parse_value(value: object, definition: SettingDefinition) -> object:
     if definition.value_type == "bool":
         return _parse_bool(value)
@@ -830,6 +1025,12 @@ def _parse_value(value: object, definition: SettingDefinition) -> object:
         return _parse_template(value, definition)
     if definition.value_type == "separator":
         return _parse_separator(value, definition)
+    if definition.value_type == "json_list":
+        return _parse_json_list(value, definition)
+    if definition.value_type == "required_string":
+        return _parse_required_string(value, definition)
+    if definition.value_type == "url":
+        return _parse_url(value, definition)
     return _parse_string(value, definition)
 
 

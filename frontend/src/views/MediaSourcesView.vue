@@ -851,7 +851,7 @@ onMounted(() => {
 
 .media-source-path-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: clamp(0.75rem, 1.4vw, 1rem);
   min-width: 0;
@@ -884,9 +884,10 @@ onMounted(() => {
 .media-source-path-actions {
   display: flex;
   align-items: flex-end;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: clamp(0.5rem, 0.8vw, 0.75rem);
-  height: calc(1.375rem + 34px);
+  height: auto;
   margin-left: 0;
   min-width: max-content;
   padding-top: 0;
@@ -1022,10 +1023,6 @@ onMounted(() => {
 }
 
 @media (max-width: 1280px) {
-  .media-source-path-header {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .media-source-path-actions {
     justify-content: flex-start;
     padding-top: 0;

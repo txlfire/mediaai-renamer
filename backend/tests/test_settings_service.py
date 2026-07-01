@@ -42,6 +42,19 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(False, effective["imdb.enabled"])
             self.assertEqual("tmdb_first", effective["imdb.priority"])
             self.assertEqual(10000, effective["imdb.timeout_ms"])
+            self.assertEqual(True, effective["privacy.default_sensitive_words_enabled"])
+            self.assertIn("情色", effective["privacy.default_sensitive_words"])
+            self.assertIn("暴力", effective["privacy.default_sensitive_words"])
+            self.assertIn("FBI WARNING", effective["privacy.default_sensitive_words"])
+            self.assertIn("IPX-", effective["privacy.default_sensitive_words"])
+            self.assertEqual([], effective["privacy.custom_sensitive_words"])
+            self.assertEqual(False, effective["ai.enabled"])
+            self.assertEqual("deepseek", effective["ai.provider"])
+            self.assertEqual("deepseek-chat", effective["ai.model"])
+            self.assertEqual("", effective["ai.api_key"])
+            self.assertEqual("https://api.deepseek.com", effective["ai.base_url"])
+            self.assertEqual(30000, effective["ai.timeout_ms"])
+            self.assertEqual(2, effective["ai.max_retries"])
 
     def test_default_m5_non_tmdb_settings_are_available(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -135,6 +148,14 @@ class SettingsServiceTest(unittest.TestCase):
                 {"imdb.priority": "bad"},
                 {"imdb.timeout_ms": "4000"},
                 {"imdb.timeout_ms": "31000"},
+                {"ai.enabled": "yes"},
+                {"ai.provider": "openai"},
+                {"ai.model": ""},
+                {"ai.base_url": "ftp://api.example.com"},
+                {"ai.timeout_ms": "4999"},
+                {"ai.timeout_ms": "120001"},
+                {"ai.max_retries": "-1"},
+                {"ai.max_retries": "11"},
                 {"scan.minimum_file_size": "-1"},
             ]
 
@@ -151,7 +172,43 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(False, effective["imdb.enabled"])
             self.assertEqual("tmdb_first", effective["imdb.priority"])
             self.assertEqual(10000, effective["imdb.timeout_ms"])
+            self.assertEqual(False, effective["ai.enabled"])
+            self.assertEqual("deepseek", effective["ai.provider"])
+            self.assertEqual("deepseek-chat", effective["ai.model"])
             self.assertEqual(0, effective["scan.minimum_file_size"])
+
+    def test_ai_settings_validate_persist_and_mask_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            update_setting_values(
+                settings,
+                {
+                    "ai.enabled": "true",
+                    "ai.provider": "deepseek",
+                    "ai.model": "deepseek-reasoner",
+                    "ai.api_key": "sk-test123456",
+                    "ai.base_url": "https://api.deepseek.com/v1",
+                    "ai.timeout_ms": "45000",
+                    "ai.max_retries": "3",
+                },
+                operator="admin",
+            )
+
+            effective = get_effective_settings(settings)
+            values = list_setting_values(settings)
+            api_key = next(item for item in values if item.key == "ai.api_key")
+
+            self.assertEqual(True, effective["ai.enabled"])
+            self.assertEqual("deepseek", effective["ai.provider"])
+            self.assertEqual("deepseek-reasoner", effective["ai.model"])
+            self.assertEqual("sk-test123456", effective["ai.api_key"])
+            self.assertEqual("https://api.deepseek.com/v1", effective["ai.base_url"])
+            self.assertEqual(45000, effective["ai.timeout_ms"])
+            self.assertEqual(3, effective["ai.max_retries"])
+            self.assertTrue(api_key.sensitive)
+            self.assertEqual("********3456", api_key.value)
 
     def test_m5_non_tmdb_settings_validate_and_persist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -168,6 +225,9 @@ class SettingsServiceTest(unittest.TestCase):
                     "operations.log_retention_days": "7",
                     "shared.default_path_type": "mounted_nfs",
                     "shared.directory_browse_limit": "300",
+                    "privacy.default_sensitive_words_enabled": "false",
+                    "privacy.default_sensitive_words": "剧透风险|| 成人向 ||剧透风险",
+                    "privacy.custom_sensitive_words": "家庭录像||private",
                 },
                 operator="admin",
             )
@@ -180,6 +240,27 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(7, effective["operations.log_retention_days"])
             self.assertEqual("mounted_nfs", effective["shared.default_path_type"])
             self.assertEqual(300, effective["shared.directory_browse_limit"])
+            self.assertEqual(False, effective["privacy.default_sensitive_words_enabled"])
+            self.assertEqual(["剧透风险", "成人向"], effective["privacy.default_sensitive_words"])
+            self.assertEqual(["家庭录像", "private"], effective["privacy.custom_sensitive_words"])
+
+    def test_sensitive_words_accept_legacy_newline_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            update_setting_values(
+                settings,
+                {
+                    "privacy.default_sensitive_words": "剧透风险\n成人向\r\nFBI WARNING",
+                    "privacy.custom_sensitive_words": "家庭录像\nprivate",
+                },
+                operator="admin",
+            )
+
+            effective = get_effective_settings(settings)
+            self.assertEqual(["剧透风险", "成人向", "FBI WARNING"], effective["privacy.default_sensitive_words"])
+            self.assertEqual(["家庭录像", "private"], effective["privacy.custom_sensitive_words"])
 
     def test_m5_non_tmdb_settings_reject_invalid_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -199,6 +280,11 @@ class SettingsServiceTest(unittest.TestCase):
                 {"shared.connection_timeout_seconds": "0"},
                 {"shared.directory_browse_limit": "0"},
                 {"shared.nfs_retry_count": "-1"},
+                {"privacy.default_sensitive_words_enabled": "yes"},
+                {"privacy.default_sensitive_words": '["暴力", 123]'},
+                {"privacy.default_sensitive_words": '[""]'},
+                {"privacy.custom_sensitive_words": '["private", 123]'},
+                {"privacy.custom_sensitive_words": '[""]'},
             ]
 
             for payload in invalid_payloads:

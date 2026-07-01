@@ -164,6 +164,33 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("Matrix CN", updated.parsed_title)
         self.assertEqual(1999, updated.parsed_year)
 
+    def test_manual_episode_candidate_selection_preserves_template_required_fields(self):
+        update_setting_values(
+            self.settings,
+            {
+                "naming.episode_template": '[{"key":"title","label":"标题","variable":"title"},{"key":"year","label":"年份","variable":"year"},{"key":"season_episode","label":"季集组合","variable":"season_episode"}]',
+            },
+            operator="admin",
+        )
+        candidate = MetadataCandidate("TMDB", "tv-1", "episode", "廉政追缉令", "ICAC Investigators", 1997, None, None, "")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET media_type = ?, parsed_title = ?, parsed_year = ?, season = ?, episode = ? WHERE id = ?",
+                ("episode", "廉政追缉令", None, 1, 17, self.preview.id),
+            )
+            connection.commit()
+
+        updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=70)
+
+        self.assertEqual("tmdb_selected", updated.status)
+        self.assertEqual("manual_selected", updated.metadata_match_status)
+        self.assertEqual(70, updated.metadata_match_score)
+        self.assertEqual("廉政追缉令", updated.parsed_title)
+        self.assertEqual(1997, updated.parsed_year)
+        self.assertEqual(1, updated.season)
+        self.assertEqual(17, updated.episode)
+        self.assertEqual("廉政追缉令.1997.S01E17.mkv", updated.current_target_name)
+
     def test_metadata_match_uses_parsed_title_by_default(self):
         provider = FakeMetadataProvider(
             [

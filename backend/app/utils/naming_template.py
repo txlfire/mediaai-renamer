@@ -6,6 +6,7 @@ import re
 from app.schema.media import ParsedMediaName
 
 ILLEGAL_FILENAME_CHARS = r'[<>:"/\\|?*]'
+TEMPLATE_VARIABLE_PATTERN = re.compile(r"\{([A-Za-z0-9_]+)(?::[^}]*)?\}")
 
 
 def _normalize_title(value: str) -> str:
@@ -74,6 +75,30 @@ def _build_from_builder_template(
             parts.append(_normalize_title(value))
     base = separator.join(part for part in parts if part)
     return f"{base or _normalize_title(parsed.title)}{extension}"
+
+
+def template_variables_for_media_type(media_type: str, settings: dict[str, object]) -> set[str]:
+    """Return variables used by the active naming builder template."""
+
+    template_key = "naming.episode_template" if media_type == "episode" else "naming.movie_template"
+    template = str(settings.get(template_key) or "")
+    if template.startswith("["):
+        try:
+            items = json.loads(template)
+        except json.JSONDecodeError:
+            return set()
+        if not isinstance(items, list):
+            return set()
+        variables: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            variable = str(item.get("variable") or item.get("key") or "").split(":")[0]
+            if variable:
+                variables.add(variable)
+        return variables
+
+    return {match.group(1).split(":")[0] for match in TEMPLATE_VARIABLE_PATTERN.finditer(template)}
 
 
 def _value_for_variable(parsed: ParsedMediaName, variable: str, keep_year: bool) -> str:

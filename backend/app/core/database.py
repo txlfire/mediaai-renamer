@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -96,6 +96,37 @@ def _ensure_imdb_test_result_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_external_submission_blocks_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS external_submission_blocks "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source_module TEXT NOT NULL, "
+        "source_record_id INTEGER NOT NULL, "
+        "file_name TEXT NOT NULL, "
+        "file_path TEXT NOT NULL, "
+        "match_title TEXT, "
+        "target_service TEXT NOT NULL, "
+        "block_rule_type TEXT NOT NULL, "
+        "block_rule_name TEXT NOT NULL, "
+        "matched_value_masked TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'blocked', "
+        "user_decision TEXT, "
+        "override_reason TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "decided_at TEXT, "
+        "operator TEXT)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_external_submission_blocks_status "
+        "ON external_submission_blocks(status, target_service, created_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_external_submission_blocks_source "
+        "ON external_submission_blocks(source_module, source_record_id, target_service)"
+    )
+
+
 def _ensure_rename_preview_metadata_columns(connection: sqlite3.Connection) -> None:
     if "rename_previews" not in _table_names(connection):
         return
@@ -172,6 +203,10 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         _ensure_imdb_test_result_table(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 9:
+        _ensure_external_submission_blocks_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -193,6 +228,7 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_system_settings_table(connection)
         _ensure_page_test_results_table(connection)
         _ensure_imdb_test_result_table(connection)
+        _ensure_external_submission_blocks_table(connection)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS media_sources "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
