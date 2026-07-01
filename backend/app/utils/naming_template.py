@@ -72,7 +72,7 @@ def _build_from_builder_template(
         variable = str(item.get("variable") or item.get("key") or "")
         value = _value_for_variable(parsed, variable, keep_year)
         if value:
-            parts.append(_normalize_title(value))
+            parts.append(_format_template_part(_apply_element_format(value, item), variable))
     base = separator.join(part for part in parts if part)
     return f"{base or _normalize_title(parsed.title)}{extension}"
 
@@ -102,8 +102,18 @@ def template_variables_for_media_type(media_type: str, settings: dict[str, objec
 
 
 def _value_for_variable(parsed: ParsedMediaName, variable: str, keep_year: bool) -> str:
+    if variable in parsed.extra:
+        return str(parsed.extra.get(variable) or "")
     if variable in {"title", "original_title"}:
+        if variable == "original_title":
+            return str(parsed.extra.get("original_title") or parsed.extra.get("english_title") or parsed.title)
         return parsed.title
+    if variable == "parsed_title":
+        return str(parsed.extra.get("parsed_title") or parsed.title)
+    if variable in {"chinese_title", "localized_title"}:
+        return str(parsed.extra.get(variable) or parsed.title)
+    if variable == "english_title":
+        return str(parsed.extra.get("english_title") or parsed.extra.get("original_title") or "")
     if variable == "year" and parsed.year and keep_year:
         return str(parsed.year)
     if variable == "season" and parsed.season is not None:
@@ -113,3 +123,27 @@ def _value_for_variable(parsed: ParsedMediaName, variable: str, keep_year: bool)
     if variable in {"season_episode", "seasonEpisode"} and parsed.season is not None and parsed.episode is not None:
         return f"S{parsed.season:02d}E{parsed.episode:02d}"
     return ""
+
+
+def _apply_element_format(value: str, item: dict[str, object]) -> str:
+    raw_format = item.get("format")
+    if not isinstance(raw_format, dict):
+        return value
+    prefix = str(raw_format.get("prefix") or "")
+    formatted = f"{prefix}{value}" if prefix and not value.startswith(prefix) else value
+    bracket_style = str(raw_format.get("bracketStyle") or "none")
+    brackets = {
+        "square": ("[", "]"),
+        "round": ("(", ")"),
+        "curly": ("{", "}"),
+    }.get(bracket_style)
+    if brackets:
+        return f"{brackets[0]}{formatted}{brackets[1]}"
+    return formatted
+
+
+def _format_template_part(value: str, variable: str) -> str:
+    base_variable = variable.split(":")[0]
+    if base_variable in {"tmdb_id", "imdb_id"}:
+        return re.sub(ILLEGAL_FILENAME_CHARS, " ", value).strip()
+    return _normalize_title(value)

@@ -1,6 +1,6 @@
 """媒体扫描相关数据模型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,7 @@ class ParsedMediaName:
     season: int | None
     episode: int | None
     message: str | None = None
+    extra: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ class RenamePreview:
     message: str | None
     created_at: str
     updated_at: str
+    metadata_candidate_count: int = 0
 
 
 @dataclass(frozen=True)

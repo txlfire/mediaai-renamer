@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { FullScreen, Close } from "@element-plus/icons-vue";
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
 
-defineProps<{
+const props = withDefaults(defineProps<{
   title: string;
-}>();
+  variant?: "default" | "tab-header";
+}>(), {
+  variant: "default",
+});
 
 const isFullscreen = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
+const fullscreenIcon = "\u26f6";
+const exitFullscreenIcon = "\u2922";
 let resizeObserver: ResizeObserver | null = null;
 let resizeFrame = 0;
 
@@ -57,12 +61,25 @@ watch(isFullscreen, async () => {
 
 <template>
   <Teleport to=".app-workbench" :disabled="!isFullscreen">
-    <div ref="panelRef" class="fullscreen-table-panel" :class="{ 'is-table-fullscreen': isFullscreen }">
-      <div class="fullscreen-table-toolbar">
-        <span>{{ title }}</span>
-        <el-button :icon="isFullscreen ? Close : FullScreen" @click="toggleFullscreen">
-          {{ isFullscreen ? messages.common.exitFullscreen : messages.common.fullscreen }}
-        </el-button>
+    <div
+      ref="panelRef"
+      class="fullscreen-table-panel"
+      :class="{
+        'is-table-fullscreen': isFullscreen,
+        'is-tab-header-fullscreen-panel': props.variant === 'tab-header',
+      }"
+    >
+      <div class="fullscreen-table-toolbar" :class="{ 'is-titleless': !title }">
+        <span v-if="title">{{ title }}</span>
+        <el-tooltip :content="isFullscreen ? messages.common.exitFullscreen : messages.common.fullscreen" placement="top">
+          <el-button
+            class="fullscreen-icon-button"
+            :aria-label="isFullscreen ? messages.common.exitFullscreen : messages.common.fullscreen"
+            @click="toggleFullscreen"
+          >
+            {{ isFullscreen ? exitFullscreenIcon : fullscreenIcon }}
+          </el-button>
+        </el-tooltip>
       </div>
       <slot />
     </div>

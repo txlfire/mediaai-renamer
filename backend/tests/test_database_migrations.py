@@ -238,6 +238,51 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("override_reason", columns)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
+    def test_existing_m9_database_is_migrated_to_metadata_candidate_cache_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '9')")
+                connection.execute(
+                    "CREATE TABLE rename_previews "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, media_file_id INTEGER NOT NULL UNIQUE, "
+                    "media_type TEXT NOT NULL, parsed_title TEXT NOT NULL, parsed_year INTEGER, "
+                    "season INTEGER, episode INTEGER, original_extension TEXT NOT NULL, "
+                    "suggested_name TEXT NOT NULL, edited_name TEXT, metadata_source TEXT, "
+                    "metadata_match_status TEXT, metadata_match_score INTEGER NOT NULL DEFAULT 0, "
+                    "metadata_message TEXT, status TEXT NOT NULL, message TEXT, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO rename_previews "
+                    "(id, media_file_id, media_type, parsed_title, original_extension, suggested_name, "
+                    "metadata_match_score, status, created_at, updated_at) "
+                    "VALUES (1, 1, 'movie', 'Movie', '.mkv', 'Movie.mkv', 90, 'tmdb_selected', 'now', 'now')"
+                )
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                preview_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(rename_previews)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+                status = connection.execute("SELECT status FROM rename_previews WHERE id = 1").fetchone()[0]
+
+            self.assertIn("metadata_candidates_json", preview_columns)
+            self.assertEqual("generated", status)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
 
 if __name__ == "__main__":
     unittest.main()

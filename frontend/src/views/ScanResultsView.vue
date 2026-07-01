@@ -123,7 +123,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <ListPageLayout :title="messages.scanResults.title" :description="messages.scanResults.description">
+  <ListPageLayout class="scan-results-page" :title="messages.scanResults.title" :description="messages.scanResults.description">
     <template #filters>
       <el-select
         v-model="selectedSourceId"

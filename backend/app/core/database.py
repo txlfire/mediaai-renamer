@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -134,6 +134,7 @@ def _ensure_rename_preview_metadata_columns(connection: sqlite3.Connection) -> N
     _ensure_column(connection, "rename_previews", "metadata_match_status", "TEXT")
     _ensure_column(connection, "rename_previews", "metadata_match_score", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "rename_previews", "metadata_message", "TEXT")
+    _ensure_column(connection, "rename_previews", "metadata_candidates_json", "TEXT")
 
 
 def _ensure_pending_files_table(connection: sqlite3.Connection) -> None:
@@ -205,6 +206,14 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
     if version < 9:
         _ensure_external_submission_blocks_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 10:
+        _ensure_rename_preview_metadata_columns(connection)
+        connection.execute(
+            "UPDATE rename_previews SET status = 'generated' "
+            "WHERE status IN ('tmdb_matched', 'tmdb_selected')"
+        )
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 
@@ -298,6 +307,7 @@ def ensure_database(settings: AppSettings) -> Path:
             "metadata_match_status TEXT, "
             "metadata_match_score INTEGER NOT NULL DEFAULT 0, "
             "metadata_message TEXT, "
+            "metadata_candidates_json TEXT, "
             "status TEXT NOT NULL, "
             "message TEXT, "
             "created_at TEXT NOT NULL, "

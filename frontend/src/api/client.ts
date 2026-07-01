@@ -187,6 +187,7 @@ export type RenamePreview = {
   metadata_match_status: string | null;
   metadata_match_score: number;
   metadata_message: string | null;
+  metadata_candidate_count: number;
   message: string | null;
   updated_at: string;
 };
@@ -201,6 +202,19 @@ export type MetadataCandidate = {
   season: number | null;
   episode: number | null;
   overview: string;
+  localized_title?: string;
+  chinese_title?: string;
+  english_title?: string;
+  release_date?: string;
+  vote_average?: number | null;
+  poster_path?: string;
+  original_language?: string;
+  genres?: string[];
+  cast?: string[];
+  directors?: string[];
+  tmdb_id?: string;
+  imdb_id?: string;
+  raw_data?: Record<string, unknown>;
 };
 
 export type MetadataMatchResult = {
@@ -713,12 +727,16 @@ export async function fetchRenamePreviewMetadataCandidates(
 export async function applyRenamePreviewMetadataCandidate(
   previewId: number,
   match: MetadataMatchResult,
+  selectedFieldsOrHttpClient: string[] | ApiHttpClient = [],
   httpClient: ApiHttpClient = apiClient,
 ): Promise<RenamePreview> {
-  const post = requirePost(httpClient);
+  const selectedFields = Array.isArray(selectedFieldsOrHttpClient) ? selectedFieldsOrHttpClient : [];
+  const client = Array.isArray(selectedFieldsOrHttpClient) ? httpClient : selectedFieldsOrHttpClient;
+  const post = requirePost(client);
   const response = await post<RenamePreview>(`/rename-previews/${previewId}/metadata-candidate`, {
     candidate: match.candidate,
     score: match.score,
+    selected_fields: selectedFields.length ? selectedFields : undefined,
   });
   return response.data;
 }

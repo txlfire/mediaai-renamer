@@ -1,6 +1,7 @@
 """Metadata scraping and matching models."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,19 @@ class MetadataCandidate:
     season: int | None
     episode: int | None
     overview: str
+    localized_title: str = ""
+    chinese_title: str = ""
+    english_title: str = ""
+    release_date: str = ""
+    vote_average: float | None = None
+    poster_path: str = ""
+    original_language: str = ""
+    genres: list[str] = field(default_factory=list)
+    cast: list[str] = field(default_factory=list)
+    directors: list[str] = field(default_factory=list)
+    tmdb_id: str = ""
+    imdb_id: str = ""
+    raw_data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

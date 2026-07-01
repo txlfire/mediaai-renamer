@@ -108,6 +108,30 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
 
         self.assertIn("The.Matrix.mkv", {preview.suggested_name for preview in previews})
 
+    def test_generate_preview_marks_same_target_name_as_no_rename(self):
+        same_name_file = self.media_dir / "Plain.Movie.2024.mkv"
+        same_name_file.write_text("same", encoding="utf-8")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    3,
+                    str(same_name_file),
+                    same_name_file.name,
+                    ".mkv",
+                    same_name_file.stat().st_size,
+                ),
+            )
+            connection.commit()
+
+        generate_rename_previews(self.settings, media_file_ids=[3])
+        preview = list_rename_previews(self.settings, keyword="Plain")[0]
+
+        self.assertEqual("Plain.Movie.2024.mkv", preview.current_target_name)
+        self.assertEqual("no_rename", preview.status)
+
     def test_update_preview_sets_edited_name_and_keeps_extension(self):
         generate_rename_previews(self.settings)
         preview = list_rename_previews(self.settings)[0]
@@ -148,6 +172,7 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual(2, len(list_response.json()))
         self.assertIn("current_target_name", list_response.json()[0])
         self.assertIn("metadata_match_score", list_response.json()[0])
+        self.assertIn("metadata_candidate_count", list_response.json()[0])
 
     def test_update_preview_api(self):
         app = create_app(self.settings)
@@ -188,7 +213,7 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         )
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual("tmdb_selected", response.json()["status"])
+        self.assertEqual("generated", response.json()["status"])
         self.assertEqual("TMDB", response.json()["metadata_source"])
         self.assertEqual(91, response.json()["metadata_match_score"])
 

@@ -90,13 +90,44 @@ class TmdbClient:
         for item in payload.get("results", []):
             if not isinstance(item, dict):
                 continue
-            candidates.append(self._candidate_from_item(item, parsed.media_type))
+            detail = self._detail_for_item(item, media_type)
+            candidates.append(self._candidate_from_item({**item, **detail}, parsed.media_type))
         return candidates
+
+    def _detail_for_item(self, item: dict[str, Any], media_type: str) -> dict[str, Any]:
+        provider_id = item.get("id")
+        if not provider_id:
+            return {}
+        detail_path = f"/tv/{provider_id}" if media_type == "tv" else f"/movie/{provider_id}"
+        try:
+            return self._get_json(
+                detail_path,
+                {"append_to_response": "credits,external_ids,translations"},
+            )
+        except Exception:
+            return {}
 
     def _candidate_from_item(self, item: dict[str, Any], media_type: str) -> MetadataCandidate:
         title = str(item.get("title") or item.get("name") or "")
         original_title = str(item.get("original_title") or item.get("original_name") or "")
         date_value = str(item.get("release_date") or item.get("first_air_date") or "")
+        credits = item.get("credits") if isinstance(item.get("credits"), dict) else {}
+        cast = [
+            str(person.get("name"))
+            for person in credits.get("cast", [])[:8]
+            if isinstance(person, dict) and person.get("name")
+        ]
+        directors = [
+            str(person.get("name"))
+            for person in credits.get("crew", [])
+            if isinstance(person, dict) and person.get("job") in {"Director", "Series Director"} and person.get("name")
+        ]
+        external_ids = item.get("external_ids") if isinstance(item.get("external_ids"), dict) else {}
+        genres = [
+            str(genre.get("name"))
+            for genre in item.get("genres", [])
+            if isinstance(genre, dict) and genre.get("name")
+        ]
         return MetadataCandidate(
             provider="TMDB",
             provider_id=str(item.get("id") or ""),
@@ -107,6 +138,19 @@ class TmdbClient:
             season=None,
             episode=None,
             overview=str(item.get("overview") or ""),
+            localized_title=title,
+            chinese_title=title if _looks_chinese(title) else "",
+            english_title=original_title,
+            release_date=date_value,
+            vote_average=_float_or_none(item.get("vote_average")),
+            poster_path=str(item.get("poster_path") or ""),
+            original_language=str(item.get("original_language") or ""),
+            genres=genres,
+            cast=cast,
+            directors=list(dict.fromkeys(directors)),
+            tmdb_id=str(item.get("id") or ""),
+            imdb_id=str(external_ids.get("imdb_id") or ""),
+            raw_data=item,
         )
 
 
@@ -117,3 +161,14 @@ def _extract_year(value: str) -> int | None:
         return int(value[:4])
     except ValueError:
         return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _looks_chinese(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)

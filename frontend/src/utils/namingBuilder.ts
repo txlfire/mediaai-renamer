@@ -32,6 +32,9 @@ export const VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(?::[^{}]+)?$/;
 
 export const NAMING_ELEMENT_DEFINITIONS: NamingElementDefinition[] = [
   { key: "title", labelKey: "title", variable: "title", category: "core" },
+  { key: "chinese_title", labelKey: "chineseTitle", variable: "chinese_title", category: "core" },
+  { key: "english_title", labelKey: "englishTitle", variable: "english_title", category: "core" },
+  { key: "parsed_title", labelKey: "parsedTitle", variable: "parsed_title", category: "core" },
   { key: "original_title", labelKey: "originalTitle", variable: "original_title", category: "core" },
   { key: "year", labelKey: "year", variable: "year", category: "core" },
   {
@@ -81,6 +84,9 @@ export const NAMING_TEMPLATE_PRESETS: Record<NamingTemplateType, Record<string, 
 
 export const DEFAULT_NAMING_SAMPLE_DATA: Record<string, string | number> = {
   title: "Inception",
+  chinese_title: "\u76d7\u68a6\u7a7a\u95f4",
+  english_title: "Inception",
+  parsed_title: "Inception",
   original_title: "Inception",
   year: 2010,
   tmdb_id: 27205,
@@ -105,6 +111,9 @@ export const DEFAULT_NAMING_SAMPLE_DATA: Record<string, string | number> = {
 const EPISODE_NAMING_SAMPLE_DATA: Record<string, string | number> = {
   ...DEFAULT_NAMING_SAMPLE_DATA,
   title: "\u6743\u529b\u7684\u6e38\u620f",
+  chinese_title: "\u6743\u529b\u7684\u6e38\u620f",
+  english_title: "Game of Thrones",
+  parsed_title: "Game.of.Thrones",
   original_title: "Game of Thrones",
   year: 2011,
   tmdb_id: 1399,

@@ -582,9 +582,10 @@ onMounted(() => {
               </el-form-item>
             </div>
             <div class="source-form-actions media-source-path-actions">
-              <el-form-item class="media-source-status-item" :label="messages.common.status">
+              <div class="media-source-status-inline">
+                <span>{{ messages.common.status }}</span>
                 <el-switch v-model="form.enabled" :active-text="messages.status.enabled" :inactive-text="messages.status.disabled" />
-              </el-form-item>
+              </div>
               <el-button type="primary" :icon="FolderAdd" @click="submitSource">
                 {{ messages.mediaSources.save }}
               </el-button>
@@ -596,23 +597,21 @@ onMounted(() => {
       </el-form>
     </template>
 
-    <template #actions>
-      <div class="media-source-table-actions">
-        <el-button :icon="Delete" :disabled="!selectedIds.length" @click="removeSelectedSources">
-          {{ pageText.batchRemove }}
-        </el-button>
-        <el-button :icon="Refresh" @click="mediaStore.loadMediaSources">{{ messages.common.refresh }}</el-button>
-      </div>
-    </template>
-
     <template #table>
-      <el-table
-        :data="pagedMediaSources"
-        class="data-table"
-        height="100%"
-        table-layout="auto"
-        @selection-change="handleSelectionChange"
-      >
+      <div class="media-source-table-panel">
+        <div class="media-source-table-toolbar">
+          <el-button :icon="Delete" :disabled="!selectedIds.length" @click="removeSelectedSources">
+            {{ pageText.batchRemove }}
+          </el-button>
+          <el-button :icon="Refresh" @click="mediaStore.loadMediaSources">{{ messages.common.refresh }}</el-button>
+        </div>
+        <el-table
+          :data="pagedMediaSources"
+          class="data-table"
+          height="100%"
+          table-layout="auto"
+          @selection-change="handleSelectionChange"
+        >
         <el-table-column type="selection" width="44" align="center" fixed="left" />
         <el-table-column :label="messages.mediaSources.name" min-width="180" align="left" header-align="left">
           <template #default="{ row }">
@@ -691,7 +690,8 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </template>
 
     <template #pagination>
@@ -745,9 +745,10 @@ onMounted(() => {
             <el-input v-model="editForm.nfs_export" :placeholder="pageText.nfsExportPlaceholder" />
           </el-form-item>
         </template>
-        <el-form-item :label="messages.common.status">
+        <div class="media-source-status-inline media-source-dialog-status-inline">
+          <span>{{ messages.common.status }}</span>
           <el-switch v-model="editForm.enabled" :active-text="messages.status.enabled" :inactive-text="messages.status.disabled" />
-        </el-form-item>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="editDialogVisible = false">{{ messages.common.cancel }}</el-button>
@@ -894,11 +895,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.media-source-status-item {
-  flex: 0 0 auto;
-  width: max-content;
-}
-
 .media-source-path-actions > .el-button {
   flex: 0 0 auto;
 }
@@ -1000,6 +996,42 @@ onMounted(() => {
 .media-source-path-type-help:focus,
 .media-source-path-type-help:focus-visible {
   outline: none;
+}
+
+.media-source-status-inline {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 34px;
+  color: var(--el-text-color-regular);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.media-source-status-inline > span {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+
+.media-source-table-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.media-source-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(0.5rem, 1vw, 0.75rem);
+}
+
+.media-source-dialog-status-inline {
+  margin-top: 0.25rem;
 }
 
 :global(.media-source-path-popover) {

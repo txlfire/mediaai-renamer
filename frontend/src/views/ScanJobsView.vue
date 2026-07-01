@@ -121,6 +121,23 @@ function scanStatusText(row: { status: string; error_message?: string | null }) 
   return formatScanJobStatus(row.status);
 }
 
+function scanStatusTagType(status: string) {
+  if (status === "completed") {
+    return "success";
+  }
+  if (status === "partial_completed") {
+    return "warning";
+  }
+  if (status === "failed") {
+    return "danger";
+  }
+  return "info";
+}
+
+function hasScanDetail(row: { status: string; error_message?: string | null }) {
+  return row.status === "partial_completed" && Boolean(row.error_message);
+}
+
 function openScanLog(row: { error_message?: string | null }) {
   selectedScanLog.value = row.error_message || messages.common.emptyLogs;
   scanLogDialogVisible.value = true;
@@ -190,9 +207,22 @@ onMounted(async () => {
         @sort-change="handleSortChange"
       >
         <el-table-column prop="id" :label="messages.scanJobs.columns.taskId" min-width="92" align="center" header-align="center" sortable="custom" />
-        <el-table-column :label="messages.common.status" min-width="88" align="center" header-align="center">
+        <el-table-column :label="messages.common.status" min-width="240" align="left" header-align="left">
           <template #default="{ row }">
-            <TextCell :value="scanStatusText(row)" :max-length="tableDisplayConfig.statusMaxLength" />
+            <div class="scan-status-cell">
+              <el-tag :type="scanStatusTagType(row.status)" effect="light">
+                {{ formatScanJobStatus(row.status) }}
+              </el-tag>
+              <el-tooltip
+                v-if="hasScanDetail(row)"
+                :content="row.error_message"
+                placement="top"
+              >
+                <button class="scan-status-detail-button" type="button" @click.stop="openScanLog(row)">
+                  <TextCell :value="scanStatusText(row)" :max-length="tableDisplayConfig.statusMaxLength" />
+                </button>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="scanned_count" :label="messages.scanJobs.columns.scanned" min-width="90" align="center" header-align="center" sortable="custom" />

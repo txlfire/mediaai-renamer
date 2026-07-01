@@ -1,8 +1,11 @@
 """Rename preview service."""
 
 from contextlib import closing
+from dataclasses import asdict
 from datetime import datetime, timezone
-from pathlib import PurePath
+from pathlib import Path, PurePath
+import json
+import os
 import sqlite3
 
 from app.core.config import AppSettings
@@ -29,6 +32,7 @@ def _utc_now() -> str:
 def _row_to_preview(row: sqlite3.Row) -> RenamePreview:
     edited_name = row["edited_name"]
     suggested_name = str(row["suggested_name"])
+    metadata_candidates_json = row["metadata_candidates_json"] if "metadata_candidates_json" in row.keys() else None
     return RenamePreview(
         id=int(row["id"]),
         media_file_id=int(row["media_file_id"]),
@@ -51,7 +55,49 @@ def _row_to_preview(row: sqlite3.Row) -> RenamePreview:
         message=row["message"],
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        metadata_candidate_count=len(_deserialize_metadata_matches(metadata_candidates_json)),
     )
+
+
+def _serialize_metadata_matches(matches: list[MetadataMatchResult]) -> str | None:
+    if not matches:
+        return None
+    return json.dumps([asdict(match) for match in matches], ensure_ascii=False)
+
+
+def _deserialize_metadata_matches(value: str | None) -> list[MetadataMatchResult]:
+    if not value:
+        return []
+    try:
+        raw_items = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw_items, list):
+        return []
+    matches: list[MetadataMatchResult] = []
+    for item in raw_items:
+        if not isinstance(item, dict) or not isinstance(item.get("candidate"), dict):
+            continue
+        try:
+            matches.append(
+                MetadataMatchResult(
+                    candidate=MetadataCandidate(**item["candidate"]),
+                    score=int(item.get("score") or 0),
+                    status=str(item.get("status") or ""),
+                )
+            )
+        except TypeError:
+            continue
+    return matches
+
+
+def _status_for_target(file_path: str, original_name: str, target_name: str, fallback_status: str) -> str:
+    if original_name != target_name:
+        return fallback_status
+    path = Path(file_path)
+    if path.exists() and os.access(path, os.R_OK | os.W_OK):
+        return "no_rename"
+    return "unable_rename"
 
 
 def _query_media_files(
@@ -103,9 +149,10 @@ def generate_rename_previews(
             parsed = parse_media_filename(str(row["file_name"]))
             suggested_name = build_preview_name_with_settings(parsed, str(row["extension"]), effective_settings)
             status = "needs_review" if parsed.media_type == "unknown" or parsed.message else "generated"
+            status = _status_for_target(str(row["file_path"]), str(row["file_name"]), suggested_name, status)
             if status == "needs_review":
                 needs_review_count += 1
-            else:
+            elif status == "generated":
                 generated_count += 1
 
             existing = connection.execute(
@@ -132,6 +179,7 @@ def generate_rename_previews(
                 "original_extension = excluded.original_extension, "
                 "suggested_name = excluded.suggested_name, "
                 "edited_name = excluded.edited_name, "
+                "metadata_candidates_json = NULL, "
                 "status = excluded.status, "
                 "message = excluded.message, "
                 "updated_at = excluded.updated_at",
@@ -195,7 +243,7 @@ def list_rename_previews(
             "SELECT rp.id, rp.media_file_id, mf.file_path, mf.file_name, rp.media_type, "
             "rp.parsed_title, rp.parsed_year, rp.season, rp.episode, rp.original_extension, "
             "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
-            "rp.metadata_match_score, rp.metadata_message, rp.status, rp.message, "
+            "rp.metadata_match_score, rp.metadata_message, rp.metadata_candidates_json, rp.status, rp.message, "
             "rp.created_at, rp.updated_at "
             "FROM rename_previews rp "
             "JOIN media_files mf ON mf.id = rp.media_file_id"
@@ -222,7 +270,9 @@ def update_rename_preview(
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
-            "SELECT original_extension FROM rename_previews WHERE id = ?",
+            "SELECT rp.original_extension, mf.file_path, mf.file_name "
+            "FROM rename_previews rp JOIN media_files mf ON mf.id = rp.media_file_id "
+            "WHERE rp.id = ?",
             (preview_id,),
         ).fetchone()
         if row is None:
@@ -231,10 +281,11 @@ def update_rename_preview(
         extension = str(row["original_extension"])
         if extension and not normalized.lower().endswith(extension.lower()):
             normalized = f"{normalized}{extension}"
+        status = _status_for_target(str(row["file_path"]), str(row["file_name"]), normalized, "edited")
 
         connection.execute(
             "UPDATE rename_previews SET edited_name = ?, status = ?, updated_at = ? WHERE id = ?",
-            (normalized, "edited", now, preview_id),
+            (normalized, status, now, preview_id),
         )
         connection.commit()
 
@@ -250,7 +301,7 @@ def _get_preview_row(connection: sqlite3.Connection, preview_id: int) -> sqlite3
         "SELECT rp.id, rp.media_file_id, mf.file_path, mf.file_name, rp.media_type, "
         "rp.parsed_title, rp.parsed_year, rp.season, rp.episode, rp.original_extension, "
         "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
-        "rp.metadata_match_score, rp.metadata_message, rp.status, rp.message, "
+        "rp.metadata_match_score, rp.metadata_message, rp.metadata_candidates_json, rp.status, rp.message, "
         "rp.created_at, rp.updated_at "
         "FROM rename_previews rp "
         "JOIN media_files mf ON mf.id = rp.media_file_id "
@@ -290,21 +341,50 @@ def _candidate_title(candidate: MetadataCandidate, fallback: str) -> str:
     return candidate.title or candidate.original_title or fallback
 
 
+def _candidate_extra(row: sqlite3.Row, candidate: MetadataCandidate) -> dict[str, str]:
+    title = _candidate_title(candidate, str(row["parsed_title"]))
+    english_title = candidate.english_title or candidate.original_title
+    chinese_title = candidate.chinese_title or candidate.localized_title or candidate.title
+    values = {
+        "title": title,
+        "localized_title": candidate.localized_title or candidate.title,
+        "chinese_title": chinese_title,
+        "english_title": english_title,
+        "original_title": candidate.original_title or english_title,
+        "parsed_title": str(row["parsed_title"]),
+        "year": str(candidate.year or row["parsed_year"] or ""),
+        "tmdb_id": candidate.tmdb_id or (candidate.provider_id if candidate.provider.upper() == "TMDB" else ""),
+        "imdb_id": (candidate.imdb_id or "").removeprefix("tt"),
+        "rating": str(candidate.vote_average or ""),
+        "overview": candidate.overview,
+        "poster_path": candidate.poster_path,
+        "language": candidate.original_language,
+        "genres": ".".join(candidate.genres),
+        "cast": ".".join(candidate.cast),
+        "director": ".".join(candidate.directors),
+    }
+    return {key: value for key, value in values.items() if value not in ("", None)}
+
+
 def _merged_candidate_parsed(
     row: sqlite3.Row,
     candidate: MetadataCandidate,
     effective_settings: dict[str, object],
+    selected_fields: set[str] | None = None,
 ) -> ParsedMediaName:
     media_type = candidate.media_type or str(row["media_type"])
     variables = template_variables_for_media_type(media_type, effective_settings)
+    fillable_variables = variables if selected_fields is None else variables.intersection(selected_fields)
     needs_title = not variables or "title" in variables or "original_title" in variables
-    needs_year = "year" in variables
-    needs_episode_fields = bool(variables.intersection({"season", "episode", "season_episode", "seasonEpisode"}))
+    needs_year = "year" in fillable_variables
+    needs_episode_fields = bool(fillable_variables.intersection({"season", "episode", "season_episode", "seasonEpisode"}))
 
-    title = _candidate_title(candidate, str(row["parsed_title"])) if needs_title else _candidate_title(candidate, "")
+    title = _candidate_title(candidate, str(row["parsed_title"])) if needs_title and (selected_fields is None or "title" in selected_fields or "original_title" in selected_fields) else str(row["parsed_title"])
     year = candidate.year
     if needs_year:
         year = year if year is not None else row["parsed_year"]
+    elif selected_fields is not None:
+        year = row["parsed_year"]
 
     season = candidate.season
     episode = candidate.episode
@@ -312,12 +392,17 @@ def _merged_candidate_parsed(
         season = season if season is not None else row["season"]
         episode = episode if episode is not None else row["episode"]
 
+    extra = _candidate_extra(row, candidate)
+    if selected_fields is not None:
+        extra = {key: value for key, value in extra.items() if key in selected_fields or key == "parsed_title"}
+
     return ParsedMediaName(
         media_type=media_type,
         title=title or str(row["parsed_title"]),
         year=year,
         season=season,
         episode=episode,
+        extra=extra,
     )
 
 
@@ -349,6 +434,8 @@ def _update_preview_metadata(
     auto_backfill: bool,
     preview_status: str,
     source_override: str | None = None,
+    candidate_matches: list[MetadataMatchResult] | None = None,
+    selected_fields: set[str] | None = None,
 ) -> RenamePreview:
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -361,9 +448,10 @@ def _update_preview_metadata(
         parsed_year = row["parsed_year"]
         season = row["season"]
         episode = row["episode"]
+        final_status = str(row["status"])
         if candidate is not None and auto_backfill:
             effective_settings = get_effective_settings(settings)
-            candidate_parsed = _merged_candidate_parsed(row, candidate, effective_settings)
+            candidate_parsed = _merged_candidate_parsed(row, candidate, effective_settings, selected_fields)
             suggested_name = _candidate_preview_name(candidate_parsed, str(row["original_extension"]), effective_settings)
             edited_name = None
             media_type = candidate_parsed.media_type
@@ -371,7 +459,11 @@ def _update_preview_metadata(
             parsed_year = candidate_parsed.year
             season = candidate_parsed.season
             episode = candidate_parsed.episode
+            final_status = _status_for_target(str(row["file_path"]), str(row["file_name"]), suggested_name, "generated")
+        elif candidate is None and preview_status:
+            final_status = preview_status
         final_message = _metadata_message(match_status, score, message)
+        serialized_matches = _serialize_metadata_matches(candidate_matches or ([] if candidate is None else [MetadataMatchResult(candidate, score, match_status)]))
 
         connection.execute(
             "UPDATE rename_previews SET "
@@ -386,6 +478,7 @@ def _update_preview_metadata(
             "metadata_match_status = ?, "
             "metadata_match_score = ?, "
             "metadata_message = ?, "
+            "metadata_candidates_json = ?, "
             "status = ?, "
             "message = ?, "
             "updated_at = ? "
@@ -402,7 +495,8 @@ def _update_preview_metadata(
                 match_status,
                 score,
                 final_message,
-                preview_status,
+                serialized_matches,
+                final_status,
                 final_message,
                 now,
                 preview_id,
@@ -424,6 +518,9 @@ def list_metadata_candidates(
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         row = _get_preview_row(connection, preview_id)
+        cached = _deserialize_metadata_matches(row["metadata_candidates_json"])
+    if cached and provider is None:
+        return cached
     result = match_metadata_candidates(
         settings,
         _parsed_from_preview(row, metadata_match_source),
@@ -437,6 +534,7 @@ def match_rename_preview_metadata(
     preview_id: int,
     provider: MetadataProvider | None = None,
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+    auto_backfill: bool = True,
 ) -> RenamePreview:
     """Match one preview against TMDB and auto-backfill high confidence results."""
 
@@ -459,10 +557,10 @@ def match_rename_preview_metadata(
             auto_backfill=False,
             preview_status="needs_review",
             source_override=result.metadata_source,
+            candidate_matches=[],
         )
 
     best = result.matches[0]
-    is_high_confidence = best.status == MATCH_STATUS_HIGH
     return _update_preview_metadata(
         settings,
         preview_id,
@@ -470,9 +568,10 @@ def match_rename_preview_metadata(
         best.status,
         best.score,
         result.message,
-        auto_backfill=is_high_confidence,
-        preview_status="tmdb_matched" if is_high_confidence else "needs_review",
+        auto_backfill=auto_backfill,
+        preview_status="generated",
         source_override=result.metadata_source if result.metadata_source != "custom" else None,
+        candidate_matches=result.matches,
     )
 
 
@@ -481,6 +580,7 @@ def apply_metadata_candidate(
     preview_id: int,
     candidate: MetadataCandidate,
     score: int,
+    selected_fields: set[str] | None = None,
 ) -> RenamePreview:
     """Apply a user-selected metadata candidate to one preview."""
 
@@ -492,7 +592,8 @@ def apply_metadata_candidate(
         score,
         None,
         auto_backfill=True,
-        preview_status="tmdb_selected",
+        preview_status="generated",
+        selected_fields=selected_fields,
     )
 
 
@@ -515,6 +616,7 @@ def match_rename_previews_metadata(
                     preview_id,
                     provider=provider,
                     metadata_match_source=metadata_match_source,
+                    auto_backfill=False,
                 )
             )
         except ValueError as exc:

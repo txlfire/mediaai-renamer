@@ -35,6 +35,8 @@ export const usePreviewStore = defineStore("preview", {
         needsReview: state.previews.filter((preview) => preview.status === "needs_review").length,
         edited: state.previews.filter((preview) => preview.status === "edited").length,
         renamed: state.previews.filter((preview) => preview.status === "renamed").length,
+        noRename: state.previews.filter((preview) => preview.status === "no_rename").length,
+        unableRename: state.previews.filter((preview) => preview.status === "unable_rename").length,
       };
     },
   },
@@ -133,8 +135,8 @@ export const usePreviewStore = defineStore("preview", {
       return fetchRenamePreviewMetadataCandidates(previewId, metadataMatchSource);
     },
 
-    async applyMetadataCandidate(previewId: number, match: MetadataMatchResult) {
-      const updated = await applyRenamePreviewMetadataCandidate(previewId, match);
+    async applyMetadataCandidate(previewId: number, match: MetadataMatchResult, selectedFields: string[] = []) {
+      const updated = await applyRenamePreviewMetadataCandidate(previewId, match, selectedFields);
       this.replacePreview(updated);
       return updated;
     },

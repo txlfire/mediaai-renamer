@@ -40,6 +40,7 @@ class ApplyMetadataCandidateRequest(BaseModel):
 
     candidate: MetadataCandidate
     score: int
+    selected_fields: list[str] | None = None
 
 
 class BatchMetadataMatchRequest(BaseModel):
@@ -184,6 +185,7 @@ def select_preview_metadata_candidate(
             preview_id,
             payload.candidate,
             payload.score,
+            set(payload.selected_fields) if payload.selected_fields else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

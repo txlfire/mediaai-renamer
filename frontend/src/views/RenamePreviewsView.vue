@@ -50,6 +50,7 @@ const selectedPreviewRows = ref<RenamePreview[]>([]);
 const selectedPendingFileIds = ref<number[]>([]);
 const pendingRenamePreviews = ref<RenamePreview[]>([]);
 const metadataCandidates = ref<MetadataMatchResult[]>([]);
+const selectedMetadataFields = ref<string[]>(["title", "english_title", "year", "tmdb_id", "imdb_id"]);
 const pendingMoveTargetDirectory = ref("");
 const activePreviewTab = ref("previews");
 const operationProgressVisible = ref(false);
@@ -75,6 +76,25 @@ const pagedPreviews = computed(() =>
 const pagedMetadataCandidates = computed(() =>
   paginationStore.paginate("metadata-candidates", metadataCandidates.value),
 );
+const metadataFieldOptions = computed(() => {
+  const labels = messages.renamePreviews.metadataDialog.fields;
+  return [
+    "title",
+    "chinese_title",
+    "english_title",
+    "original_title",
+    "year",
+    "tmdb_id",
+    "imdb_id",
+    "rating",
+    "overview",
+    "poster_path",
+    "language",
+    "genres",
+    "cast",
+    "director",
+  ].map((value) => ({ value, label: labels[value as keyof typeof labels] || value }));
+});
 const visibleOperationResultLogs = computed(() =>
   operationResultExpanded.value ? operationResultLogs.value : operationResultLogs.value.slice(0, 8),
 );
@@ -124,14 +144,14 @@ function statusLabel(value: string) {
     edited: messages.status.edited,
     needs_review: messages.status.needsReview,
     renamed: messages.status.renamed,
-    tmdb_matched: messages.renamePreviews.metadataStatuses.high_confidence,
-    tmdb_selected: messages.renamePreviews.metadataStatuses.manual_selected,
+    no_rename: messages.status.noRename,
+    unable_rename: messages.status.unableRename,
   };
   return labels[value] ?? value;
 }
 
 function statusTagType(value: string) {
-  if (value === "generated" || value === "renamed") {
+  if (value === "generated" || value === "renamed" || value === "no_rename") {
     return "success";
   }
   if (value === "edited") {
@@ -139,6 +159,9 @@ function statusTagType(value: string) {
   }
   if (value === "needs_review") {
     return "warning";
+  }
+  if (value === "unable_rename") {
+    return "danger";
   }
   return "info";
 }
@@ -194,6 +217,17 @@ function metadataStatusTagType(value: string | null) {
 
 function metadataReason(row: RenamePreview) {
   return row.metadata_message || metadataStatusLabel(row.metadata_match_status);
+}
+
+function joinCandidateValues(values?: string[]) {
+  return values?.length ? values.join(" / ") : "-";
+}
+
+function candidateValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return joinCandidateValues(value.filter((item): item is string => typeof item === "string"));
+  }
+  return value === undefined || value === null || value === "" ? "-" : String(value);
 }
 
 function seasonEpisode(row: { season: number | null; episode: number | null }) {
@@ -458,16 +492,23 @@ async function matchMetadata(row: RenamePreview) {
   await confirmResourceOperation(messages.renamePreviews.tmdbMatch, 1);
   metadataPreviewId.value = row.id;
   const updated = await previewStore.matchMetadata(row.id, metadataMatchSource.value);
-  if (updated.metadata_match_status === "high_confidence") {
+  metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id, metadataMatchSource.value);
+  if (updated.metadata_match_status && updated.metadata_match_status !== "failed") {
     ElMessage.success(messages.renamePreviews.metadataDialog.matched);
-    return;
   }
+  if (!metadataCandidates.value.length) {
+    ElMessage.warning(updated.metadata_message || messages.renamePreviews.metadataDialog.empty);
+  }
+}
+
+async function openMetadataBackfill(row: RenamePreview) {
+  metadataPreviewId.value = row.id;
   metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id, metadataMatchSource.value);
   if (metadataCandidates.value.length > 0) {
     metadataDialogVisible.value = true;
     return;
   }
-  ElMessage.warning(updated.metadata_message || messages.renamePreviews.metadataDialog.empty);
+  ElMessage.warning(row.metadata_message || messages.renamePreviews.metadataDialog.empty);
 }
 
 function appendMetadataLogs(result: { items: RenamePreview[]; failed_items: Array<{ id: number; message: string }> }) {
@@ -517,7 +558,7 @@ async function applyMetadataCandidate(match: MetadataMatchResult) {
   if (!metadataPreviewId.value) {
     return;
   }
-  await previewStore.applyMetadataCandidate(metadataPreviewId.value, match);
+  await previewStore.applyMetadataCandidate(metadataPreviewId.value, match, selectedMetadataFields.value);
   metadataDialogVisible.value = false;
   metadataCandidates.value = [];
   ElMessage.success(messages.renamePreviews.metadataDialog.selectSuccess);
@@ -666,6 +707,8 @@ onMounted(async () => {
         <el-option :label="messages.status.needsReview" value="needs_review" />
         <el-option :label="messages.status.edited" value="edited" />
         <el-option :label="messages.status.renamed" value="renamed" />
+        <el-option :label="messages.status.noRename" value="no_rename" />
+        <el-option :label="messages.status.unableRename" value="unable_rename" />
       </el-select>
       <el-select v-model="previewStore.filters.media_type" class="rename-filter-select" :placeholder="messages.renamePreviews.type" clearable>
         <el-option :label="messages.renamePreviews.mediaTypes.movie" value="movie" />
@@ -683,7 +726,7 @@ onMounted(async () => {
     </template>
 
     <template #actions>
-      <div class="rename-action-stack">
+      <div v-if="activePreviewTab === 'previews'" class="rename-action-stack">
         <div class="rename-action-groups">
           <div class="rename-action-group">
             <el-button :icon="Refresh" :disabled="previewStore.loading || renameOperationStore.loading" @click="refreshPreviews">
@@ -752,14 +795,30 @@ onMounted(async () => {
           <span>{{ operationProgressText }}</span>
         </div>
       </div>
+      <div v-else class="subsection-actions pending-files-actions">
+        <el-button
+          :icon="Select"
+          :disabled="selectedPendingFileIds.length === 0"
+          @click="openPendingMoveDialog"
+        >
+          {{ messages.renamePreviews.pendingFiles.move }}
+        </el-button>
+        <el-button
+          :icon="Delete"
+          :disabled="pendingFileStore.pendingFiles.length === 0"
+          @click="clearPendingFiles"
+        >
+          {{ messages.renamePreviews.pendingFiles.clear }}
+        </el-button>
+      </div>
     </template>
 
     <el-alert v-if="previewStore.errorMessage" type="error" :title="previewStore.errorMessage" show-icon />
 
     <template #table>
+      <FullscreenTablePanel title="" variant="tab-header">
       <el-tabs v-model="activePreviewTab" class="rename-preview-tabs">
         <el-tab-pane :label="messages.renamePreviews.tabs.previews" name="previews">
-          <FullscreenTablePanel :title="messages.renamePreviews.tableTitle">
           <el-table
           :data="pagedPreviews"
           class="data-table rename-previews-table"
@@ -907,6 +966,15 @@ onMounted(async () => {
           @click.stop="matchMetadata(row)"
           />
           </el-tooltip>
+          <el-tooltip v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataBackfill" placement="top">
+          <el-button
+          class="table-action-button action-sync"
+          :icon="MagicStick"
+          text
+          circle
+          @click.stop="openMetadataBackfill(row)"
+          />
+          </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
           <el-button class="table-action-button action-edit" :icon="Edit" text circle @click.stop="openEditDialog(row)" />
           </el-tooltip>
@@ -930,35 +998,19 @@ onMounted(async () => {
               <ListStatItem :label="messages.status.needsReview" :value="previewStore.stats.needsReview" tone="warning" />
               <ListStatItem :label="messages.status.edited" :value="previewStore.stats.edited" tone="edited" />
               <ListStatItem :label="messages.status.renamed" :value="previewStore.stats.renamed" tone="renamed" />
+              <ListStatItem :label="messages.status.noRename" :value="previewStore.stats.noRename" tone="success" />
+              <ListStatItem :label="messages.status.unableRename" :value="previewStore.stats.unableRename" tone="danger" />
             </div>
-            <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" />
+            <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" :pager-count="3" />
           </div>
-          </FullscreenTablePanel>
         </el-tab-pane>
 
-        <el-tab-pane :label="messages.renamePreviews.tabs.pendingFiles" name="pending">
-          <div class="subsection-header">
-          <div>
-          <h2>{{ messages.renamePreviews.pendingFiles.title }}</h2>
-          <p>{{ messages.renamePreviews.pendingFiles.description }}</p>
-          </div>
-          <div class="subsection-actions">
-          <el-button
-          :icon="Select"
-          :disabled="selectedPendingFileIds.length === 0"
-          @click="openPendingMoveDialog"
-          >
-          {{ messages.renamePreviews.pendingFiles.move }}
-          </el-button>
-          <el-button
-          :icon="Delete"
-          :disabled="pendingFileStore.pendingFiles.length === 0"
-          @click="clearPendingFiles"
-          >
-          {{ messages.renamePreviews.pendingFiles.clear }}
-          </el-button>
-          </div>
-          </div>
+        <el-tab-pane name="pending">
+          <template #label>
+            <el-tooltip :content="messages.renamePreviews.pendingFiles.description" placement="top">
+              <span class="tab-label-with-tooltip">{{ messages.renamePreviews.tabs.pendingFiles }}</span>
+            </el-tooltip>
+          </template>
           <el-table
           :data="pendingFileStore.pendingFiles"
           class="data-table"
@@ -1004,6 +1056,7 @@ onMounted(async () => {
           </el-table>
         </el-tab-pane>
       </el-tabs>
+      </FullscreenTablePanel>
     </template>
 
     <el-dialog
@@ -1085,9 +1138,22 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="metadataDialogVisible" :title="messages.renamePreviews.metadataDialog.title" width="860px">
+    <el-dialog v-model="metadataDialogVisible" :title="messages.renamePreviews.metadataDialog.title" width="1120px">
+      <div class="metadata-field-selector">
+        <span>{{ messages.renamePreviews.metadataDialog.fieldSelection }}</span>
+        <el-checkbox-group v-model="selectedMetadataFields">
+          <el-checkbox v-for="field in metadataFieldOptions" :key="field.value" :label="field.value">
+            {{ field.label }}
+          </el-checkbox>
+        </el-checkbox-group>
+      </div>
       <el-empty v-if="metadataCandidates.length === 0" :description="messages.renamePreviews.metadataDialog.empty" />
       <el-table v-else :data="pagedMetadataCandidates" class="data-table" table-layout="auto">
+        <el-table-column type="expand" width="48">
+          <template #default="{ row }">
+            <pre class="metadata-raw-json">{{ JSON.stringify(row.candidate.raw_data ?? {}, null, 2) }}</pre>
+          </template>
+        </el-table-column>
         <el-table-column :label="messages.renamePreviews.columns.metadataScore" width="96" align="center" header-align="center">
           <template #default="{ row }">{{ row.score }}%</template>
         </el-table-column>
@@ -1098,23 +1164,60 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="180" align="left" header-align="left">
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.title" min-width="160" align="left" header-align="left">
           <template #default="{ row }">
             <TextCell :value="row.candidate.title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
           </template>
         </el-table-column>
-        <el-table-column :label="messages.renamePreviews.columns.targetName" min-width="180" align="left" header-align="left">
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.english_title" min-width="160" align="left" header-align="left">
           <template #default="{ row }">
-            <TextCell :value="row.candidate.original_title || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+            <TextCell :value="row.candidate.english_title || row.candidate.original_title || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
           </template>
         </el-table-column>
         <el-table-column :label="messages.renamePreviews.columns.year" width="84" align="center" header-align="center">
           <template #default="{ row }">{{ row.candidate.year ?? "-" }}</template>
         </el-table-column>
-        <el-table-column :label="messages.common.actions" width="96" align="center" header-align="center" fixed="right">
+        <el-table-column label="TMDB" width="104" align="center" header-align="center">
+          <template #default="{ row }">{{ row.candidate.tmdb_id || row.candidate.provider_id || "-" }}</template>
+        </el-table-column>
+        <el-table-column label="IMDb" width="120" align="center" header-align="center">
+          <template #default="{ row }">{{ row.candidate.imdb_id || "-" }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.rating" width="92" align="center" header-align="center">
+          <template #default="{ row }">{{ candidateValue(row.candidate.vote_average) }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.language" width="84" align="center" header-align="center">
+          <template #default="{ row }">{{ candidateValue(row.candidate.original_language) }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.genres" min-width="140" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="joinCandidateValues(row.candidate.genres)" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.cast" min-width="180" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="joinCandidateValues(row.candidate.cast)" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.director" min-width="120" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="joinCandidateValues(row.candidate.directors)" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.poster_path" min-width="120" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="row.candidate.poster_path || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.fields.overview" min-width="220" align="left" header-align="left">
+          <template #default="{ row }">
+            <TextCell :value="row.candidate.overview || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.common.actions" width="148" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" @click="applyMetadataCandidate(row)">
-              {{ messages.renamePreviews.metadataDialog.apply }}
+              {{ messages.renamePreviews.metadataDialog.selectedApply }}
             </el-button>
           </template>
         </el-table-column>

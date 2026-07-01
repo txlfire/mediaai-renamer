@@ -98,7 +98,7 @@ class RenamePreviewMetadataTest(unittest.TestCase):
 
         updated = match_rename_preview_metadata(self.settings, self.preview.id, provider=provider)
 
-        self.assertEqual("tmdb_matched", updated.status)
+        self.assertEqual("generated", updated.status)
         self.assertEqual("TMDB", updated.metadata_source)
         self.assertEqual("high_confidence", updated.metadata_match_status)
         self.assertEqual(100, updated.metadata_match_score)
@@ -117,7 +117,7 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         with patch("app.service.preview_service.match_metadata_candidates", return_value=summary):
             updated = match_rename_preview_metadata(self.settings, self.preview.id)
 
-        self.assertEqual("tmdb_matched", updated.status)
+        self.assertEqual("generated", updated.status)
         self.assertEqual("TMDB (V4)", updated.metadata_source)
 
     def test_low_confidence_match_keeps_preview_and_exposes_candidates(self):
@@ -130,18 +130,57 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         updated = match_rename_preview_metadata(self.settings, self.preview.id, provider=provider)
         candidates = list_metadata_candidates(self.settings, self.preview.id, provider=provider)
 
-        self.assertEqual("needs_review", updated.status)
+        self.assertEqual("generated", updated.status)
         self.assertEqual("low_confidence", updated.metadata_match_status)
         self.assertGreaterEqual(updated.metadata_match_score, 30)
-        self.assertEqual("The.Matrix.1999.mkv", updated.current_target_name)
+        self.assertEqual("The.Matrix.Reloaded.1999.mkv", updated.current_target_name)
         self.assertEqual("low", candidates[0].candidate.provider_id)
+
+    def test_match_backfills_template_fields_when_candidate_has_data(self):
+        update_setting_values(
+            self.settings,
+            {
+                "naming.movie_template": (
+                    '[{"key":"title","label":"标题","variable":"title"},'
+                    '{"key":"original_title","label":"英文标题","variable":"english_title"},'
+                    '{"key":"year","label":"年份","variable":"year"},'
+                    '{"key":"tmdb_id","label":"TMDB ID","variable":"tmdb_id","format":{"prefix":"tmdb-","bracketStyle":"square"}},'
+                    '{"key":"imdb_id","label":"IMDb ID","variable":"imdb_id","format":{"prefix":"tt","bracketStyle":"square"}}]'
+                ),
+            },
+            operator="admin",
+        )
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate(
+                    "TMDB",
+                    "603",
+                    "movie",
+                    "黑客帝国",
+                    "The Matrix",
+                    1999,
+                    None,
+                    None,
+                    "",
+                    english_title="The Matrix",
+                    tmdb_id="603",
+                    imdb_id="0133093",
+                ),
+            ]
+        )
+
+        updated = match_rename_preview_metadata(self.settings, self.preview.id, provider=provider)
+
+        self.assertEqual("generated", updated.status)
+        self.assertEqual("high_confidence", updated.metadata_match_status)
+        self.assertEqual("黑客帝国.The.Matrix.1999.[tmdb-603].[tt0133093].mkv", updated.current_target_name)
 
     def test_manual_candidate_selection_backfills_preview(self):
         candidate = MetadataCandidate("TMDB", "603", "movie", "黑客帝国", "The Matrix", 1999, None, None, "")
 
         updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=72)
 
-        self.assertEqual("tmdb_selected", updated.status)
+        self.assertEqual("generated", updated.status)
         self.assertEqual("TMDB", updated.metadata_source)
         self.assertEqual("manual_selected", updated.metadata_match_status)
         self.assertEqual(72, updated.metadata_match_score)
@@ -164,6 +203,24 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("Matrix CN", updated.parsed_title)
         self.assertEqual(1999, updated.parsed_year)
 
+    def test_manual_candidate_selection_respects_selected_fields(self):
+        update_setting_values(
+            self.settings,
+            {
+                "naming.movie_template": (
+                    '[{"key":"title","label":"标题","variable":"title"},'
+                    '{"key":"year","label":"年份","variable":"year"},'
+                    '{"key":"tmdb_id","label":"TMDB ID","variable":"tmdb_id","format":{"prefix":"tmdb-","bracketStyle":"square"}}]'
+                ),
+            },
+            operator="admin",
+        )
+        candidate = MetadataCandidate("TMDB", "603", "movie", "黑客帝国", "The Matrix", 1999, None, None, "")
+
+        updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=72, selected_fields={"title", "year"})
+
+        self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
+
     def test_manual_movie_candidate_selection_preserves_template_required_year(self):
         update_setting_values(
             self.settings,
@@ -182,7 +239,7 @@ class RenamePreviewMetadataTest(unittest.TestCase):
 
         updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=72)
 
-        self.assertEqual("tmdb_selected", updated.status)
+        self.assertEqual("generated", updated.status)
         self.assertEqual("manual_selected", updated.metadata_match_status)
         self.assertEqual(72, updated.metadata_match_score)
         self.assertEqual("The Matrix", updated.parsed_title)
@@ -207,7 +264,7 @@ class RenamePreviewMetadataTest(unittest.TestCase):
 
         updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=70)
 
-        self.assertEqual("tmdb_selected", updated.status)
+        self.assertEqual("generated", updated.status)
         self.assertEqual("manual_selected", updated.metadata_match_status)
         self.assertEqual(70, updated.metadata_match_score)
         self.assertEqual("廉政追缉令", updated.parsed_title)
@@ -296,7 +353,24 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual(1, result["total_count"])
         self.assertEqual(1, result["success_count"])
         self.assertEqual(0, result["failed_count"])
-        self.assertEqual("tmdb_matched", result["items"][0].status)
+        self.assertEqual("generated", result["items"][0].status)
+
+    def test_batch_metadata_match_keeps_candidates_without_backfilling(self):
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "movie", "黑客帝国", "The Matrix", 1999, None, None, ""),
+            ]
+        )
+
+        result = match_rename_previews_metadata(self.settings, [self.preview.id], provider=provider)
+        updated = result["items"][0]
+        candidates = list_metadata_candidates(self.settings, self.preview.id)
+
+        self.assertEqual("generated", updated.status)
+        self.assertEqual("The.Matrix.1999.mkv", updated.current_target_name)
+        self.assertEqual("high_confidence", updated.metadata_match_status)
+        self.assertEqual(1, updated.metadata_candidate_count)
+        self.assertEqual("603", candidates[0].candidate.provider_id)
 
 
 if __name__ == "__main__":
