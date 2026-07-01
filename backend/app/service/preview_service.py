@@ -297,7 +297,14 @@ def _merged_candidate_parsed(
 ) -> ParsedMediaName:
     media_type = candidate.media_type or str(row["media_type"])
     variables = template_variables_for_media_type(media_type, effective_settings)
+    needs_title = not variables or "title" in variables or "original_title" in variables
+    needs_year = "year" in variables
     needs_episode_fields = bool(variables.intersection({"season", "episode", "season_episode", "seasonEpisode"}))
+
+    title = _candidate_title(candidate, str(row["parsed_title"])) if needs_title else _candidate_title(candidate, "")
+    year = candidate.year
+    if needs_year:
+        year = year if year is not None else row["parsed_year"]
 
     season = candidate.season
     episode = candidate.episode
@@ -307,8 +314,8 @@ def _merged_candidate_parsed(
 
     return ParsedMediaName(
         media_type=media_type,
-        title=_candidate_title(candidate, str(row["parsed_title"])),
-        year=candidate.year if candidate.year is not None else row["parsed_year"],
+        title=title or str(row["parsed_title"]),
+        year=year,
         season=season,
         episode=episode,
     )

@@ -164,6 +164,31 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("Matrix CN", updated.parsed_title)
         self.assertEqual(1999, updated.parsed_year)
 
+    def test_manual_movie_candidate_selection_preserves_template_required_year(self):
+        update_setting_values(
+            self.settings,
+            {
+                "naming.movie_template": '[{"key":"title","label":"标题","variable":"title"},{"key":"year","label":"年份","variable":"year"}]',
+            },
+            operator="admin",
+        )
+        candidate = MetadataCandidate("TMDB", "movie-1", "movie", "The Matrix", "", None, None, None, "")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET media_type = ?, parsed_title = ?, parsed_year = ? WHERE id = ?",
+                ("movie", "The Matrix", 1999, self.preview.id),
+            )
+            connection.commit()
+
+        updated = apply_metadata_candidate(self.settings, self.preview.id, candidate, score=72)
+
+        self.assertEqual("tmdb_selected", updated.status)
+        self.assertEqual("manual_selected", updated.metadata_match_status)
+        self.assertEqual(72, updated.metadata_match_score)
+        self.assertEqual("The Matrix", updated.parsed_title)
+        self.assertEqual(1999, updated.parsed_year)
+        self.assertEqual("The.Matrix.1999.mkv", updated.current_target_name)
+
     def test_manual_episode_candidate_selection_preserves_template_required_fields(self):
         update_setting_values(
             self.settings,
