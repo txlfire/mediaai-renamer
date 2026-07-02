@@ -4,10 +4,13 @@ param(
     [switch]$Background
 )
 
+# Purpose: start only the Vite frontend dev server, in foreground or background mode.
+# Flow: resolve project root -> find Node/Vite -> build Vite args -> start by mode.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Normalize-ProcessPathVariable {
+    # Avoid Node lookup issues when both Path and PATH exist in the process environment.
     $ProcessEnv = [Environment]::GetEnvironmentVariables("Process")
     if ($ProcessEnv.Contains("Path") -and $ProcessEnv.Contains("PATH")) {
         [Environment]::SetEnvironmentVariable("PATH", $null, "Process")
@@ -15,6 +18,7 @@ function Normalize-ProcessPathVariable {
 }
 
 function Find-NodeExecutable {
+    # Prefer node.exe for Windows shells, then fall back to node.
     $Node = Get-Command node.exe -ErrorAction SilentlyContinue
     if ($Node) {
         return $Node.Source
@@ -34,6 +38,7 @@ Set-Location $Root
 Normalize-ProcessPathVariable
 $env:CI = "true"
 
+# Call the local Vite entry so the project-pinned frontend dependencies are used.
 $Node = Find-NodeExecutable
 $ViteEntry = Join-Path $Root "node_modules\vite\bin\vite.js"
 if (-not (Test-Path $ViteEntry)) {
@@ -51,6 +56,7 @@ $Arguments = @(
 )
 
 if ($Background) {
+    # Background mode writes logs and keeps the terminal available.
     $LogDir = Join-Path $Root ".codex\run-logs"
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -74,6 +80,7 @@ if ($Background) {
     exit 0
 }
 
+# Foreground mode streams Vite output to the current terminal for manual debugging.
 & $Node @Arguments
 if ($LASTEXITCODE -ne 0) {
     throw "Frontend dev server exited with code $LASTEXITCODE."

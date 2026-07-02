@@ -3,10 +3,13 @@ param(
     [int]$BackendPort = 8970
 )
 
+# Purpose: start FastAPI backend and Vite frontend for local/LAN development.
+# Flow: validate dependencies -> stop old services -> create logs -> start services -> write PID files.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Normalize-ProcessPathVariable {
+    # Avoid Node/npm lookup issues when both Path and PATH exist in the process environment.
     $ProcessEnv = [Environment]::GetEnvironmentVariables("Process")
     if ($ProcessEnv.Contains("Path") -and $ProcessEnv.Contains("PATH")) {
         [Environment]::SetEnvironmentVariable("PATH", $null, "Process")
@@ -14,6 +17,7 @@ function Normalize-ProcessPathVariable {
 }
 
 function Find-NodeExecutable {
+    # Prefer node.exe for Windows shells, then fall back to node.
     $Node = Get-Command node.exe -ErrorAction SilentlyContinue
     if ($Node) {
         return $Node.Source
@@ -52,6 +56,7 @@ function Assert-FileExists {
 function Stop-PortProcess {
     param([int]$Port)
 
+    # Clear target ports before startup to avoid stale uvicorn/vite listeners.
     $Connections = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
     $ProcessIds = $Connections | Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($ProcessId in $ProcessIds) {
@@ -64,6 +69,7 @@ function Stop-PortProcess {
 function Assert-DevDependencies {
     param([string]$RootPath)
 
+    # Development services require Node, npm, Python venv, backend deps, and Vite.
     Assert-CommandAvailable -Name "npm" -Hint "Install Node.js/npm and reopen the terminal."
     $script:Node = Find-NodeExecutable
 
@@ -84,10 +90,12 @@ function Assert-DevDependencies {
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
+# Resolve the project root, validate dependencies, and reuse the stop script for cleanup.
 Normalize-ProcessPathVariable
 $Python = Assert-DevDependencies -RootPath $Root
 & (Join-Path $Root "scripts\stop-dev-lan.ps1") -FrontendPort $FrontendPort -BackendPort $BackendPort
 
+# Store dev logs and PID files under .codex/run-logs for diagnostics and cleanup.
 $LogDir = Join-Path $Root ".codex\run-logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -99,6 +107,7 @@ $FrontendErr = Join-Path $LogDir "frontend-vite.err.log"
 $env:PYTHONPATH = "backend"
 $env:CI = "true"
 
+# Start backend in a hidden background process with split stdout/stderr logs.
 $Backend = Start-Process `
     -FilePath $Python `
     -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--app-dir", "backend") `
@@ -119,6 +128,7 @@ $FrontendArguments = @(
     "frontend/vite.config.ts"
 )
 
+# Call the local Vite entry directly instead of relying on an npm shell wrapper.
 $Frontend = Start-Process `
     -FilePath $Node `
     -ArgumentList $FrontendArguments `
@@ -128,6 +138,7 @@ $Frontend = Start-Process `
     -RedirectStandardError $FrontendErr `
     -PassThru
 
+# Save PID files so the stop script can terminate the exact processes first.
 Set-Content -Path (Join-Path $LogDir "backend.pid") -Value $Backend.Id -Encoding ascii
 Set-Content -Path (Join-Path $LogDir "frontend.pid") -Value $Frontend.Id -Encoding ascii
 

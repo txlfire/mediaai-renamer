@@ -7,6 +7,8 @@ param(
     [switch]$SkipBuild
 )
 
+# Purpose: build the frontend release artifact on Windows and optionally publish it.
+# Flow: resolve version -> build frontend -> copy dist/example config -> zip -> publish.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -16,6 +18,7 @@ function Invoke-NativeCommand {
         [string[]]$Arguments
     )
 
+    # Wrap native commands so non-zero exit codes stop the release flow.
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
@@ -25,11 +28,13 @@ function Invoke-NativeCommand {
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
+# Use the root package.json version when no version is passed.
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Package = Get-Content -Raw "package.json" | ConvertFrom-Json
     $Version = $Package.version
 }
 
+# Normalize release tags to vX.Y.Z, avoiding duplicate v prefixes.
 $CleanVersion = $Version.Trim()
 if ($CleanVersion.StartsWith("v")) {
     $CleanVersion = $CleanVersion.Substring(1)
@@ -46,6 +51,7 @@ $Artifact = Join-Path $ReleaseDir "mediaai-renamer-frontend-$Tag.zip"
 $PackageRoot = Join-Path $ReleaseDir "package-$Tag"
 
 if (-not $SkipBuild) {
+    # Build frontend by default so the artifact matches current source.
     Invoke-NativeCommand "npm.cmd" @("run", "frontend:build")
 }
 
@@ -58,16 +64,19 @@ if (Test-Path $PackageRoot) {
     Remove-Item -Path $PackageRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
+# Include only example config; never package local config.toml.
 Copy-Item -Path (Join-Path $DistDir "*") -Destination $PackageRoot -Recurse -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "config") | Out-Null
 Copy-Item -Path (Join-Path $Root "config\config.example.toml") -Destination (Join-Path $PackageRoot "config\config.example.toml") -Force
 
+# Assemble the artifact in a temporary package directory, then clean it.
 Compress-Archive -Path (Join-Path $PackageRoot "*") -DestinationPath $Artifact -Force
 Remove-Item -Path $PackageRoot -Recurse -Force
 
 Write-Host "Release package created: $Artifact"
 
 if ($Publish) {
+    # Publish mode requires GitHub CLI and creates or updates the release asset.
     $Gh = Get-Command gh -ErrorAction SilentlyContinue
     if (-not $Gh) {
         throw "GitHub CLI is not installed or not available in PATH."

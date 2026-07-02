@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# 用途：在 Linux/macOS 环境构建前端发布包，可选上传到 GitHub Release。
+# 关键步骤：解析参数 -> 确定版本 -> 构建前端 -> 复制 dist 和示例配置 -> 压缩 artifact -> 可选发布。
 set -euo pipefail
 
 VERSION=""
@@ -8,6 +10,7 @@ NOTES=""
 PUBLISH=0
 SKIP_BUILD=0
 
+# 解析发布参数；未传版本时使用 package.json 版本。
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)
@@ -60,9 +63,11 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 if [[ -z "$VERSION" ]]; then
+  # 通过 Node 读取根 package.json，保持和 Windows 脚本行为一致。
   VERSION="$(node -p "require('./package.json').version")"
 fi
 
+# 发布标签统一为 vX.Y.Z，传入 v 前缀时会自动去重。
 CLEAN_VERSION="${VERSION#v}"
 if [[ -z "$CLEAN_VERSION" ]]; then
   echo "Version cannot be empty." >&2
@@ -76,6 +81,7 @@ ARTIFACT="$RELEASE_DIR/mediaai-renamer-frontend-$TAG.zip"
 PACKAGE_ROOT="$RELEASE_DIR/package-$TAG"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  # 默认重新构建前端，确保 artifact 来自当前代码。
   npm run frontend:build
 fi
 
@@ -88,9 +94,11 @@ mkdir -p "$RELEASE_DIR"
 rm -f "$ARTIFACT"
 rm -rf "$PACKAGE_ROOT"
 mkdir -p "$PACKAGE_ROOT/config"
+# 正式包只带示例配置，避免把本地正式配置 config.toml 打进包。
 cp -R "$DIST_DIR"/. "$PACKAGE_ROOT"/
 cp "$ROOT/config/config.example.toml" "$PACKAGE_ROOT/config/config.example.toml"
 
+# 优先使用系统 zip；没有 zip 时用 Python 标准库兜底。
 if command -v zip >/dev/null 2>&1; then
   (cd "$PACKAGE_ROOT" && zip -qr "$ARTIFACT" .)
 else
@@ -113,6 +121,7 @@ rm -rf "$PACKAGE_ROOT"
 echo "Release package created: $ARTIFACT"
 
 if [[ "$PUBLISH" -eq 1 ]]; then
+  # 发布模式依赖 GitHub CLI，并会创建或更新对应 Release 资源。
   if ! command -v gh >/dev/null 2>&1; then
     echo "GitHub CLI is not installed or not available in PATH." >&2
     exit 1

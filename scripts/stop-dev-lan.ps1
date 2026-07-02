@@ -3,12 +3,15 @@ param(
     [int]$BackendPort = 8970
 )
 
+# Purpose: stop FastAPI backend and Vite frontend development services.
+# Flow: stop by PID files -> clean project processes -> clean ports -> verify release.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Stop-PidFile {
     param([string]$Path)
 
+    # PID files are the most precise cleanup path; remove them after use.
     if (-not (Test-Path $Path)) {
         return
     }
@@ -23,6 +26,7 @@ function Stop-PidFile {
 function Stop-PortProcess {
     param([int]$Port)
 
+    # Fallback cleanup for processes still listening after PID-file cleanup.
     $Connections = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
     $ProcessIds = $Connections | Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($ProcessId in $ProcessIds) {
@@ -35,6 +39,7 @@ function Stop-PortProcess {
 function Stop-ProjectDevProcesses {
     param([string]$RootPath)
 
+    # Match only vite/uvicorn processes for this project root to avoid other projects.
     $EscapedRoot = [regex]::Escape($RootPath)
     $Processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.CommandLine -and
@@ -53,12 +58,14 @@ function Stop-ProjectDevProcesses {
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $LogDir = Join-Path $Root ".codex\run-logs"
 
+# Stop by PID first, then fall back to project process and port cleanup.
 Stop-PidFile -Path (Join-Path $LogDir "frontend.pid")
 Stop-PidFile -Path (Join-Path $LogDir "backend.pid")
 Stop-ProjectDevProcesses -RootPath $Root
 Stop-PortProcess -Port $FrontendPort
 Stop-PortProcess -Port $BackendPort
 
+# Wait briefly for port release before the final listening-state check.
 Start-Sleep -Seconds 1
 $Listening = Get-NetTCPConnection -LocalPort $FrontendPort,$BackendPort -State Listen -ErrorAction SilentlyContinue
 if ($Listening) {

@@ -1,14 +1,18 @@
+# Purpose: check text encoding, line endings, mojibake, and frontend literal text.
+# Flow: collect text files -> check BOM/EOL/mojibake -> enforce locale usage.
 $ErrorActionPreference = "Stop"
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $utf8NoBom
 [Console]::OutputEncoding = $utf8NoBom
 
+# Scan only text-like files to avoid reading binary assets.
 $textExtensions = @(
     ".py", ".ts", ".vue", ".css", ".md", ".txt", ".json", ".ps1", ".sh",
     ".html", ".yml", ".yaml", ".toml", ".ini", ".env", ".editorconfig",
     ".gitattributes"
 )
 
+# Common mojibake characters caused by UTF-8/GBK decoding mistakes.
 $mojibakeChars = @(
     [char]0x6FEF,
     [char]0x93B5,
@@ -26,6 +30,7 @@ $mojibakePattern = "[" + ([regex]::Escape((-join $mojibakeChars))) + "]"
 $frontendChinesePattern = '[\p{IsCJKUnifiedIdeographs}]'
 $issues = [System.Collections.Generic.List[string]]::new()
 
+# Check both tracked files and untracked non-ignored files.
 $files = @(
     git ls-files
     git ls-files --others --exclude-standard
@@ -35,6 +40,7 @@ $files = @(
 } | Sort-Object -Unique
 
 foreach ($file in $files) {
+    # The file may disappear between listing and reading; skip it safely.
     if (-not (Test-Path -LiteralPath $file)) {
         continue
     }
@@ -60,6 +66,7 @@ foreach ($file in $files) {
         $matches = Select-String -Path $file -Pattern $frontendChinesePattern -AllMatches
         foreach ($match in $matches) {
             $line = $match.Line.Trim()
+            # Allow comments, tests, and a few semantic checks; UI text belongs in locales.
             if ($line -match "^\s*(//|/\*|\*)") {
                 continue
             }
