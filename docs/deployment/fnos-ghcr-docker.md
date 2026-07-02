@@ -11,8 +11,8 @@
 默认镜像：
 
 ```text
-ghcr.io/txlfire/mediaai-renamer-backend:v0.5.3
-ghcr.io/txlfire/mediaai-renamer-frontend:v0.5.3
+ghcr.io/txlfire/mediaai-renamer-backend:v0.5.4
+ghcr.io/txlfire/mediaai-renamer-frontend:v0.5.4
 ```
 
 如果 fnOS 拉取镜像时报 `denied` 或 `unauthorized`，需要在 GitHub Packages 中把两个镜像设置为 Public，或在 fnOS 上执行 `docker login ghcr.io` 后再拉取。
@@ -86,7 +86,7 @@ docker login ghcr.io
 固定版本启动：
 
 ```bash
-export MEDIAAI_IMAGE_TAG=v0.5.3
+export MEDIAAI_IMAGE_TAG=v0.5.4
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
 ```
