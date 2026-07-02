@@ -9,8 +9,10 @@ import os
 import sqlite3
 
 from app.core.config import AppSettings
+from app.schema.ai_parse import AiParseResult
 from app.schema.media import ParsedMediaName, PreviewGenerationSummary, RenamePreview
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult
+from app.service.ai_parse_service import parse_media_with_ai
 from app.service.external_submission_guard import check_external_submission
 from app.service.metadata_matcher import MATCH_STATUS_HIGH
 from app.service.metadata_service import MetadataProvider, match_metadata_candidates
@@ -531,6 +533,22 @@ def list_metadata_candidates(
         provider=provider,
     )
     return result.matches
+
+
+def parse_rename_preview_with_ai(settings: AppSettings, preview_id: int) -> AiParseResult:
+    """Run AI structured parsing for one rename preview without mutating the preview."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _get_preview_row(connection, preview_id)
+    return parse_media_with_ai(
+        settings,
+        source_module="rename_preview",
+        source_record_id=int(row["id"]),
+        file_name=str(row["file_name"]),
+        file_path=str(row["file_path"]),
+        parsed=_parsed_from_preview(row),
+    )
 
 
 def match_rename_preview_metadata(

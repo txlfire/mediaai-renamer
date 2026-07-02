@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -216,6 +217,48 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual("generated", response.json()["status"])
         self.assertEqual("TMDB", response.json()["metadata_source"])
         self.assertEqual(91, response.json()["metadata_match_score"])
+
+    def test_ai_parse_preview_api_returns_structured_candidates(self):
+        update_setting_values(
+            self.settings,
+            {
+                "ai.enabled": "true",
+                "ai.provider": "deepseek",
+                "ai.model": "deepseek-chat",
+                "ai.api_key": "sk-secret123456",
+                "ai.base_url": "https://api.deepseek.com/v1",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        preview_id = client.get("/api/rename-previews").json()[0]["id"]
+
+        class FakeDeepSeekProvider:
+            def __init__(self, config):
+                self.config = config
+
+            def complete_chat(self, messages, max_tokens: int, temperature: float):
+                return {
+                    "status": "success",
+                    "content": (
+                        '{"title":"黑客帝国","media_type":"movie","year":1999,'
+                        '"season":null,"episode":null,"confidence":92,"reason":"标题和年份匹配"}'
+                    ),
+                    "response_ms": 15,
+                    "usage": {"total_tokens": 60},
+                }
+
+        with patch("app.service.ai_parse_service.DeepSeekProvider", FakeDeepSeekProvider):
+            response = client.post(f"/api/rename-previews/{preview_id}/ai-parse")
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("success", payload["status"])
+        self.assertEqual("黑客帝国", payload["candidates"][0]["title"])
+        self.assertEqual(92, payload["candidates"][0]["confidence"])
+        self.assertNotIn("sk-secret123456", str(payload))
 
 
 if __name__ == "__main__":

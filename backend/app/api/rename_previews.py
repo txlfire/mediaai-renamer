@@ -14,6 +14,7 @@ from app.service.preview_service import (
     match_all_unmatched_metadata,
     match_rename_preview_metadata,
     match_rename_previews_metadata,
+    parse_rename_preview_with_ai,
     update_rename_preview,
 )
 
@@ -167,6 +168,16 @@ def get_preview_metadata_candidates(
             preview_id,
             metadata_match_source=_validate_metadata_match_source(metadata_match_source),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{preview_id}/ai-parse")
+def parse_preview_with_ai(preview_id: int, request: Request):
+    """Run AI structured parsing for one preview."""
+
+    try:
+        return parse_rename_preview_with_ai(request.app.state.settings, preview_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

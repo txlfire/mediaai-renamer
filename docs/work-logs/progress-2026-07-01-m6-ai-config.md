@@ -118,3 +118,18 @@ README 保持正式版口径，只展示 M5 `v0.5.4` 已发布能力，不写入
 验证结果：
 
 - `npm.cmd run backend:test`：通过，151 个测试通过。
+
+## 2026-07-02 v0.6.4 M6-2B 重命名预览 AI 解析 API
+
+完成单条重命名预览的 AI 结构化解析后端入口：
+
+- 新增 `parse_rename_preview_with_ai` 服务包装，基于重命名预览记录组装文件名、路径和本地解析字段。
+- 新增 `POST /api/rename-previews/{preview_id}/ai-parse`，返回结构化 AI 解析候选。
+- API 只返回候选结果，不修改当前预览、不回填目标文件名，后续由前端候选确认流程接入。
+- API 复用 M6-2A 的 AI 热配置、敏感词外部提交保护和 JSON schema 校验能力。
+- 新增 API 测试覆盖结构化候选返回，并确认响应不泄露 AI API Key。
+- 开发版本号升级到 `0.6.4`。
+
+验证结果：
+
+- `npm.cmd run backend:test`：通过，152 个测试通过。
