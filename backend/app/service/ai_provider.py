@@ -22,6 +22,14 @@ class AiProvider(Protocol):
     def test_connection(self) -> dict[str, object]:
         """Validate provider availability with a minimal request."""
 
+    def complete_chat(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, object]:
+        """Run one non-streaming chat completion request."""
+
 
 def join_chat_completions_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/chat/completions"
@@ -93,6 +101,58 @@ class DeepSeekProvider:
                 "response_ms": round((time.perf_counter() - started_at) * 1000),
             }
         except (HTTPError, RuntimeError, OSError, URLError) as exc:
+            error_type, http_status, reason = classify_ai_error(exc)
+            return {
+                "status": "failed",
+                "message": ai_error_message(error_type, http_status, reason),
+                "response_ms": round((time.perf_counter() - started_at) * 1000),
+                "error_type": error_type,
+                "http_status": http_status,
+                "raw_error": reason,
+            }
+
+    def complete_chat(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, object]:
+        started_at = time.perf_counter()
+        payload = {
+            "model": self.config.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+        request = url_request.Request(
+            join_chat_completions_url(self.config.base_url),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "MediaAI-Renamer/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with url_request.urlopen(request, timeout=self.config.timeout_ms / 1000) as response:
+                status_code = getattr(response, "status", 200)
+                if status_code >= 400:
+                    raise RuntimeError(f"HTTP {status_code}")
+                body = json.loads(response.read().decode("utf-8"))
+            choices = body.get("choices") if isinstance(body, dict) else []
+            first_choice = choices[0] if choices else {}
+            message = first_choice.get("message") if isinstance(first_choice, dict) else {}
+            content = message.get("content") if isinstance(message, dict) else ""
+            usage = body.get("usage") if isinstance(body, dict) and isinstance(body.get("usage"), dict) else {}
+            return {
+                "status": "success",
+                "content": str(content or ""),
+                "response_ms": round((time.perf_counter() - started_at) * 1000),
+                "usage": usage,
+            }
+        except (HTTPError, RuntimeError, OSError, URLError, json.JSONDecodeError) as exc:
             error_type, http_status, reason = classify_ai_error(exc)
             return {
                 "status": "failed",

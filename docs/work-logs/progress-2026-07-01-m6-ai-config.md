@@ -101,3 +101,20 @@ README 保持正式版口径，只展示 M5 `v0.5.4` 已发布能力，不写入
 验证结果：
 
 - `npm.cmd run backend:test`：通过，148 个测试通过。
+
+## 2026-07-02 v0.6.3 M6-2A AI 结构化解析服务骨架
+
+完成 M6 AI 结构化解析的后端服务骨架：
+
+- 新增 `AiParseCandidate` 与 `AiParseResult` 结构化结果模型。
+- 扩展 `AiProvider` 抽象，新增非流式 `complete_chat` 能力。
+- `DeepSeekProvider` 新增 OpenAI-compatible `/chat/completions` 实际解析调用封装，返回内容、耗时和 token usage。
+- 新增 `parse_media_with_ai` 服务，解析前读取 AI 热配置并执行外部提交保护。
+- 命中敏感词时不调用 AI Provider，写入 `target_service=ai` 的拦截记录。
+- AI 返回内容必须是 JSON 对象，服务校验 `title`、`media_type`、`year`、`season`、`episode`、`confidence`、`reason` 字段；非法输出不回填，只返回失败状态。
+- 新增后端测试覆盖合法结构化响应、非法 JSON 降级、敏感词阻断 AI 调用。
+- 开发版本号升级到 `0.6.3`。
+
+验证结果：
+
+- `npm.cmd run backend:test`：通过，151 个测试通过。
