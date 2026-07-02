@@ -21,6 +21,7 @@ from app.service.preview_service import (
     match_rename_preview_metadata,
     match_rename_previews_metadata,
 )
+from app.service.external_submission_guard import list_external_submission_blocks
 from app.service.settings_service import update_setting_values
 
 
@@ -104,6 +105,30 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual(100, updated.metadata_match_score)
         self.assertEqual(1999, updated.parsed_year)
         self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
+
+    def test_sensitive_word_blocks_metadata_match_without_provider_call(self):
+        update_setting_values(
+            self.settings,
+            {"privacy.custom_sensitive_words": '["The Matrix"]'},
+            operator="admin",
+        )
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "movie", "黑客帝国", "The Matrix", 1999, None, None, ""),
+            ]
+        )
+
+        updated = match_rename_preview_metadata(self.settings, self.preview.id, provider=provider)
+        candidates = list_metadata_candidates(self.settings, self.preview.id, provider=provider)
+        blocks = list_external_submission_blocks(self.settings, status="blocked")
+
+        self.assertEqual([], provider.searched)
+        self.assertEqual([], candidates)
+        self.assertEqual("needs_review", updated.status)
+        self.assertEqual("blocked", updated.metadata_match_status)
+        self.assertEqual("external_submission_guard", updated.metadata_source)
+        self.assertEqual(1, blocks.total)
+        self.assertEqual("tmdb", blocks.items[0].target_service)
 
     def test_high_confidence_match_records_effective_metadata_source(self):
         candidate = MetadataCandidate("TMDB", "603", "movie", "榛戝甯濆浗", "The Matrix", 1999, None, None, "")

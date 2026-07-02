@@ -11,6 +11,7 @@ import sqlite3
 from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName, PreviewGenerationSummary, RenamePreview
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult
+from app.service.external_submission_guard import check_external_submission
 from app.service.metadata_matcher import MATCH_STATUS_HIGH
 from app.service.metadata_service import MetadataProvider, match_metadata_candidates
 from app.service.settings_service import get_effective_settings
@@ -521,6 +522,9 @@ def list_metadata_candidates(
         cached = _deserialize_metadata_matches(row["metadata_candidates_json"])
     if cached and provider is None:
         return cached
+    guard = _check_metadata_external_submission(settings, row, metadata_match_source)
+    if not guard.allowed:
+        return []
     result = match_metadata_candidates(
         settings,
         _parsed_from_preview(row, metadata_match_source),
@@ -541,6 +545,20 @@ def match_rename_preview_metadata(
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         row = _get_preview_row(connection, preview_id)
+    guard = _check_metadata_external_submission(settings, row, metadata_match_source)
+    if not guard.allowed:
+        return _update_preview_metadata(
+            settings,
+            preview_id,
+            None,
+            "blocked",
+            0,
+            guard.message or "已阻止外部提交，请手动处理",
+            auto_backfill=False,
+            preview_status="needs_review",
+            source_override="external_submission_guard",
+            candidate_matches=[],
+        )
     result = match_metadata_candidates(
         settings,
         _parsed_from_preview(row, metadata_match_source),
@@ -660,4 +678,21 @@ def match_all_unmatched_metadata(
         [int(row[0]) for row in rows],
         provider=provider,
         metadata_match_source=metadata_match_source,
+    )
+
+
+def _check_metadata_external_submission(
+    settings: AppSettings,
+    row: sqlite3.Row,
+    metadata_match_source: str,
+):
+    parsed = _parsed_from_preview(row, metadata_match_source)
+    return check_external_submission(
+        settings,
+        source_module="rename_preview",
+        source_record_id=int(row["id"]),
+        file_name=str(row["file_name"]),
+        file_path=str(row["file_path"]),
+        match_title=parsed.title,
+        target_service="tmdb",
     )
