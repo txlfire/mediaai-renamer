@@ -37,3 +37,22 @@
 - 创建 `v0.5.3` 标签。
 - 推送 `develop`、`main` 和 `v0.5.3`。
 - 切回 `develop`，准备 M6 开发。
+
+## v0.5.4 正式发布补充
+
+用户要求 M5 正式版继续发布并同步 Release，正式发版 README 不包含 M6 内容。本次 `v0.5.4` 作为 M5/M5+ 收尾正式版，范围限定在 M5 已完成能力、M5+ UI 与元数据回填修正、Docker/GHCR 发布基础，不包含 M6 AI 或敏感词外部提交保护功能说明。
+
+本次调整：
+
+- 版本号从 `0.5.3` 升级到 `0.5.4`。
+- README 当前阶段改为 M5 NAS / SMB / NFS 共享目录支持正式版，不写 M6 后续规划。
+- fnOS GHCR 部署默认镜像标签同步到 `v0.5.4`。
+- M5 设计手册和用户手册版本同步到 `0.5.4`。
+验证结果：
+
+- `npm.cmd run backend:test`：通过，138 个测试通过。
+- `npm.cmd run frontend:test`：通过，11 个测试文件、55 个测试通过。
+- `npm.cmd run check:encoding`：通过。
+- `npm.cmd run frontend:build`：通过，仅保留已知 Vite chunk size 警告。
+- `git diff --check`：通过。
+- `npm.cmd run release:package`：通过，生成 `releases/mediaai-renamer-frontend-v0.5.4.zip`。
