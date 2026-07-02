@@ -1366,6 +1366,21 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   overflow: auto;
 }
 
+.settings-block-record-card {
+  gap: 0.875rem;
+}
+
+.settings-block-record-table {
+  width: 100%;
+}
+
+.settings-block-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem 0.375rem;
+  align-items: center;
+}
+
 .link-cell {
   display: inline-flex;
   max-width: 100%;

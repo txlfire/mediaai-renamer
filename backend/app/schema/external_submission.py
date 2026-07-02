@@ -34,3 +34,25 @@ class ExternalSubmissionCheckResult:
     matched_words: list[str]
     message: str | None
     block_record: ExternalSubmissionBlockRecord | None = None
+
+
+@dataclass(frozen=True)
+class ExternalSubmissionBlockList:
+    """External submission block list response."""
+
+    items: list[ExternalSubmissionBlockRecord]
+    total: int
+
+    def __iter__(self):
+        return iter(self.items)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> ExternalSubmissionBlockRecord:
+        return self.items[index]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, list):
+            return self.items == other
+        return super().__eq__(other)

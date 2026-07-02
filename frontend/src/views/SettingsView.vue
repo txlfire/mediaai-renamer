@@ -4,12 +4,14 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import type {
   AiConnectionTestResult,
+  ExternalSubmissionBlockRecord,
+  ExternalSubmissionBlockStatus,
   ImdbConnectionTestResult,
   ImdbStoredConnectionTestResult,
   TmdbChannelTestResult,
   TmdbConnectionTestResult,
 } from "../api/client";
-import { cleanupLogs } from "../api/client";
+import { cleanupLogs, fetchExternalSubmissionBlocks, updateExternalSubmissionBlock } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
@@ -32,6 +34,9 @@ const episodeNamingElements = ref<NamingTemplateElement[]>([]);
 const imdbCardCollapsed = ref(localStorage.getItem("settings.imdb.cardCollapsed") !== "false");
 const customSensitiveWordsCollapsed = ref(localStorage.getItem("settings.privacy.customWordsCollapsed") !== "false");
 const defaultSensitiveWordsDialogVisible = ref(false);
+const externalSubmissionBlocks = ref<ExternalSubmissionBlockRecord[]>([]);
+const externalSubmissionBlockTotal = ref(0);
+const externalSubmissionBlocksLoading = ref(false);
 
 const form = reactive({
   v4Token: "",
@@ -139,6 +144,12 @@ const sensitiveWordTotal = computed(() =>
 
 watch(customSensitiveWordsCollapsed, (collapsed) => {
   localStorage.setItem("settings.privacy.customWordsCollapsed", String(collapsed));
+});
+
+watch(activeCategory, (category) => {
+  if (category === "privacy") {
+    void loadExternalSubmissionBlocks();
+  }
 });
 
 function resetDefaultSensitiveWords() {
@@ -442,6 +453,92 @@ async function savePrivacySettings() {
     ElMessage.success(pageText.saved);
   } catch (error) {
     await notifySaveFailed(error);
+  }
+}
+
+async function loadExternalSubmissionBlocks() {
+  externalSubmissionBlocksLoading.value = true;
+  try {
+    const result = await fetchExternalSubmissionBlocks({ limit: 200 });
+    externalSubmissionBlocks.value = result.items;
+    externalSubmissionBlockTotal.value = result.total;
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    externalSubmissionBlocksLoading.value = false;
+  }
+}
+
+function externalSubmissionStatusType(status: ExternalSubmissionBlockStatus) {
+  if (status === "blocked") {
+    return "danger";
+  }
+  if (status === "override_submitted") {
+    return "warning";
+  }
+  if (status === "ignored" || status === "archived") {
+    return "info";
+  }
+  return "success";
+}
+
+function externalSubmissionStatusText(status: ExternalSubmissionBlockStatus) {
+  const statusMap = pageText.privacy.blockStatuses as Record<string, string>;
+  return statusMap[status] ?? status;
+}
+
+async function updateExternalSubmissionDecision(
+  record: ExternalSubmissionBlockRecord,
+  status: ExternalSubmissionBlockStatus,
+  userDecision: string,
+  overrideReason?: string,
+) {
+  try {
+    await updateExternalSubmissionBlock(record.id, {
+      status,
+      user_decision: userDecision,
+      override_reason: overrideReason,
+    });
+    ElMessage.success(pageText.privacy.blockDecisionSaved);
+    await loadExternalSubmissionBlocks();
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  }
+}
+
+async function markExternalSubmissionIgnored(record: ExternalSubmissionBlockRecord) {
+  await updateExternalSubmissionDecision(record, "ignored", pageText.privacy.blockDecisionIgnored);
+}
+
+async function markExternalSubmissionRenamed(record: ExternalSubmissionBlockRecord) {
+  await updateExternalSubmissionDecision(record, "renamed", pageText.privacy.blockDecisionRenamed);
+}
+
+async function archiveExternalSubmission(record: ExternalSubmissionBlockRecord) {
+  await updateExternalSubmissionDecision(record, "archived", pageText.privacy.blockDecisionArchived);
+}
+
+async function overrideExternalSubmission(record: ExternalSubmissionBlockRecord) {
+  try {
+    const reason = await ElMessageBox.prompt(
+      pageText.privacy.blockOverridePrompt,
+      pageText.privacy.blockOverrideTitle,
+      {
+        confirmButtonText: messages.common.confirm,
+        cancelButtonText: messages.common.cancel,
+        inputPattern: /.+/,
+        inputErrorMessage: pageText.privacy.blockOverrideReasonRequired,
+        type: "warning",
+      },
+    );
+    await updateExternalSubmissionDecision(
+      record,
+      "override_submitted",
+      pageText.privacy.blockDecisionOverride,
+      reason.value,
+    );
+  } catch {
+    // 用户取消确认时不提示错误。
   }
 }
 
@@ -1685,6 +1782,66 @@ onMounted(async () => {
               </div>
             </div>
               </template>
+            </div>
+
+            <div class="settings-config-card settings-block-record-card">
+              <div class="settings-word-preview-heading">
+                <div>
+                  <div class="settings-config-card-title">{{ pageText.privacy.blockRecords }}</div>
+                  <span class="setting-source">
+                    {{ formatMessage(pageText.privacy.blockRecordsTotal, { count: externalSubmissionBlockTotal }) }}
+                  </span>
+                </div>
+                <el-button
+                  size="small"
+                  :loading="externalSubmissionBlocksLoading"
+                  @click="loadExternalSubmissionBlocks"
+                >
+                  {{ messages.common.refresh }}
+                </el-button>
+              </div>
+              <el-table
+                v-loading="externalSubmissionBlocksLoading"
+                :data="externalSubmissionBlocks"
+                size="small"
+                class="settings-block-record-table"
+                :empty-text="pageText.privacy.blockRecordsEmpty"
+              >
+                <el-table-column prop="file_name" :label="pageText.privacy.blockFileName" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="target_service" :label="pageText.privacy.blockTargetService" width="100" />
+                <el-table-column prop="matched_value_masked" :label="pageText.privacy.blockMatchedValue" width="130" />
+                <el-table-column :label="pageText.privacy.blockStatus" width="120">
+                  <template #default="{ row }">
+                    <el-tag :type="externalSubmissionStatusType(row.status)" effect="light">
+                      {{ externalSubmissionStatusText(row.status) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="created_at" :label="pageText.privacy.blockCreatedAt" width="170">
+                  <template #default="{ row }">
+                    {{ formatTestedAt(row.created_at) }}
+                  </template>
+                </el-table-column>
+                <el-table-column prop="user_decision" :label="pageText.privacy.blockDecision" min-width="160" show-overflow-tooltip />
+                <el-table-column :label="pageText.privacy.blockActions" width="300" fixed="right">
+                  <template #default="{ row }">
+                    <div class="settings-block-record-actions">
+                      <el-button size="small" text type="success" @click="markExternalSubmissionRenamed(row)">
+                        {{ pageText.privacy.blockMarkRenamed }}
+                      </el-button>
+                      <el-button size="small" text type="info" @click="markExternalSubmissionIgnored(row)">
+                        {{ pageText.privacy.blockIgnore }}
+                      </el-button>
+                      <el-button size="small" text type="warning" @click="overrideExternalSubmission(row)">
+                        {{ pageText.privacy.blockOverride }}
+                      </el-button>
+                      <el-button size="small" text @click="archiveExternalSubmission(row)">
+                        {{ pageText.privacy.blockArchive }}
+                      </el-button>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
             </div>
 
             <el-dialog

@@ -6,6 +6,7 @@
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
+from app.api.external_submission_blocks import router as external_submission_blocks_router
 from app.api.logs import router as logs_router
 from app.api.media_sources import router as media_sources_router
 from app.api.pending_files import router as pending_files_router
@@ -52,6 +53,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(pending_files_router)
     app.include_router(logs_router)
     app.include_router(settings_router)
+    app.include_router(external_submission_blocks_router)
     logger.info("FastAPI 应用创建完成")
     return app
 

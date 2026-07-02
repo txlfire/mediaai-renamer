@@ -6,6 +6,7 @@ import sqlite3
 
 from app.core.config import AppSettings
 from app.schema.external_submission import (
+    ExternalSubmissionBlockList,
     ExternalSubmissionBlockRecord,
     ExternalSubmissionCheckResult,
 )
@@ -14,6 +15,17 @@ from app.service.settings_service import DEFAULT_MEDIA_RISK_SENSITIVE_WORDS, get
 
 BLOCK_RULE_TYPE_SENSITIVE_WORD = "sensitive_word"
 BLOCK_STATUS_BLOCKED = "blocked"
+BLOCK_STATUS_RENAMED = "renamed"
+BLOCK_STATUS_IGNORED = "ignored"
+BLOCK_STATUS_OVERRIDE_SUBMITTED = "override_submitted"
+BLOCK_STATUS_ARCHIVED = "archived"
+BLOCK_DECISION_STATUSES = {
+    BLOCK_STATUS_BLOCKED,
+    BLOCK_STATUS_RENAMED,
+    BLOCK_STATUS_IGNORED,
+    BLOCK_STATUS_OVERRIDE_SUBMITTED,
+    BLOCK_STATUS_ARCHIVED,
+}
 
 
 def _utc_now() -> str:
@@ -222,28 +234,96 @@ def list_external_submission_blocks(
     status: str | None = None,
     target_service: str | None = None,
     limit: int = 200,
-) -> list[ExternalSubmissionBlockRecord]:
+) -> ExternalSubmissionBlockList:
     """List external submission block records for later user decisions."""
 
     conditions: list[str] = []
     params: list[object] = []
     if status:
+        if status not in BLOCK_DECISION_STATUSES:
+            raise ValueError(f"不支持的拦截记录状态: {status}")
         conditions.append("status = ?")
         params.append(status)
     if target_service:
         conditions.append("target_service = ?")
         params.append(target_service)
     where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    params.append(max(1, min(limit, 1000)))
+    query_params = list(params)
+    list_params = [*params, max(1, min(limit, 1000))]
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        total_row = connection.execute(
+            f"SELECT COUNT(*) FROM external_submission_blocks {where_sql}",
+            query_params,
+        ).fetchone()
+        total = int(total_row[0]) if total_row else 0
         rows = connection.execute(
             "SELECT id, source_module, source_record_id, file_name, file_path, match_title, "
             "target_service, block_rule_type, block_rule_name, matched_value_masked, status, "
             "user_decision, override_reason, created_at, updated_at, decided_at, operator "
             f"FROM external_submission_blocks {where_sql} "
             "ORDER BY id DESC LIMIT ?",
-            params,
+            list_params,
         ).fetchall()
-    return [_row_to_block_record(row) for row in rows]
+    return ExternalSubmissionBlockList(
+        items=[_row_to_block_record(row) for row in rows],
+        total=total,
+    )
+
+
+def update_external_submission_block_decision(
+    settings: AppSettings,
+    block_id: int,
+    status: str,
+    user_decision: str | None,
+    override_reason: str | None,
+    operator: str,
+) -> ExternalSubmissionBlockRecord:
+    """Persist a user's decision for one external submission block record."""
+
+    if status not in BLOCK_DECISION_STATUSES:
+        raise ValueError(f"不支持的拦截记录状态: {status}")
+    if status == BLOCK_STATUS_OVERRIDE_SUBMITTED and not (override_reason or "").strip():
+        raise ValueError("无视规则继续提交必须填写风险确认原因")
+
+    now = _utc_now()
+    decision_text = (user_decision or "").strip() or _default_decision_text(status)
+    reason_text = (override_reason or "").strip() or None
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        exists = connection.execute(
+            "SELECT id FROM external_submission_blocks WHERE id = ?",
+            (block_id,),
+        ).fetchone()
+        if exists is None:
+            raise LookupError("外部提交拦截记录不存在")
+
+        connection.execute(
+            "UPDATE external_submission_blocks "
+            "SET status = ?, user_decision = ?, override_reason = ?, operator = ?, "
+            "decided_at = ?, updated_at = ? WHERE id = ?",
+            (
+                status,
+                decision_text,
+                reason_text,
+                operator,
+                now,
+                now,
+                block_id,
+            ),
+        )
+        connection.commit()
+        return _get_block_record(connection, block_id)
+
+
+def _default_decision_text(status: str) -> str:
+    if status == BLOCK_STATUS_RENAMED:
+        return "用户已修改名称后重新处理"
+    if status == BLOCK_STATUS_IGNORED:
+        return "用户选择不进行匹配并忽略"
+    if status == BLOCK_STATUS_OVERRIDE_SUBMITTED:
+        return "用户确认风险后继续提交"
+    if status == BLOCK_STATUS_ARCHIVED:
+        return "用户归档拦截记录"
+    return "恢复为待处理"

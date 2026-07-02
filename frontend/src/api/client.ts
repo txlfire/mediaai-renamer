@@ -383,6 +383,45 @@ export type AiConnectionTestHistory = {
   matches_current: boolean;
 };
 
+export type ExternalSubmissionBlockStatus =
+  | "blocked"
+  | "renamed"
+  | "ignored"
+  | "override_submitted"
+  | "archived"
+  | string;
+
+export type ExternalSubmissionBlockRecord = {
+  id: number;
+  source_module: string;
+  source_record_id: number;
+  file_name: string;
+  file_path: string;
+  match_title: string | null;
+  target_service: string;
+  block_rule_type: string;
+  block_rule_name: string;
+  matched_value_masked: string;
+  status: ExternalSubmissionBlockStatus;
+  user_decision: string | null;
+  override_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  decided_at: string | null;
+  operator: string | null;
+};
+
+export type ExternalSubmissionBlockList = {
+  items: ExternalSubmissionBlockRecord[];
+  total: number;
+};
+
+export type UpdateExternalSubmissionBlockPayload = {
+  status: ExternalSubmissionBlockStatus;
+  user_decision?: string;
+  override_reason?: string;
+};
+
 export type PendingFile = {
   id: number;
   media_source_id: number;
@@ -805,6 +844,27 @@ export async function fetchAiTestResult(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<AiConnectionTestHistory> {
   const response = await httpClient.get<AiConnectionTestHistory>("/settings/ai/test-result");
+  return response.data;
+}
+
+export async function fetchExternalSubmissionBlocks(
+  filters: { status?: string; target_service?: string; limit?: number } = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ExternalSubmissionBlockList> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<ExternalSubmissionBlockList>(
+    query ? `/external-submission-blocks?${query}` : "/external-submission-blocks",
+  );
+  return response.data;
+}
+
+export async function updateExternalSubmissionBlock(
+  blockId: number,
+  payload: UpdateExternalSubmissionBlockPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ExternalSubmissionBlockRecord> {
+  const patch = requirePatch(httpClient);
+  const response = await patch<ExternalSubmissionBlockRecord>(`/external-submission-blocks/${blockId}`, payload);
   return response.data;
 }
 
