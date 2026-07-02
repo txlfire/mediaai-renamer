@@ -9,15 +9,15 @@ import os
 import re
 import sqlite3
 import time
-from urllib import request as url_request
-from urllib.error import URLError
 
 from app.core.config import AppSettings
 from app.schema.settings import PageTestResult, SettingValue
+from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider
 from app.service.tmdb_client import TmdbClient
 
 
 TMDB_TEST_PAGE_KEY = "settings.tmdb"
+AI_TEST_PAGE_KEY = "settings.ai"
 TMDB_TEST_SNAPSHOT_KEYS = (
     "tmdb.v4_token",
     "tmdb.api_key",
@@ -32,6 +32,15 @@ IMDB_TEST_SNAPSHOT_KEYS = (
     "imdb.enabled",
     "imdb.priority",
     "imdb.timeout_ms",
+)
+AI_TEST_SNAPSHOT_KEYS = (
+    "ai.enabled",
+    "ai.provider",
+    "ai.model",
+    "ai.api_key",
+    "ai.base_url",
+    "ai.timeout_ms",
+    "ai.max_retries",
 )
 DEFAULT_MEDIA_RISK_SENSITIVE_WORDS = [
     "情色",
@@ -556,12 +565,28 @@ def _snapshot_hash(snapshot: dict[str, object]) -> str:
     return hashlib.sha256(_stable_json(snapshot).encode("utf-8")).hexdigest()
 
 
+def _secret_fingerprint(value: object) -> dict[str, object]:
+    secret = str(value or "").strip()
+    if not secret:
+        return {"configured": False, "fingerprint": ""}
+    return {
+        "configured": True,
+        "fingerprint": hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16],
+    }
+
+
 def _tmdb_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
     return {key: effective.get(key) for key in TMDB_TEST_SNAPSHOT_KEYS}
 
 
 def _imdb_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
     return {key: effective.get(key) for key in IMDB_TEST_SNAPSHOT_KEYS}
+
+
+def _ai_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
+    snapshot = {key: effective.get(key) for key in AI_TEST_SNAPSHOT_KEYS}
+    snapshot["ai.api_key"] = _secret_fingerprint(effective.get("ai.api_key"))
+    return snapshot
 
 
 def build_tmdb_config_snapshot(settings: AppSettings) -> dict[str, object]:
@@ -574,6 +599,12 @@ def build_imdb_config_snapshot(settings: AppSettings) -> dict[str, object]:
     """Return the effective IMDb settings snapshot used by connection tests."""
 
     return _imdb_config_snapshot(get_effective_settings(settings))
+
+
+def build_ai_config_snapshot(settings: AppSettings) -> dict[str, object]:
+    """Return the effective AI settings snapshot used by connection tests."""
+
+    return _ai_config_snapshot(get_effective_settings(settings))
 
 
 def _classify_tmdb_error(reason: str) -> tuple[str, int | None]:
@@ -774,6 +805,99 @@ def page_test_result_to_dict(result: PageTestResult | None) -> dict[str, object]
         "tested_at": result.tested_at,
         "updated_at": result.updated_at,
     }
+
+
+def ai_test_result_to_dict(result: PageTestResult | None) -> dict[str, object] | None:
+    if result is None:
+        return None
+    payload = dict(result.v4)
+    payload.update(
+        {
+            "page_key": result.page_key,
+            "config_snapshot": result.config_snapshot,
+            "config_hash": result.config_hash,
+            "effective": result.effective,
+            "tested_at": result.tested_at,
+            "updated_at": result.updated_at,
+        }
+    )
+    return payload
+
+
+def save_ai_connection_test_result(
+    settings: AppSettings,
+    result: dict[str, object],
+) -> dict[str, object]:
+    effective = get_effective_settings(settings)
+    snapshot = _ai_config_snapshot(effective)
+    status = str(result.get("status") or "failed")
+    normalized = {
+        "status": status if status in {"success", "failed"} else "failed",
+        "message": str(result.get("message") or ""),
+        "response_ms": result.get("response_ms"),
+        "error_type": result.get("error_type"),
+        "http_status": result.get("http_status"),
+        "raw_error": result.get("raw_error"),
+        "provider": str(effective.get("ai.provider") or "deepseek"),
+        "model": str(effective.get("ai.model") or "deepseek-chat"),
+    }
+    saved = _save_page_test_result(
+        settings,
+        AI_TEST_PAGE_KEY,
+        snapshot,
+        {
+            "v4": normalized,
+            "v3": {},
+            "effective": "ai" if normalized["status"] == "success" else "none",
+        },
+    )
+    converted = ai_test_result_to_dict(saved)
+    if converted is None:
+        raise RuntimeError("Failed to persist AI test result.")
+    return converted
+
+
+def test_ai_connection(settings: AppSettings, provider: AiProvider | None = None) -> dict[str, object]:
+    """Test the configured AI provider with a minimal chat completion request."""
+
+    effective = get_effective_settings(settings)
+    provider_name = str(effective.get("ai.provider") or "deepseek")
+    model = str(effective.get("ai.model") or "deepseek-chat").strip()
+    api_key = str(effective.get("ai.api_key") or "").strip()
+    base_url = str(effective.get("ai.base_url") or "").strip()
+
+    if provider_name != "deepseek":
+        return save_ai_connection_test_result(
+            settings,
+            {
+                "status": "failed",
+                "message": f"暂不支持的 AI 服务商：{provider_name}",
+                "response_ms": 0,
+                "error_type": "client",
+            },
+        )
+    if not api_key:
+        return save_ai_connection_test_result(
+            settings,
+            {
+                "status": "failed",
+                "message": "未配置 AI API Key",
+                "response_ms": 0,
+                "error_type": "client",
+            },
+        )
+
+    ai_provider = provider or DeepSeekProvider(
+        AiProviderConfig(
+            provider=provider_name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_ms=int(effective.get("ai.timeout_ms") or 30000),
+            max_retries=int(effective.get("ai.max_retries") or 0),
+        )
+    )
+    return save_ai_connection_test_result(settings, ai_provider.test_connection())
 
 
 def get_imdb_test_result(settings: AppSettings) -> dict[str, object] | None:
@@ -1148,6 +1272,11 @@ def update_setting_values(
             connection.execute(
                 "DELETE FROM page_test_results WHERE page_key = ?",
                 (TMDB_TEST_PAGE_KEY,),
+            )
+        if any(key in AI_TEST_SNAPSHOT_KEYS for key in parsed_values):
+            connection.execute(
+                "DELETE FROM page_test_results WHERE page_key = ?",
+                (AI_TEST_PAGE_KEY,),
             )
         if any(key in IMDB_TEST_SNAPSHOT_KEYS for key in parsed_values):
             connection.execute("UPDATE imdb_test_result SET is_valid = 0 WHERE id = 1")

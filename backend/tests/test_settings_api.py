@@ -194,6 +194,36 @@ class SettingsApiTest(unittest.TestCase):
             self.assertFalse(invalidated["result"]["is_valid"])
             self.assertFalse(invalidated["matches_current"])
 
+    def test_ai_connection_test_returns_and_loads_history(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            original = settings_api.test_ai_connection
+            settings_api.test_ai_connection = lambda app_settings: {
+                "status": "success",
+                "message": "AI 连接成功",
+                "response_ms": 66,
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "effective": "ai",
+                "tested_at": "2026-07-01T00:00:00+00:00",
+                "config_snapshot": {"ai.provider": "deepseek"},
+                "config_hash": "hash",
+            }
+            try:
+                response = client.post("/api/settings/ai/test")
+            finally:
+                settings_api.test_ai_connection = original
+            history = client.get("/api/settings/ai/test-result")
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual("success", response.json()["status"])
+            self.assertEqual(200, history.status_code)
+            self.assertIn("current_snapshot", history.json())
+            self.assertIn("matches_current", history.json())
+
 
 
 if __name__ == "__main__":

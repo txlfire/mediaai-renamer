@@ -38,3 +38,29 @@
 - `npm.cmd run frontend:test` 通过，11 个测试文件、55 个测试通过。
 - `npm.cmd run frontend:build` 通过，保留既有 Vite chunk 体积提示。
 - `npm.cmd run check:encoding` 通过。
+
+## 2026-07-02 v0.5.4 小阶段收口
+
+- 完成 M6-1 AI 连接测试闭环：
+  - 新增 `/api/settings/ai/test` 与 `/api/settings/ai/test-result`。
+  - AI 测试结果复用 `page_test_results` 持久化。
+  - AI API Key 测试快照只记录配置状态和指纹，不回显明文。
+  - 前端 AI 设置页增加测试按钮、动态状态栏、历史详情弹窗。
+- 启动 M6-2 Provider 基础：
+  - 新增统一 `AiProvider` 抽象。
+  - 新增 `DeepSeekProvider`，使用 OpenAI-compatible `/chat/completions` 测试连接。
+  - 新增 DeepSeek Provider mock 测试，覆盖成功和鉴权失败。
+- 设置页连接状态栏时间统一为完整格式 `yyyy-mm-dd hh:mm:ss`。
+- 版本号升级到 `0.5.4`，作为 M6 小阶段开发预览版本。
+
+### 验证
+
+- `npm.cmd run backend:test` 通过，143 个测试通过。
+- `npm.cmd run frontend:test` 通过，11 个测试文件、55 个测试通过。
+- `npm.cmd run frontend:build` 通过，保留既有 Vite chunk 体积提示。
+- `npm.cmd run check:encoding` 通过。
+
+### 后续
+
+- M6-0 收尾：补齐外部提交拦截记录 API、前端列表和用户决策动作。
+- M6-2 后续：实现 AI 结构化解析服务和 schema 校验。

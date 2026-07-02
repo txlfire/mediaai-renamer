@@ -158,7 +158,7 @@ body.el-popup-parent--hidden {
   align-items: center;
   width: 100%;
   gap: 8px;
-  min-height: 46px;
+  min-height: 48px;
   padding: 6px;
   border: 0;
   border-radius: 10px;
@@ -237,7 +237,7 @@ body.el-popup-parent--hidden {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: 48px;
   padding: 0 10px;
   border-radius: 7px;
   color: var(--sidebar-muted);
@@ -288,11 +288,7 @@ body.el-popup-parent--hidden {
   place-items: center;
 }
 
-.is-collapsed .side-menu a,
-.is-collapsed .connection-state,
-.is-collapsed .version-theme-row,
-.is-collapsed .theme-toggle,
-.is-collapsed .logout-button {
+.is-collapsed .side-menu a {
   display: grid;
   width: 48px;
   height: 48px;
@@ -301,8 +297,6 @@ body.el-popup-parent--hidden {
 }
 
 .is-collapsed .side-menu a {
-  width: 48px;
-  height: 48px;
   gap: 0;
   padding: 0;
 }
@@ -365,8 +359,8 @@ body.el-popup-parent--hidden {
 
 .is-collapsed .connection-state {
   display: grid;
-  width: 48px;
-  height: 48px;
+  width: 34px;
+  height: 34px;
   gap: 0;
   place-items: center;
 }
@@ -408,6 +402,13 @@ body.el-popup-parent--hidden {
   justify-content: space-between;
 }
 
+.is-collapsed .version-theme-row {
+  display: grid;
+  height: 38px;
+  justify-content: center;
+  place-items: center;
+}
+
 .version-text {
   max-width: 140px;
   font-size: 14px;
@@ -428,6 +429,13 @@ body.el-popup-parent--hidden {
   --el-button-hover-bg-color: var(--button-quiet-hover-bg);
   --el-button-hover-border-color: var(--el-color-primary);
   --el-button-hover-text-color: var(--el-color-primary);
+}
+
+.is-collapsed .theme-toggle {
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
 }
 
 .logout-button {
@@ -490,19 +498,29 @@ body.el-popup-parent--hidden {
 }
 
 .is-collapsed .logout-button {
-  display: grid;
-  width: 48px;
-  height: 48px;
-  padding: 0;
-  place-items: center;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-self: center;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 !important;
+  line-height: 1;
 }
 
 .is-collapsed .logout-button .el-icon {
   position: static;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 16px;
   height: 16px;
   margin: 0 !important;
+}
+
+.is-collapsed .logout-button > span {
+  display: none;
 }
 
 .app-workbench {

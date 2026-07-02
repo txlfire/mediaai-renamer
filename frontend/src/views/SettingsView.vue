@@ -3,6 +3,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import type {
+  AiConnectionTestResult,
   ImdbConnectionTestResult,
   ImdbStoredConnectionTestResult,
   TmdbChannelTestResult,
@@ -13,6 +14,7 @@ import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useSettingsStore } from "../stores/settings";
+import { formatDateTime } from "../utils/displayFormat";
 import {
   detectNamingSemanticWarnings,
   parseNamingTemplate,
@@ -443,7 +445,7 @@ async function savePrivacySettings() {
   }
 }
 
-async function saveAiSettings() {
+async function saveAiSettings(options: { rethrow?: boolean } = {}) {
   try {
     const timeoutSeconds = Math.max(5, Number(form.aiTimeoutSeconds || 30));
     const maxRetries = Math.max(0, Number(form.aiMaxRetries || 0));
@@ -462,9 +464,13 @@ async function saveAiSettings() {
     }
     await settingsStore.saveSettings(values);
     syncForm();
+    resetAiTestState();
     ElMessage.success(pageText.saved);
   } catch (error) {
     await notifySaveFailed(error);
+    if (options.rethrow) {
+      throw error;
+    }
   }
 }
 
@@ -492,6 +498,17 @@ const imdbTestResultModalAutoOpen = ref(false);
 let imdbTestingTimer: ReturnType<typeof window.setInterval> | undefined;
 let imdbStatusPanelScrollTop: number | null = null;
 let imdbStatusPanelElement: HTMLElement | null = null;
+
+const aiTestResult = ref<AiConnectionTestResult | null>(null);
+const aiTestResultDialogVisible = ref(false);
+const aiLastTestTime = ref("");
+const savedAiSnapshot = ref<Record<string, unknown> | null>(null);
+const testingAi = ref(false);
+const aiTestingElapsedSeconds = ref(0);
+const aiTestResultModalAutoOpen = ref(false);
+let aiTestingTimer: ReturnType<typeof window.setInterval> | undefined;
+let aiStatusPanelScrollTop: number | null = null;
+let aiStatusPanelElement: HTMLElement | null = null;
 
 function validateTmdbTimeout(): number | null {
   const value = Number(form.timeoutSeconds || 15);
@@ -614,6 +631,26 @@ function resetImdbTestState() {
   imdbTestResultDialogVisible.value = false;
 }
 
+function buildAiFormSnapshot(): Record<string, unknown> {
+  const timeoutSeconds = Math.min(120, Math.max(5, Number(form.aiTimeoutSeconds || 30)));
+  const maxRetries = Math.min(10, Math.max(0, Number(form.aiMaxRetries || 0)));
+  return {
+    "ai.enabled": form.aiEnabled,
+    "ai.provider": form.aiProvider,
+    "ai.model": form.aiModel.trim() || "deepseek-chat",
+    "ai.api_key": form.aiApiKey.trim() || savedAiSnapshot.value?.["ai.api_key"] || { configured: false, fingerprint: "" },
+    "ai.base_url": form.aiBaseUrl.trim() || "https://api.deepseek.com",
+    "ai.timeout_ms": timeoutSeconds * 1000,
+    "ai.max_retries": maxRetries,
+  };
+}
+
+function resetAiTestState() {
+  aiTestResult.value = null;
+  aiLastTestTime.value = "";
+  aiTestResultDialogVisible.value = false;
+}
+
 const imdbStatusBar = computed(() => {
   if (testingImdb.value) {
     return {
@@ -647,6 +684,41 @@ function imdbResponseTimeText(result: ImdbStoredConnectionTestResult | null) {
     return `${Math.round(result.response_time)} ms`;
   }
   return pageText.imdb.responseTimeUnavailable;
+}
+
+const aiStatusBar = computed(() => {
+  if (testingAi.value) {
+    return {
+      icon: "⏳",
+      text: `AI ${pageText.ai.testing} ${pageText.ai.waited} ${aiTestingElapsedSeconds.value} ${pageText.ai.seconds}`,
+      time: "",
+      tone: "testing",
+    };
+  }
+
+  if (!aiTestResult.value) {
+    return {
+      icon: "⚪",
+      text: pageText.ai.testStatusUntested,
+      time: pageText.ai.noTestRecord,
+      tone: "unknown",
+    };
+  }
+
+  const success = aiTestResult.value.status === "success";
+  return {
+    icon: success ? "🟢" : "🔴",
+    text: success ? pageText.ai.testSuccess : pageText.ai.testFailed,
+    time: aiLastTestTime.value || pageText.ai.noTestRecord,
+    tone: success ? "success" : "danger",
+  };
+});
+
+function aiResponseTimeText(result: AiConnectionTestResult | null) {
+  if (typeof result?.response_ms === "number") {
+    return `${Math.round(result.response_ms)} ms`;
+  }
+  return pageText.ai.responseTimeUnavailable;
 }
 
 const testStatusBar = computed(() => {
@@ -764,23 +836,15 @@ function tmdbFailureStatusMessage(result: TmdbConnectionTestResult) {
 }
 
 function formatClock(date: Date) {
-  return date.toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return formatDateTime(date.toISOString());
 }
 
 function formatTestedAt(value?: string) {
   if (!value) {
     return "";
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return formatClock(date);
+  const formatted = formatDateTime(value);
+  return formatted === "-" ? value : formatted;
 }
 
 function startTestingProgress(channel: "v4" | "v3") {
@@ -817,6 +881,24 @@ function stopImdbTestingProgress() {
   }
   testingImdb.value = false;
   imdbTestingElapsedSeconds.value = 0;
+}
+
+function startAiTestingProgress() {
+  stopAiTestingProgress();
+  testingAi.value = true;
+  aiTestingElapsedSeconds.value = 0;
+  aiTestingTimer = window.setInterval(() => {
+    aiTestingElapsedSeconds.value += 1;
+  }, 1000);
+}
+
+function stopAiTestingProgress() {
+  if (aiTestingTimer !== undefined) {
+    window.clearInterval(aiTestingTimer);
+    aiTestingTimer = undefined;
+  }
+  testingAi.value = false;
+  aiTestingElapsedSeconds.value = 0;
 }
 
 async function runTmdbChannelTest(channel: "v4" | "v3"): Promise<TmdbChannelTestResult> {
@@ -886,6 +968,32 @@ async function executeImdbTest() {
   imdbTestResultDialogVisible.value = true;
 }
 
+async function executeAiTest() {
+  aiTestResultDialogVisible.value = false;
+  aiTestResultModalAutoOpen.value = false;
+  startAiTestingProgress();
+  try {
+    const result = await settingsStore.testAiSettings();
+    aiTestResult.value = result;
+    savedAiSnapshot.value = result.config_snapshot ?? savedAiSnapshot.value;
+    aiLastTestTime.value = formatTestedAt(result.tested_at) || formatClock(new Date());
+  } catch (error) {
+    aiTestResult.value = {
+      status: "failed",
+      message: error instanceof Error ? error.message : String(error),
+      provider: form.aiProvider,
+      model: form.aiModel,
+      effective: "none",
+      response_ms: null,
+    };
+    aiLastTestTime.value = formatClock(new Date());
+  } finally {
+    stopAiTestingProgress();
+  }
+  aiTestResultModalAutoOpen.value = true;
+  aiTestResultDialogVisible.value = true;
+}
+
 async function testTmdbConnection() {
   if (snapshotsEqual(buildTmdbFormSnapshot(), savedTmdbSnapshot.value)) {
     await executeTmdbTest();
@@ -942,6 +1050,36 @@ async function testImdbConnection() {
   }
 }
 
+async function testAiConnection() {
+  if (snapshotsEqual(buildAiFormSnapshot(), savedAiSnapshot.value)) {
+    await executeAiTest();
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      pageText.ai.unsavedConfirm,
+      pageText.tmdb.unsavedConfirmTitle,
+      {
+        confirmButtonText: messages.common.confirm,
+        cancelButtonText: messages.common.cancel,
+        type: "warning",
+      },
+    );
+    try {
+      await saveAiSettings({ rethrow: true });
+      savedAiSnapshot.value = null;
+      const history = await settingsStore.loadAiTestResult({ silent: true });
+      savedAiSnapshot.value = history.current_snapshot;
+      await executeAiTest();
+    } catch {
+      ElMessage.error(pageText.ai.saveBeforeTestFailed);
+    }
+  } catch {
+    await executeAiTest();
+  }
+}
+
 async function openTmdbTestDetail() {
   if (testingChannel.value || testResultModalAutoOpen.value) {
     return;
@@ -989,6 +1127,29 @@ async function openImdbTestDetail() {
   imdbTestResultDialogVisible.value = true;
 }
 
+async function openAiTestDetail() {
+  if (testingAi.value || aiTestResultModalAutoOpen.value) {
+    return;
+  }
+  if (!aiTestResult.value) {
+    try {
+      const history = await settingsStore.loadAiTestResult({ silent: true });
+      savedAiSnapshot.value = history.current_snapshot;
+      if (history.result) {
+        aiTestResult.value = history.result;
+        aiLastTestTime.value = formatTestedAt(history.result.tested_at);
+      }
+    } catch {
+      // Keep the click behavior focused on the status bar message.
+    }
+  }
+  if (!aiTestResult.value) {
+    ElMessage.info(pageText.ai.noTestRecordHint);
+    return;
+  }
+  aiTestResultDialogVisible.value = true;
+}
+
 async function handleTmdbStatusClick() {
   try {
     await openTmdbTestDetail();
@@ -1013,6 +1174,18 @@ function handleImdbTestDialogClosed() {
   imdbTestResultModalAutoOpen.value = false;
 }
 
+async function handleAiStatusClick() {
+  try {
+    await openAiTestDetail();
+  } finally {
+    restoreAiStatusPanelScroll();
+  }
+}
+
+function handleAiTestDialogClosed() {
+  aiTestResultModalAutoOpen.value = false;
+}
+
 function rememberTmdbStatusPanelScroll(event: Event) {
   const panel = (event.currentTarget as HTMLElement | null)?.closest(".settings-panel") as HTMLElement | null;
   tmdbStatusPanelElement = panel;
@@ -1023,6 +1196,12 @@ function rememberImdbStatusPanelScroll(event: Event) {
   const panel = (event.currentTarget as HTMLElement | null)?.closest(".settings-panel") as HTMLElement | null;
   imdbStatusPanelElement = panel;
   imdbStatusPanelScrollTop = panel?.scrollTop ?? null;
+}
+
+function rememberAiStatusPanelScroll(event: Event) {
+  const panel = (event.currentTarget as HTMLElement | null)?.closest(".settings-panel") as HTMLElement | null;
+  aiStatusPanelElement = panel;
+  aiStatusPanelScrollTop = panel?.scrollTop ?? null;
 }
 
 function restoreTmdbStatusPanelScroll() {
@@ -1042,6 +1221,20 @@ function restoreTmdbStatusPanelScroll() {
 function restoreImdbStatusPanelScroll() {
   const panel = imdbStatusPanelElement;
   const scrollTop = imdbStatusPanelScrollTop;
+  if (!panel || scrollTop === null) {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    panel.scrollTop = scrollTop;
+    window.requestAnimationFrame(() => {
+      panel.scrollTop = scrollTop;
+    });
+  });
+}
+
+function restoreAiStatusPanelScroll() {
+  const panel = aiStatusPanelElement;
+  const scrollTop = aiStatusPanelScrollTop;
   if (!panel || scrollTop === null) {
     return;
   }
@@ -1076,6 +1269,16 @@ onMounted(async () => {
     }
   } catch {
     // The page can still be edited and saved if historical IMDb test loading fails.
+  }
+  try {
+    const history = await settingsStore.loadAiTestResult({ silent: true });
+    savedAiSnapshot.value = history.current_snapshot;
+    if (history.result && history.matches_current) {
+      aiTestResult.value = history.result;
+      aiLastTestTime.value = formatTestedAt(history.result.tested_at);
+    }
+  } catch {
+    // The page can still be edited and saved if historical AI test loading fails.
   }
 });
 </script>
@@ -1560,10 +1763,73 @@ onMounted(async () => {
               <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
                 {{ messages.common.refresh }}
               </el-button>
+              <el-button :loading="settingsStore.loading || testingAi" @click="testAiConnection">
+                {{ pageText.ai.testConnection }}
+              </el-button>
               <el-button type="primary" :loading="settingsStore.loading" @click="saveAiSettings">
                 {{ messages.common.save }}
               </el-button>
             </div>
+            <div
+              role="button"
+              class="settings-test-status-bar"
+              :class="[`is-${aiStatusBar.tone}`, { 'is-disabled': testingAi || aiTestResultModalAutoOpen }]"
+              :aria-disabled="Boolean(testingAi || aiTestResultModalAutoOpen)"
+              @pointerdown.prevent="rememberAiStatusPanelScroll"
+              @mousedown.prevent="rememberAiStatusPanelScroll"
+              @click="handleAiStatusClick"
+            >
+              <span class="settings-test-status-state">
+                <span class="settings-test-status-icon">{{ aiStatusBar.icon }}</span>
+                <span class="settings-test-status-text">{{ aiStatusBar.text }}</span>
+              </span>
+              <template v-if="aiStatusBar.time">
+                <span class="settings-test-separator">·</span>
+                <span class="settings-test-status-meta">{{ aiTestResult ? pageText.ai.updatedAt + aiStatusBar.time : aiStatusBar.time }}</span>
+              </template>
+            </div>
+
+            <el-dialog
+              v-model="aiTestResultDialogVisible"
+              :title="pageText.ai.testDetailTitle"
+              width="min(540px, calc(100vw - 2rem))"
+              align-center
+              @closed="handleAiTestDialogClosed"
+            >
+              <div v-if="aiTestResult" class="settings-test-detail">
+                <div class="settings-test-detail-row">
+                  <div class="settings-test-detail-heading">
+                    <strong>AI</strong>
+                    <el-tag :type="channelStatusType(aiTestResult.status)" effect="light">
+                      {{ aiTestResult.status === "success" ? pageText.ai.testSuccess : pageText.ai.testFailed }}
+                    </el-tag>
+                  </div>
+                  <div class="settings-test-detail-item">
+                    <span>{{ pageText.ai.providerLabel }}</span>
+                    <strong>{{ aiTestResult.provider || form.aiProvider }}</strong>
+                  </div>
+                  <div class="settings-test-detail-item">
+                    <span>{{ pageText.ai.modelLabel }}</span>
+                    <strong>{{ aiTestResult.model || form.aiModel }}</strong>
+                  </div>
+                  <div class="settings-test-detail-item">
+                    <span>{{ pageText.ai.responseTime }}</span>
+                    <strong>{{ aiResponseTimeText(aiTestResult) }}</strong>
+                  </div>
+                  <div class="settings-test-detail-item">
+                    <span>{{ pageText.ai.detailMessage }}</span>
+                    <strong>{{ aiTestResult.message || (aiTestResult.status === "success" ? pageText.ai.testSuccess : pageText.ai.testFailed) }}</strong>
+                  </div>
+                </div>
+                <div class="settings-test-summary">
+                  <span>{{ pageText.ai.effectiveStatus }}</span>
+                  <strong>{{ aiTestResult.status === "success" ? pageText.ai.testSuccess : pageText.ai.testFailed }}</strong>
+                </div>
+              </div>
+              <template #footer>
+                <el-button @click="aiTestResultDialogVisible = false">{{ messages.common.close }}</el-button>
+              </template>
+            </el-dialog>
           </div>
         </el-form>
 

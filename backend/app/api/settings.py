@@ -4,7 +4,10 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.service.settings_service import (
+    AI_TEST_PAGE_KEY,
     TMDB_TEST_PAGE_KEY,
+    ai_test_result_to_dict,
+    build_ai_config_snapshot,
     build_imdb_config_snapshot,
     build_tmdb_config_snapshot,
     get_imdb_test_result,
@@ -14,6 +17,7 @@ from app.service.settings_service import (
     page_test_result_to_dict,
     save_imdb_connection_test_result,
     save_tmdb_connection_test_result,
+    test_ai_connection,
     test_imdb_connection,
     test_tmdb_channel,
     test_tmdb_connection,
@@ -160,3 +164,30 @@ def save_imdb_test_result(payload: SaveImdbTestResultRequest, request: Request):
         request.app.state.settings,
         _model_payload(payload),
     )
+
+
+@router.get("/ai/test-result")
+def get_ai_connection_test_result(request: Request):
+    """Return the latest persisted AI connection test result."""
+
+    result = get_page_test_result(request.app.state.settings, AI_TEST_PAGE_KEY)
+    current_snapshot = build_ai_config_snapshot(request.app.state.settings)
+    payload = ai_test_result_to_dict(result)
+    if payload is None:
+        return {
+            "result": None,
+            "current_snapshot": current_snapshot,
+            "matches_current": False,
+        }
+    return {
+        "result": payload,
+        "current_snapshot": current_snapshot,
+        "matches_current": payload["config_snapshot"] == current_snapshot,
+    }
+
+
+@router.post("/ai/test")
+def test_ai_settings(request: Request):
+    """Validate current AI provider settings."""
+
+    return test_ai_connection(request.app.state.settings)

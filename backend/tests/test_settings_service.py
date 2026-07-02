@@ -9,10 +9,13 @@ from unittest.mock import patch
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
 from app.service.settings_service import (
+    AI_TEST_PAGE_KEY,
     get_effective_settings,
     get_imdb_test_result,
+    get_page_test_result,
     list_setting_values,
     save_imdb_connection_test_result,
+    test_ai_connection,
     update_setting_values,
 )
 
@@ -340,6 +343,57 @@ class SettingsServiceTest(unittest.TestCase):
 
             self.assertIsNotNone(invalidated)
             self.assertFalse(invalidated["is_valid"])
+
+    def test_ai_connection_test_persists_result_without_exposing_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "ai.enabled": "true",
+                    "ai.provider": "deepseek",
+                    "ai.model": "deepseek-chat",
+                    "ai.api_key": "sk-secret123456",
+                    "ai.base_url": "https://api.deepseek.com/v1",
+                    "ai.timeout_ms": "5000",
+                    "ai.max_retries": "1",
+                },
+                operator="admin",
+            )
+
+            class FakeAiProvider:
+                def test_connection(self):
+                    return {
+                        "status": "success",
+                        "message": "AI 连接成功",
+                        "response_ms": 42,
+                    }
+
+            result = test_ai_connection(settings, provider=FakeAiProvider())
+
+            saved = get_page_test_result(settings, AI_TEST_PAGE_KEY)
+
+            self.assertEqual("success", result["status"])
+            self.assertEqual(42, result["response_ms"])
+            self.assertIsNotNone(saved)
+            self.assertEqual("ai", saved.effective)
+            self.assertNotIn("sk-secret123456", result["config_snapshot"]["ai.api_key"].values())
+            self.assertTrue(result["config_snapshot"]["ai.api_key"]["configured"])
+
+            update_setting_values(settings, {"ai.model": "deepseek-reasoner"}, operator="admin")
+            self.assertIsNone(get_page_test_result(settings, AI_TEST_PAGE_KEY))
+
+    def test_ai_connection_test_reports_missing_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            result = test_ai_connection(settings)
+
+            self.assertEqual("failed", result["status"])
+            self.assertEqual("未配置 AI API Key", result["message"])
+            self.assertEqual("none", result["effective"])
 
 
 if __name__ == "__main__":

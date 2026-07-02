@@ -1,15 +1,19 @@
 import { defineStore } from "pinia";
 
 import {
+  fetchAiTestResult,
   fetchImdbTestResult,
   fetchTmdbTestResult,
   fetchSettings,
   saveImdbTestResult,
   saveTmdbTestResult,
+  testAiSettings,
   testImdbSettings,
   testTmdbSettingsChannel,
   testTmdbSettings,
   updateSettings,
+  type AiConnectionTestHistory,
+  type AiConnectionTestResult,
   type ImdbConnectionTestHistory,
   type ImdbConnectionTestResult,
   type ImdbStoredConnectionTestResult,
@@ -153,6 +157,36 @@ export const useSettingsStore = defineStore("settings", {
         return await saveImdbTestResult(result);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.settings.imdb.testFailed;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadAiTestResult(options: { silent?: boolean } = {}): Promise<AiConnectionTestHistory> {
+      if (!options.silent) {
+        this.loading = true;
+      }
+      this.errorMessage = "";
+      try {
+        return await fetchAiTestResult();
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.ai.loadTestResultFailed;
+        throw error;
+      } finally {
+        if (!options.silent) {
+          this.loading = false;
+        }
+      }
+    },
+
+    async testAiSettings(): Promise<AiConnectionTestResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        return await testAiSettings();
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.ai.testFailed;
         throw error;
       } finally {
         this.loading = false;

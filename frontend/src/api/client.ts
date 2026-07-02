@@ -353,6 +353,36 @@ export type ImdbConnectionTestHistory = {
   matches_current: boolean;
 };
 
+export type AiConnectionTestResult = {
+  status: "success" | "failed" | string;
+  message: string;
+  response_ms?: number | null;
+  error_type?: "network" | "server" | "timeout" | "client" | "unknown" | string | null;
+  http_status?: number | null;
+  raw_error?: string | null;
+  provider: string;
+  model: string;
+  effective: string;
+  tested_at?: string;
+  updated_at?: string;
+  config_snapshot?: Record<string, unknown>;
+  config_hash?: string;
+};
+
+export type AiStoredConnectionTestResult = AiConnectionTestResult & {
+  page_key: string;
+  config_snapshot: Record<string, unknown>;
+  config_hash: string;
+  tested_at: string;
+  updated_at: string;
+};
+
+export type AiConnectionTestHistory = {
+  result: AiStoredConnectionTestResult | null;
+  current_snapshot: Record<string, unknown>;
+  matches_current: boolean;
+};
+
 export type PendingFile = {
   id: number;
   media_source_id: number;
@@ -771,6 +801,13 @@ export async function fetchImdbTestResult(
   return response.data;
 }
 
+export async function fetchAiTestResult(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AiConnectionTestHistory> {
+  const response = await httpClient.get<AiConnectionTestHistory>("/settings/ai/test-result");
+  return response.data;
+}
+
 export async function testTmdbSettings(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<TmdbConnectionTestResult> {
@@ -789,6 +826,18 @@ export async function testImdbSettings(
   const post = requirePost(httpClient);
   try {
     const response = await post<ImdbConnectionTestResult>("/settings/imdb/test", {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function testAiSettings(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AiConnectionTestResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AiConnectionTestResult>("/settings/ai/test", {});
     return response.data;
   } catch (error) {
     throw new Error(apiErrorMessage(error));
