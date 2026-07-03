@@ -88,11 +88,21 @@ class DatabaseMigrationTest(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE type = 'table'"
                     )
                 }
+                scan_job_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(scan_jobs)")
+                }
 
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
             self.assertIn("page_test_results", tables)
             self.assertIn("imdb_test_result", tables)
             self.assertIn("external_submission_blocks", tables)
+            self.assertIn("scan_file_index", tables)
+            self.assertIn("scan_mode", scan_job_columns)
+            self.assertIn("new_count", scan_job_columns)
+            self.assertIn("changed_count", scan_job_columns)
+            self.assertIn("skipped_count", scan_job_columns)
+            self.assertIn("missing_count", scan_job_columns)
+            self.assertIn("indexed_count", scan_job_columns)
 
     def test_existing_media_sources_are_migrated_to_m5_shared_path_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -281,6 +291,63 @@ class DatabaseMigrationTest(unittest.TestCase):
 
             self.assertIn("metadata_candidates_json", preview_columns)
             self.assertEqual("generated", status)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m10_database_is_migrated_to_incremental_scan_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '10')")
+                connection.execute(
+                    "CREATE TABLE scan_jobs "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "media_source_id INTEGER NOT NULL, status TEXT NOT NULL, "
+                    "batch_size INTEGER NOT NULL, batch_interval_seconds REAL NOT NULL, "
+                    "scanned_count INTEGER NOT NULL DEFAULT 0, "
+                    "video_count INTEGER NOT NULL DEFAULT 0, "
+                    "warning_count INTEGER NOT NULL DEFAULT 0, "
+                    "error_message TEXT, started_at TEXT, ended_at TEXT, "
+                    "created_at TEXT NOT NULL)"
+                )
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                scan_job_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(scan_jobs)")
+                }
+                index_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(scan_file_index)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("scan_file_index", tables)
+            self.assertIn("scan_mode", scan_job_columns)
+            self.assertIn("new_count", scan_job_columns)
+            self.assertIn("changed_count", scan_job_columns)
+            self.assertIn("skipped_count", scan_job_columns)
+            self.assertIn("missing_count", scan_job_columns)
+            self.assertIn("indexed_count", scan_job_columns)
+            self.assertIn("normalized_path", index_columns)
+            self.assertIn("fingerprint", index_columns)
+            self.assertIn("last_scan_job_id", index_columns)
+            self.assertIn("rename_preview_id", index_columns)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
 

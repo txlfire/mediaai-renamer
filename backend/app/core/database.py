@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -127,6 +127,50 @@ def _ensure_external_submission_blocks_table(connection: sqlite3.Connection) -> 
     )
 
 
+def _ensure_scan_file_index_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS scan_file_index "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "media_source_id INTEGER NOT NULL, "
+        "file_path TEXT NOT NULL, "
+        "normalized_path TEXT NOT NULL, "
+        "file_name TEXT NOT NULL, "
+        "extension TEXT NOT NULL, "
+        "file_size INTEGER NOT NULL, "
+        "modified_at TEXT NOT NULL, "
+        "fingerprint TEXT NOT NULL, "
+        "last_scan_job_id INTEGER, "
+        "last_seen_at TEXT, "
+        "status TEXT NOT NULL DEFAULT 'active', "
+        "rename_preview_id INTEGER, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY(media_source_id) REFERENCES media_sources(id), "
+        "FOREIGN KEY(last_scan_job_id) REFERENCES scan_jobs(id), "
+        "FOREIGN KEY(rename_preview_id) REFERENCES rename_previews(id), "
+        "UNIQUE(media_source_id, normalized_path))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_file_index_source_status "
+        "ON scan_file_index(media_source_id, status, updated_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_file_index_fingerprint "
+        "ON scan_file_index(media_source_id, fingerprint)"
+    )
+
+
+def _ensure_scan_job_incremental_columns(connection: sqlite3.Connection) -> None:
+    if "scan_jobs" not in _table_names(connection):
+        return
+    _ensure_column(connection, "scan_jobs", "scan_mode", "TEXT NOT NULL DEFAULT 'full'")
+    _ensure_column(connection, "scan_jobs", "new_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "scan_jobs", "changed_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "scan_jobs", "skipped_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "scan_jobs", "missing_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "scan_jobs", "indexed_count", "INTEGER NOT NULL DEFAULT 0")
+
+
 def _ensure_rename_preview_metadata_columns(connection: sqlite3.Connection) -> None:
     if "rename_previews" not in _table_names(connection):
         return
@@ -216,6 +260,11 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         )
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 11:
+        _ensure_scan_job_incremental_columns(connection)
+        _ensure_scan_file_index_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -238,6 +287,7 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_page_test_results_table(connection)
         _ensure_imdb_test_result_table(connection)
         _ensure_external_submission_blocks_table(connection)
+        _ensure_scan_file_index_table(connection)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS media_sources "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -268,9 +318,15 @@ def ensure_database(settings: AppSettings) -> Path:
             "status TEXT NOT NULL, "
             "batch_size INTEGER NOT NULL, "
             "batch_interval_seconds REAL NOT NULL, "
+            "scan_mode TEXT NOT NULL DEFAULT 'full', "
             "scanned_count INTEGER NOT NULL DEFAULT 0, "
             "video_count INTEGER NOT NULL DEFAULT 0, "
             "warning_count INTEGER NOT NULL DEFAULT 0, "
+            "new_count INTEGER NOT NULL DEFAULT 0, "
+            "changed_count INTEGER NOT NULL DEFAULT 0, "
+            "skipped_count INTEGER NOT NULL DEFAULT 0, "
+            "missing_count INTEGER NOT NULL DEFAULT 0, "
+            "indexed_count INTEGER NOT NULL DEFAULT 0, "
             "error_message TEXT, "
             "started_at TEXT, "
             "ended_at TEXT, "
@@ -342,6 +398,7 @@ def ensure_database(settings: AppSettings) -> Path:
             "FOREIGN KEY(rename_preview_id) REFERENCES rename_previews(id))"
         )
         _ensure_pending_files_table(connection)
+        _ensure_scan_job_incremental_columns(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
