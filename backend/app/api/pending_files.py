@@ -7,6 +7,7 @@ from app.service.pending_file_service import (
     clear_pending_files,
     list_pending_files,
     move_pending_files,
+    parse_pending_file_with_ai,
     remove_pending_file,
 )
 
@@ -41,6 +42,16 @@ def remove_pending(pending_file_id: int, request: Request):
 
     try:
         return remove_pending_file(request.app.state.settings, pending_file_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{pending_file_id}/ai-parse")
+def parse_pending_with_ai(pending_file_id: int, request: Request):
+    """Run AI structured parsing for one pending file."""
+
+    try:
+        return parse_pending_file_with_ai(request.app.state.settings, pending_file_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

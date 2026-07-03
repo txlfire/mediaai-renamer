@@ -153,6 +153,26 @@ README 保持正式版口径，只展示 M5 `v0.5.4` 已发布能力，不写入
 - `npm.cmd run check:encoding`：通过。
 - `git diff --check`：通过。
 
+## 2026-07-03 v0.6.7 M6-3C 待处理文件 AI 解析入口
+
+完成待处理文件列表单条 AI 解析入口：
+
+- 后端新增 `parse_pending_file_with_ai`，对待处理文件执行用户主动触发的 AI 结构化解析。
+- 新增 `POST /api/pending-files/{pending_file_id}/ai-parse`，返回 AI 结构化候选，不修改待处理队列状态。
+- 待处理文件 AI 解析同样复用 AI 热配置、结构化校验和外部提交保护；命中敏感词时不会调用 AI Provider。
+- 前端 API 客户端和 pending store 新增 AI 解析调用。
+- 重命名页面“待处理文件列表”行操作新增“AI 解析”按钮，复用 AI 解析结果弹窗展示候选；由于待处理文件没有命名预览记录，本阶段不提供回填按钮。
+- 新增后端 API 测试和前端 API 客户端测试。
+- 开发版本号升级到 `0.6.7`。
+
+验证结果：
+
+- `npm.cmd run backend:test`：通过，155 个测试通过。
+- `npm.cmd run frontend:test`：通过，11 个测试文件、55 个测试通过。
+- `npm.cmd run frontend:build`：通过，仅保留既有 Vite chunk 体积提示。
+- `npm.cmd run check:encoding`：通过。
+- `git diff --check`：通过。
+
 ## 2026-07-03 v0.6.6 M6-3B AI 候选确认回填
 
 完成重命名预览 AI 候选确认回填闭环：

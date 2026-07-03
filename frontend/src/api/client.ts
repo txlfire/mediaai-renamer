@@ -1004,6 +1004,19 @@ export async function removePendingFile(
   return response.data;
 }
 
+export async function parsePendingFileWithAi(
+  pendingFileId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AiParseResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AiParseResult>(`/pending-files/${pendingFileId}/ai-parse`, {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
 export async function clearPendingFiles(
   filters: PendingFileFilters = {},
   httpClient: ApiHttpClient = apiClient,

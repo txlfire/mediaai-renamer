@@ -28,6 +28,7 @@ import {
   matchRenamePreviewMetadata,
   movePendingFiles,
   parseRenamePreviewWithAi,
+  parsePendingFileWithAi,
   removePendingFile,
   setMediaSourceEnabled,
   testMediaSourceConnection,
@@ -355,12 +356,14 @@ describe("pending file API client", () => {
 
     await fetchPendingFiles({ scan_job_id: 2 }, httpClient);
     await removePendingFile(1, httpClient);
+    await parsePendingFileWithAi(1, httpClient);
     await clearPendingFiles({ scan_job_id: 2 }, httpClient);
     await movePendingFiles([1, 2], "D:/pending", httpClient);
 
     expect(calls).toEqual([
       "GET /pending-files?scan_job_id=2",
       "DELETE /pending-files/1",
+      "POST /pending-files/1/ai-parse:{}",
       "POST /pending-files/clear?scan_job_id=2:{}",
       'POST /pending-files/move:{"ids":[1,2],"target_directory":"D:/pending"}',
     ]);

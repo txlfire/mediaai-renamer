@@ -7,7 +7,10 @@ import shutil
 import sqlite3
 
 from app.core.config import AppSettings
+from app.schema.ai_parse import AiParseResult
 from app.schema.pending_files import PendingFile
+from app.service.ai_parse_service import parse_media_with_ai
+from app.utils.filename_parser import parse_media_filename
 
 
 def _utc_now() -> str:
@@ -27,6 +30,17 @@ def _row_to_pending_file(row: sqlite3.Row) -> PendingFile:
         status=str(row["status"]),
         created_at=str(row["created_at"]),
     )
+
+
+def _get_pending_row(connection: sqlite3.Connection, pending_file_id: int) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT id, media_source_id, scan_job_id, file_path, file_name, extension, "
+        "file_size, reason, status, created_at FROM pending_files WHERE id = ?",
+        (pending_file_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("待处理文件不存在")
+    return row
 
 
 def add_pending_file(
@@ -89,19 +103,30 @@ def remove_pending_file(settings: AppSettings, pending_file_id: int) -> PendingF
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
-        row = connection.execute(
-            "SELECT id, media_source_id, scan_job_id, file_path, file_name, extension, "
-            "file_size, reason, status, created_at FROM pending_files WHERE id = ?",
-            (pending_file_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("待处理文件不存在")
+        row = _get_pending_row(connection, pending_file_id)
         connection.execute(
             "UPDATE pending_files SET status = ? WHERE id = ?",
             ("removed", pending_file_id),
         )
         connection.commit()
     return _row_to_pending_file(row)
+
+
+def parse_pending_file_with_ai(settings: AppSettings, pending_file_id: int) -> AiParseResult:
+    """Run AI structured parsing for one pending file without mutating queue state."""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _get_pending_row(connection, pending_file_id)
+
+    return parse_media_with_ai(
+        settings,
+        source_module="pending_file",
+        source_record_id=int(row["id"]),
+        file_name=str(row["file_name"]),
+        file_path=str(row["file_path"]),
+        parsed=parse_media_filename(str(row["file_name"])),
+    )
 
 
 def clear_pending_files(

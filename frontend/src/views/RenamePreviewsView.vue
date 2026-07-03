@@ -612,6 +612,26 @@ async function parseSingleWithAi(row: RenamePreview) {
   }
 }
 
+async function parsePendingWithAi(row: { id: number }) {
+  aiParsingPreviewId.value = row.id;
+  aiParsePreviewId.value = null;
+  aiParseResult.value = null;
+  try {
+    const result = await pendingFileStore.parseWithAi(row.id);
+    aiParseResult.value = result;
+    aiParseDialogVisible.value = true;
+    if (result.status === "success") {
+      ElMessage.success(messages.renamePreviews.aiParse.success);
+    } else if (result.status === "blocked") {
+      ElMessage.warning(result.message || messages.renamePreviews.aiParse.blocked);
+    } else {
+      ElMessage.error(result.message || messages.renamePreviews.aiParse.failed);
+    }
+  } finally {
+    aiParsingPreviewId.value = null;
+  }
+}
+
 async function applyAiCandidate(candidate: AiParseCandidate) {
   if (!aiParsePreviewId.value) {
     return;
@@ -1109,8 +1129,19 @@ onMounted(async () => {
           <el-table-column :label="messages.renamePreviews.pendingFiles.columns.scanTime" width="168" align="center" header-align="center">
           <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column :label="messages.common.actions" width="96" align="center" header-align="center" fixed="right">
+          <el-table-column :label="messages.common.actions" width="144" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
+          <el-tooltip :content="messages.renamePreviews.actions.aiParse" placement="top">
+          <el-button
+          class="table-action-button action-ai"
+          :icon="MagicStick"
+          text
+          circle
+          :loading="aiParsingPreviewId === row.id"
+          :disabled="pendingFileStore.loading && aiParsingPreviewId !== row.id"
+          @click="parsePendingWithAi(row)"
+          />
+          </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.pendingFiles.remove" placement="top">
           <el-button
           class="table-action-button action-delete"
@@ -1255,7 +1286,14 @@ onMounted(async () => {
               <TextCell :value="candidateValue(row.reason)" :max-length="tableDisplayConfig.tableTextMaxBytes" />
             </template>
           </el-table-column>
-          <el-table-column :label="messages.common.actions" width="128" align="center" header-align="center" fixed="right">
+          <el-table-column
+            v-if="aiParsePreviewId"
+            :label="messages.common.actions"
+            width="128"
+            align="center"
+            header-align="center"
+            fixed="right"
+          >
             <template #default="{ row }">
               <el-button type="primary" @click="applyAiCandidate(row)">
                 {{ messages.renamePreviews.aiParse.apply }}

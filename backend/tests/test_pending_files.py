@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -98,6 +99,57 @@ class PendingFileTest(unittest.TestCase):
                 clear_response = client.post(f"/api/pending-files/clear?scan_job_id={job.id}")
                 self.assertEqual(200, clear_response.status_code)
                 self.assertEqual(1, clear_response.json()["removed_count"])
+            finally:
+                shutdown_logging()
+
+    def test_pending_file_ai_parse_api_returns_candidates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            (media_dir / "unknown.mkv").write_text("x", encoding="utf-8")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "scan.minimum_file_size": "10",
+                    "ai.enabled": "true",
+                    "ai.provider": "deepseek",
+                    "ai.model": "deepseek-chat",
+                    "ai.api_key": "sk-secret123456",
+                    "ai.base_url": "https://api.deepseek.com/v1",
+                },
+                operator="admin",
+            )
+            source = create_media_source(settings, "test", media_dir, True)
+            job = run_full_scan(settings, source.id)
+            pending_id = list_pending_files(settings, scan_job_id=job.id)[0].id
+
+            class FakeDeepSeekProvider:
+                def __init__(self, config):
+                    self.config = config
+
+                def complete_chat(self, messages, max_tokens: int, temperature: float):
+                    return {
+                        "status": "success",
+                        "content": (
+                            '{"title":"未知影片","media_type":"movie","year":2024,'
+                            '"season":null,"episode":null,"confidence":76,"reason":"AI 根据文件名推断"}'
+                        ),
+                        "response_ms": 18,
+                        "usage": {"total_tokens": 42},
+                    }
+
+            client = TestClient(create_app(settings))
+            try:
+                with patch("app.service.ai_parse_service.DeepSeekProvider", FakeDeepSeekProvider):
+                    response = client.post(f"/api/pending-files/{pending_id}/ai-parse")
+
+                self.assertEqual(200, response.status_code)
+                self.assertEqual("success", response.json()["status"])
+                self.assertEqual("未知影片", response.json()["candidates"][0]["title"])
+                self.assertNotIn("sk-secret123456", str(response.json()))
             finally:
                 shutdown_logging()
 
