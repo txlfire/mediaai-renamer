@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
-import type { MetadataMatchResult, MetadataMatchSource, RenamePreview } from "../api/client";
+import type { AiParseResult, MetadataMatchResult, MetadataMatchSource, RenamePreview } from "../api/client";
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
@@ -40,6 +40,7 @@ const operationDialogVisible = ref(false);
 const emptyTargetDialogVisible = ref(false);
 const detailDialogVisible = ref(false);
 const metadataDialogVisible = ref(false);
+const aiParseDialogVisible = ref(false);
 const pendingMoveDialogVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
 const selectedDetailRow = ref<RenamePreview | null>(null);
@@ -50,6 +51,8 @@ const selectedPreviewRows = ref<RenamePreview[]>([]);
 const selectedPendingFileIds = ref<number[]>([]);
 const pendingRenamePreviews = ref<RenamePreview[]>([]);
 const metadataCandidates = ref<MetadataMatchResult[]>([]);
+const aiParseResult = ref<AiParseResult | null>(null);
+const aiParsingPreviewId = ref<number | null>(null);
 const selectedMetadataFields = ref<string[]>(["title", "english_title", "year", "tmdb_id", "imdb_id"]);
 const pendingMoveTargetDirectory = ref("");
 const activePreviewTab = ref("previews");
@@ -207,6 +210,24 @@ function metadataStatusTagType(value: string | null) {
     return "success";
   }
   if (value === "low_confidence") {
+    return "warning";
+  }
+  if (value === "failed") {
+    return "danger";
+  }
+  return "info";
+}
+
+function aiParseStatusLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = messages.renamePreviews.aiParse.statuses;
+  return value ? (labels[value] ?? value) : "-";
+}
+
+function aiParseStatusTagType(value: string | null | undefined) {
+  if (value === "success") {
+    return "success";
+  }
+  if (value === "blocked") {
     return "warning";
   }
   if (value === "failed") {
@@ -562,6 +583,25 @@ async function applyMetadataCandidate(match: MetadataMatchResult) {
   metadataDialogVisible.value = false;
   metadataCandidates.value = [];
   ElMessage.success(messages.renamePreviews.metadataDialog.selectSuccess);
+}
+
+async function parseSingleWithAi(row: RenamePreview) {
+  aiParsingPreviewId.value = row.id;
+  aiParseResult.value = null;
+  try {
+    const result = await previewStore.parseWithAi(row.id);
+    aiParseResult.value = result;
+    aiParseDialogVisible.value = true;
+    if (result.status === "success") {
+      ElMessage.success(messages.renamePreviews.aiParse.success);
+    } else if (result.status === "blocked") {
+      ElMessage.warning(result.message || messages.renamePreviews.aiParse.blocked);
+    } else {
+      ElMessage.error(result.message || messages.renamePreviews.aiParse.failed);
+    }
+  } finally {
+    aiParsingPreviewId.value = null;
+  }
 }
 
 async function removePendingFile(row: { id: number }) {
@@ -954,7 +994,7 @@ onMounted(async () => {
           >
           <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column :label="messages.common.actions" width="128" align="center" header-align="center" fixed="right">
+          <el-table-column :label="messages.common.actions" width="176" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
           <div class="table-actions">
           <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
@@ -964,6 +1004,17 @@ onMounted(async () => {
           text
           circle
           @click.stop="matchMetadata(row)"
+          />
+          </el-tooltip>
+          <el-tooltip :content="messages.renamePreviews.actions.aiParse" placement="top">
+          <el-button
+          class="table-action-button action-ai"
+          :icon="MagicStick"
+          text
+          circle
+          :loading="aiParsingPreviewId === row.id"
+          :disabled="previewStore.loading && aiParsingPreviewId !== row.id"
+          @click.stop="parseSingleWithAi(row)"
           />
           </el-tooltip>
           <el-tooltip v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataBackfill" placement="top">
@@ -1135,6 +1186,61 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="editDialogVisible = false">{{ messages.common.cancel }}</el-button>
         <el-button type="primary" @click="saveEdit">{{ messages.common.save }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="aiParseDialogVisible" :title="messages.renamePreviews.aiParse.title" width="920px">
+      <div v-if="aiParseResult" class="ai-parse-result-panel">
+        <div class="ai-parse-summary">
+          <el-tag :type="aiParseStatusTagType(aiParseResult.status)" effect="light">
+            {{ aiParseStatusLabel(aiParseResult.status) }}
+          </el-tag>
+          <span>{{ aiParseResult.message }}</span>
+          <span v-if="aiParseResult.response_ms !== undefined && aiParseResult.response_ms !== null">
+            {{ messages.renamePreviews.aiParse.responseTime }}：{{ aiParseResult.response_ms }}
+            {{ messages.renamePreviews.aiParse.responseTimeUnit }}
+          </span>
+        </div>
+        <pre
+          v-if="aiParseResult.usage && Object.keys(aiParseResult.usage).length > 0"
+          class="metadata-raw-json ai-parse-usage"
+        >{{ messages.renamePreviews.aiParse.usage }}：{{ JSON.stringify(aiParseResult.usage, null, 2) }}</pre>
+        <el-empty
+          v-if="aiParseResult.candidates.length === 0"
+          :description="messages.renamePreviews.aiParse.empty"
+        />
+        <el-table v-else :data="aiParseResult.candidates" class="data-table" table-layout="auto">
+          <el-table-column type="expand" width="48">
+            <template #default="{ row }">
+              <pre class="metadata-raw-json">{{ JSON.stringify(row.raw_data ?? {}, null, 2) }}</pre>
+            </template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.aiParse.fields.title" min-width="180" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="row.title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+            </template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.aiParse.fields.mediaType" width="96" align="center" header-align="center">
+            <template #default="{ row }">{{ mediaTypeLabel(row.media_type) }}</template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.aiParse.fields.year" width="84" align="center" header-align="center">
+            <template #default="{ row }">{{ row.year ?? "-" }}</template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.aiParse.fields.seasonEpisode" width="104" align="center" header-align="center">
+            <template #default="{ row }">{{ seasonEpisode(row) }}</template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.aiParse.fields.confidence" width="104" align="center" header-align="center">
+            <template #default="{ row }">{{ row.confidence }}%</template>
+          </el-table-column>
+          <el-table-column :label="messages.renamePreviews.aiParse.fields.reason" min-width="220" align="left" header-align="left">
+            <template #default="{ row }">
+              <TextCell :value="candidateValue(row.reason)" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="aiParseDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>
     </el-dialog>
 

@@ -26,6 +26,7 @@ import {
   getHealth,
   matchRenamePreviewMetadata,
   movePendingFiles,
+  parseRenamePreviewWithAi,
   removePendingFile,
   setMediaSourceEnabled,
   testMediaSourceConnection,
@@ -227,6 +228,7 @@ describe("rename preview API client", () => {
       },
       httpClient,
     );
+    await parseRenamePreviewWithAi(1, httpClient);
 
     expect(calls).toEqual([
       'POST /rename-previews/generate:{"scan_job_id":1}',
@@ -235,6 +237,7 @@ describe("rename preview API client", () => {
       "POST /rename-previews/1/metadata-match?metadata_match_source=parsed_title:{}",
       "GET /rename-previews/1/metadata-candidates?metadata_match_source=parsed_title",
       'POST /rename-previews/1/metadata-candidate:{"candidate":{"provider":"TMDB","provider_id":"603","media_type":"movie","title":"黑客帝国","original_title":"The Matrix","year":1999,"season":null,"episode":null,"overview":""},"score":91}',
+      "POST /rename-previews/1/ai-parse:{}",
     ]);
   });
 });

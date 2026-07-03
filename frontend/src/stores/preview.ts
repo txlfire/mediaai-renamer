@@ -8,7 +8,9 @@ import {
   matchAllUnmatchedMetadata,
   matchRenamePreviewMetadata,
   matchRenamePreviewsMetadata,
+  parseRenamePreviewWithAi,
   updateRenamePreview,
+  type AiParseResult,
   type BatchMetadataMatchResult,
   type GenerateRenamePreviewsPayload,
   type MetadataMatchSource,
@@ -139,6 +141,19 @@ export const usePreviewStore = defineStore("preview", {
       const updated = await applyRenamePreviewMetadataCandidate(previewId, match, selectedFields);
       this.replacePreview(updated);
       return updated;
+    },
+
+    async parseWithAi(previewId: number): Promise<AiParseResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        return await parseRenamePreviewWithAi(previewId);
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
     },
   },
 });

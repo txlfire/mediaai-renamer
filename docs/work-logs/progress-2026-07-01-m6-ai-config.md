@@ -133,3 +133,22 @@ README 保持正式版口径，只展示 M5 `v0.5.4` 已发布能力，不写入
 验证结果：
 
 - `npm.cmd run backend:test`：通过，152 个测试通过。
+
+## 2026-07-03 v0.6.5 M6-3A 重命名页 AI 解析前端入口
+
+完成单条重命名预览的 AI 结构化解析前端接入：
+
+- 前端 API 客户端新增 `parseRenamePreviewWithAi`，调用 `POST /api/rename-previews/{preview_id}/ai-parse`。
+- 预览 store 新增 `parseWithAi` 动作，统一 loading 与错误信息处理。
+- 重命名预览表格行操作新增“AI 解析”入口，用户点击后才调用 AI 解析，符合外部提交保护的确认式调用边界。
+- 新增 AI 解析结果弹窗，展示状态、消息、响应耗时、usage、候选标题、类型、年份、季集、置信度、原因和原始 JSON。
+- 本阶段只展示候选结果，不修改预览记录、不自动回填目标文件名；后续阶段再实现用户选择字段回填。
+- 开发版本号升级到 `0.6.5`。
+
+验证结果：
+
+- `npm.cmd run backend:test`：通过，152 个测试通过。
+- `npm.cmd run frontend:test`：通过，11 个测试文件、55 个测试通过。
+- `npm.cmd run frontend:build`：通过，仅保留既有 Vite chunk 体积提示。
+- `npm.cmd run check:encoding`：通过。
+- `git diff --check`：通过。

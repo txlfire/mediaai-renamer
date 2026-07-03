@@ -2108,10 +2108,22 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   color: #16a34a;
 }
 
+.table-action-button.action-ai {
+  --el-button-bg-color: rgba(37, 99, 235, 0.12);
+  --el-button-border-color: rgba(37, 99, 235, 0.28);
+  --el-button-hover-bg-color: rgba(37, 99, 235, 0.18);
+  color: #2563eb;
+}
+
 .table-action-button.action-sync:hover,
 .table-action-button.action-run:hover,
 .table-action-button.action-toggle:hover {
   color: #15803d;
+  background: var(--el-button-hover-bg-color);
+}
+
+.table-action-button.action-ai:hover {
+  color: #1d4ed8;
   background: var(--el-button-hover-bg-color);
 }
 
@@ -2134,6 +2146,13 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   --el-button-border-color: rgba(74, 222, 128, 0.32);
   --el-button-hover-bg-color: rgba(74, 222, 128, 0.22);
   color: #4ade80;
+}
+
+:root[data-theme="dark"] .table-action-button.action-ai {
+  --el-button-bg-color: rgba(96, 165, 250, 0.16);
+  --el-button-border-color: rgba(96, 165, 250, 0.32);
+  --el-button-hover-bg-color: rgba(96, 165, 250, 0.22);
+  color: #60a5fa;
 }
 
 :root[data-theme="dark"] .table-action-button.action-delete {
@@ -2362,6 +2381,24 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.ai-parse-result-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ai-parse-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  color: var(--el-text-color-regular);
+  line-height: 1.5;
+}
+
+.ai-parse-usage {
+  max-height: 10rem;
 }
 
 .rename-action-groups,

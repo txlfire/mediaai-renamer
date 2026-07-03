@@ -225,6 +225,25 @@ export type MetadataMatchResult = {
 
 export type MetadataMatchSource = "parsed_title" | "original_file_name";
 
+export type AiParseCandidate = {
+  title: string;
+  media_type: "movie" | "tv" | "unknown" | string;
+  year: number | null;
+  season: number | null;
+  episode: number | null;
+  confidence: number;
+  reason: string;
+  raw_data: Record<string, unknown>;
+};
+
+export type AiParseResult = {
+  status: "success" | "failed" | "blocked" | string;
+  message: string;
+  candidates: AiParseCandidate[];
+  response_ms?: number | null;
+  usage?: Record<string, unknown>;
+};
+
 export type BatchMetadataMatchResult = {
   total_count: number;
   success_count: number;
@@ -808,6 +827,19 @@ export async function applyRenamePreviewMetadataCandidate(
     selected_fields: selectedFields.length ? selectedFields : undefined,
   });
   return response.data;
+}
+
+export async function parseRenamePreviewWithAi(
+  previewId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AiParseResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AiParseResult>(`/rename-previews/${previewId}/ai-parse`, {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function fetchSettings(

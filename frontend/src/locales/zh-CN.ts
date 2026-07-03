@@ -267,6 +267,7 @@ export const zhCnMessages = {
       execute: "执行重命名",
       tmdbMatch: "TMDB 匹配",
       metadataBackfill: "回填",
+      aiParse: "AI 解析",
     },
     metadataStatuses: {
       high_confidence: "高置信",
@@ -302,6 +303,30 @@ export const zhCnMessages = {
         genres: "类型",
         cast: "演员",
         director: "导演",
+      },
+    },
+    aiParse: {
+      title: "AI 解析结果",
+      empty: "暂无 AI 候选结果",
+      success: "AI 解析完成",
+      blocked: "AI 解析已被外部提交保护拦截",
+      failed: "AI 解析失败",
+      responseTime: "响应时间",
+      responseTimeUnit: "毫秒",
+      usage: "用量",
+      rawData: "原始数据",
+      statuses: {
+        success: "成功",
+        failed: "失败",
+        blocked: "已拦截",
+      },
+      fields: {
+        title: "标题",
+        mediaType: "类型",
+        year: "年份",
+        seasonEpisode: "季/集",
+        confidence: "置信度",
+        reason: "原因",
       },
     },
     pendingFiles: {
