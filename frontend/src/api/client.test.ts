@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   apiClient,
+  applyAiParseCandidate,
   applyRenamePreviewMetadataCandidate,
   bulkDeleteMediaSources,
   clearPendingFiles,
@@ -229,6 +230,20 @@ describe("rename preview API client", () => {
       httpClient,
     );
     await parseRenamePreviewWithAi(1, httpClient);
+    await applyAiParseCandidate(
+      1,
+      {
+        title: "黑客帝国",
+        media_type: "movie",
+        year: 1999,
+        season: null,
+        episode: null,
+        confidence: 90,
+        reason: "AI 识别到中文标题和年份",
+        raw_data: { source: "ai" },
+      },
+      httpClient,
+    );
 
     expect(calls).toEqual([
       'POST /rename-previews/generate:{"scan_job_id":1}',
@@ -238,6 +253,7 @@ describe("rename preview API client", () => {
       "GET /rename-previews/1/metadata-candidates?metadata_match_source=parsed_title",
       'POST /rename-previews/1/metadata-candidate:{"candidate":{"provider":"TMDB","provider_id":"603","media_type":"movie","title":"黑客帝国","original_title":"The Matrix","year":1999,"season":null,"episode":null,"overview":""},"score":91}',
       "POST /rename-previews/1/ai-parse:{}",
+      'POST /rename-previews/1/ai-candidate:{"candidate":{"title":"黑客帝国","media_type":"movie","year":1999,"season":null,"episode":null,"confidence":90,"reason":"AI 识别到中文标题和年份","raw_data":{"source":"ai"}}}',
     ]);
   });
 });

@@ -3,10 +3,12 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.schema.ai_parse import AiParseCandidate
 from app.schema.metadata import MetadataCandidate
 from app.service.preview_service import (
     METADATA_MATCH_SOURCE_PARSED_TITLE,
     METADATA_MATCH_SOURCES,
+    apply_ai_parse_candidate,
     apply_metadata_candidate,
     generate_rename_previews,
     list_metadata_candidates,
@@ -42,6 +44,12 @@ class ApplyMetadataCandidateRequest(BaseModel):
     candidate: MetadataCandidate
     score: int
     selected_fields: list[str] | None = None
+
+
+class ApplyAiParseCandidateRequest(BaseModel):
+    """Manual AI parse candidate selection request."""
+
+    candidate: AiParseCandidate
 
 
 class BatchMetadataMatchRequest(BaseModel):
@@ -197,6 +205,24 @@ def select_preview_metadata_candidate(
             payload.candidate,
             payload.score,
             set(payload.selected_fields) if payload.selected_fields else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{preview_id}/ai-candidate")
+def select_preview_ai_candidate(
+    preview_id: int,
+    payload: ApplyAiParseCandidateRequest,
+    request: Request,
+):
+    """Apply a manually selected AI parse candidate."""
+
+    try:
+        return apply_ai_parse_candidate(
+            request.app.state.settings,
+            preview_id,
+            payload.candidate,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

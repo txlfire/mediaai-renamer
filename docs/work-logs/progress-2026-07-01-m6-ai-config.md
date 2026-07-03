@@ -152,3 +152,22 @@ README 保持正式版口径，只展示 M5 `v0.5.4` 已发布能力，不写入
 - `npm.cmd run frontend:build`：通过，仅保留既有 Vite chunk 体积提示。
 - `npm.cmd run check:encoding`：通过。
 - `git diff --check`：通过。
+
+## 2026-07-03 v0.6.6 M6-3B AI 候选确认回填
+
+完成重命名预览 AI 候选确认回填闭环：
+
+- 后端新增 `apply_ai_parse_candidate`，将 AI 结构化候选转换为 `provider=AI` 的元数据候选。
+- AI 候选回填复用现有命名构建器模板合并逻辑，缺少年份、季号、集号等模板字段时保留本地解析已有值。
+- 新增 `POST /api/rename-previews/{preview_id}/ai-candidate`，用户确认候选后更新命名预览目标文件名，不直接重命名真实文件。
+- 前端 AI 解析结果弹窗新增“选择回填”操作，回填成功后更新当前表格行。
+- 新增后端 service/API 测试和前端 API 客户端测试。
+- 开发版本号升级到 `0.6.6`。
+
+验证结果：
+
+- `npm.cmd run backend:test`：通过，154 个测试通过。
+- `npm.cmd run frontend:test`：通过，11 个测试文件、55 个测试通过。
+- `npm.cmd run frontend:build`：通过，仅保留既有 Vite chunk 体积提示。
+- `npm.cmd run check:encoding`：通过。
+- `git diff --check`：通过。

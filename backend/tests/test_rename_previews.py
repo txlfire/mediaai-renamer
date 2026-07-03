@@ -260,6 +260,34 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual(92, payload["candidates"][0]["confidence"])
         self.assertNotIn("sk-secret123456", str(payload))
 
+    def test_apply_ai_parse_candidate_api(self):
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        preview_id = client.get("/api/rename-previews").json()[0]["id"]
+
+        response = client.post(
+            f"/api/rename-previews/{preview_id}/ai-candidate",
+            json={
+                "candidate": {
+                    "title": "黑客帝国",
+                    "media_type": "movie",
+                    "year": 1999,
+                    "season": None,
+                    "episode": None,
+                    "confidence": 90,
+                    "reason": "AI 识别到中文标题和年份",
+                    "raw_data": {"source": "ai"},
+                },
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("generated", response.json()["status"])
+        self.assertEqual("AI", response.json()["metadata_source"])
+        self.assertEqual(90, response.json()["metadata_match_score"])
+        self.assertEqual("黑客帝国.1999.mkv", response.json()["current_target_name"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,13 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
-import type { AiParseResult, MetadataMatchResult, MetadataMatchSource, RenamePreview } from "../api/client";
+import type {
+  AiParseCandidate,
+  AiParseResult,
+  MetadataMatchResult,
+  MetadataMatchSource,
+  RenamePreview,
+} from "../api/client";
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
@@ -45,6 +51,7 @@ const pendingMoveDialogVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
 const selectedDetailRow = ref<RenamePreview | null>(null);
 const metadataPreviewId = ref<number | null>(null);
+const aiParsePreviewId = ref<number | null>(null);
 const editingTargetName = ref("");
 const selectedPreviewIds = ref<number[]>([]);
 const selectedPreviewRows = ref<RenamePreview[]>([]);
@@ -587,6 +594,7 @@ async function applyMetadataCandidate(match: MetadataMatchResult) {
 
 async function parseSingleWithAi(row: RenamePreview) {
   aiParsingPreviewId.value = row.id;
+  aiParsePreviewId.value = row.id;
   aiParseResult.value = null;
   try {
     const result = await previewStore.parseWithAi(row.id);
@@ -602,6 +610,16 @@ async function parseSingleWithAi(row: RenamePreview) {
   } finally {
     aiParsingPreviewId.value = null;
   }
+}
+
+async function applyAiCandidate(candidate: AiParseCandidate) {
+  if (!aiParsePreviewId.value) {
+    return;
+  }
+  await previewStore.applyAiCandidate(aiParsePreviewId.value, candidate);
+  aiParseDialogVisible.value = false;
+  aiParseResult.value = null;
+  ElMessage.success(messages.renamePreviews.aiParse.selectSuccess);
 }
 
 async function removePendingFile(row: { id: number }) {
@@ -1235,6 +1253,13 @@ onMounted(async () => {
           <el-table-column :label="messages.renamePreviews.aiParse.fields.reason" min-width="220" align="left" header-align="left">
             <template #default="{ row }">
               <TextCell :value="candidateValue(row.reason)" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+            </template>
+          </el-table-column>
+          <el-table-column :label="messages.common.actions" width="128" align="center" header-align="center" fixed="right">
+            <template #default="{ row }">
+              <el-button type="primary" @click="applyAiCandidate(row)">
+                {{ messages.renamePreviews.aiParse.apply }}
+              </el-button>
             </template>
           </el-table-column>
         </el-table>

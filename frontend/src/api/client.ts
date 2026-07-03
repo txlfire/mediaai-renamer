@@ -842,6 +842,22 @@ export async function parseRenamePreviewWithAi(
   }
 }
 
+export async function applyAiParseCandidate(
+  previewId: number,
+  candidate: AiParseCandidate,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreview> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<RenamePreview>(`/rename-previews/${previewId}/ai-candidate`, {
+      candidate,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
 export async function fetchSettings(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<SystemSetting[]> {

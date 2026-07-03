@@ -311,6 +311,8 @@ export const zhCnMessages = {
       success: "AI 解析完成",
       blocked: "AI 解析已被外部提交保护拦截",
       failed: "AI 解析失败",
+      apply: "选择回填",
+      selectSuccess: "已回填 AI 候选",
       responseTime: "响应时间",
       responseTimeUnit: "毫秒",
       usage: "用量",

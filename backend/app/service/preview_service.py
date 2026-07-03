@@ -9,7 +9,7 @@ import os
 import sqlite3
 
 from app.core.config import AppSettings
-from app.schema.ai_parse import AiParseResult
+from app.schema.ai_parse import AiParseCandidate, AiParseResult
 from app.schema.media import ParsedMediaName, PreviewGenerationSummary, RenamePreview
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult
 from app.service.ai_parse_service import parse_media_with_ai
@@ -630,6 +630,38 @@ def apply_metadata_candidate(
         auto_backfill=True,
         preview_status="generated",
         selected_fields=selected_fields,
+    )
+
+
+def apply_ai_parse_candidate(
+    settings: AppSettings,
+    preview_id: int,
+    candidate: AiParseCandidate,
+) -> RenamePreview:
+    """Apply a user-selected AI parse candidate to one preview."""
+
+    metadata_candidate = MetadataCandidate(
+        provider="AI",
+        provider_id=str(candidate.raw_data.get("provider_id") or "ai"),
+        media_type=candidate.media_type,
+        title=candidate.title,
+        original_title=str(candidate.raw_data.get("original_title") or candidate.title),
+        year=candidate.year,
+        season=candidate.season,
+        episode=candidate.episode,
+        overview=str(candidate.raw_data.get("overview") or candidate.reason),
+        raw_data=candidate.raw_data,
+    )
+    return _update_preview_metadata(
+        settings,
+        preview_id,
+        metadata_candidate,
+        "manual_selected",
+        candidate.confidence,
+        candidate.reason,
+        auto_backfill=True,
+        preview_status="generated",
+        source_override="AI",
     )
 
 

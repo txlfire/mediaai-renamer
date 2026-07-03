@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 
 import {
   applyRenamePreviewMetadataCandidate,
+  applyAiParseCandidate,
   fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   generateRenamePreviews,
@@ -10,6 +11,7 @@ import {
   matchRenamePreviewsMetadata,
   parseRenamePreviewWithAi,
   updateRenamePreview,
+  type AiParseCandidate,
   type AiParseResult,
   type BatchMetadataMatchResult,
   type GenerateRenamePreviewsPayload,
@@ -154,6 +156,12 @@ export const usePreviewStore = defineStore("preview", {
       } finally {
         this.loading = false;
       }
+    },
+
+    async applyAiCandidate(previewId: number, candidate: AiParseCandidate) {
+      const updated = await applyAiParseCandidate(previewId, candidate);
+      this.replacePreview(updated);
+      return updated;
     },
   },
 });

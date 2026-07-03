@@ -9,11 +9,13 @@ from unittest.mock import patch
 
 from app.core.config import AppSettings, LoggingSettings, ScanSettings
 from app.core.database import ensure_database
+from app.schema.ai_parse import AiParseCandidate
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult, MetadataMatchSummary
 from app.service.preview_service import (
     METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME,
     METADATA_MATCH_SOURCE_PARSED_TITLE,
+    apply_ai_parse_candidate,
     apply_metadata_candidate,
     generate_rename_previews,
     list_metadata_candidates,
@@ -297,6 +299,37 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual(1, updated.season)
         self.assertEqual(17, updated.episode)
         self.assertEqual("廉政追缉令.1997.S01E17.mkv", updated.current_target_name)
+
+    def test_ai_candidate_selection_backfills_preview_with_template(self):
+        update_setting_values(
+            self.settings,
+            {
+                "naming.movie_template": (
+                    '[{"key":"title","label":"标题","variable":"title"},'
+                    '{"key":"year","label":"年份","variable":"year"}]'
+                ),
+            },
+            operator="admin",
+        )
+        candidate = AiParseCandidate(
+            title="黑客帝国",
+            media_type="movie",
+            year=1999,
+            season=None,
+            episode=None,
+            confidence=88,
+            reason="AI 识别到中文标题和年份",
+            raw_data={"source": "ai"},
+        )
+
+        updated = apply_ai_parse_candidate(self.settings, self.preview.id, candidate)
+
+        self.assertEqual("generated", updated.status)
+        self.assertEqual("AI", updated.metadata_source)
+        self.assertEqual("manual_selected", updated.metadata_match_status)
+        self.assertEqual(88, updated.metadata_match_score)
+        self.assertEqual("AI 识别到中文标题和年份", updated.metadata_message)
+        self.assertEqual("黑客帝国.1999.mkv", updated.current_target_name)
 
     def test_metadata_match_uses_parsed_title_by_default(self):
         provider = FakeMetadataProvider(
