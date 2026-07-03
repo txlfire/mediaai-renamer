@@ -42,6 +42,20 @@ class FilenameParserTest(unittest.TestCase):
         self.assertEqual("", result.title)
         self.assertIn("无法识别标题", result.message or "")
 
+    def test_parse_movie_ignores_technical_group_before_title(self):
+        result = parse_media_filename("(BDRip 1920 FLAC) Inception 2010.mkv")
+
+        self.assertEqual("movie", result.media_type)
+        self.assertEqual("Inception", result.title)
+        self.assertEqual(2010, result.year)
+
+    def test_parse_movie_ignores_technical_group_between_title_and_year(self):
+        result = parse_media_filename("Inception (BDRip 1920 FLAC) 2010.mkv")
+
+        self.assertEqual("movie", result.media_type)
+        self.assertEqual("Inception", result.title)
+        self.assertEqual(2010, result.year)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,6 +65,15 @@ function setCompactPage(page: number) {
       v-if="pagination.pageSize !== PAGE_SIZE_ALL && compactPagerEnabled"
       class="compact-pagination"
     >
+      <el-tooltip :content="messages.common.firstPage" placement="top">
+        <el-button
+          size="small"
+          :disabled="pagination.currentPage <= 1"
+          @click="setCompactPage(1)"
+        >
+          &laquo;
+        </el-button>
+      </el-tooltip>
       <el-button
         size="small"
         :disabled="pagination.currentPage <= 1"
@@ -98,16 +107,47 @@ function setCompactPage(page: number) {
         @change="(page: number | undefined) => setCompactPage(page ?? 1)"
       />
       <span class="compact-pagination-page-label">&#39029;</span>
+      <el-tooltip :content="messages.common.lastPage" placement="top">
+        <el-button
+          size="small"
+          :disabled="pagination.currentPage >= pageCount"
+          @click="setCompactPage(pageCount)"
+        >
+          &raquo;
+        </el-button>
+      </el-tooltip>
     </div>
-    <el-pagination
+    <div
       v-if="pagination.pageSize !== PAGE_SIZE_ALL && !compactPagerEnabled"
-      :current-page="pagination.currentPage"
-      :page-size="pagination.pageSize"
-      :pager-count="normalizedPagerCount"
-      :total="total"
-      background
-      layout="prev, pager, next, jumper"
-      @current-change="(page: number) => paginationStore.setPage(paginationKey, page)"
-    />
+      class="standard-pagination"
+    >
+      <el-tooltip :content="messages.common.firstPage" placement="top">
+        <el-button
+          size="small"
+          :disabled="pagination.currentPage <= 1"
+          @click="setCompactPage(1)"
+        >
+          &laquo;
+        </el-button>
+      </el-tooltip>
+      <el-pagination
+        :current-page="pagination.currentPage"
+        :page-size="pagination.pageSize"
+        :pager-count="normalizedPagerCount"
+        :total="total"
+        background
+        layout="prev, pager, next, jumper"
+        @current-change="(page: number) => paginationStore.setPage(paginationKey, page)"
+      />
+      <el-tooltip :content="messages.common.lastPage" placement="top">
+        <el-button
+          size="small"
+          :disabled="pagination.currentPage >= pageCount"
+          @click="setCompactPage(pageCount)"
+        >
+          &raquo;
+        </el-button>
+      </el-tooltip>
+    </div>
   </div>
 </template>

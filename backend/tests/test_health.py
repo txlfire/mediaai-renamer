@@ -7,6 +7,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+from app.core.config import AppSettings
 from app.main import create_app
 
 
@@ -25,7 +26,7 @@ class HealthEndpointTest(unittest.TestCase):
         self.assertEqual(
             {
                 "app": "MediaAI Renamer",
-                "version": "0.6.8",
+                "version": AppSettings.version,
                 "status": "ok",
             },
             response.json(),

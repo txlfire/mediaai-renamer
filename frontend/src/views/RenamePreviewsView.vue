@@ -105,6 +105,15 @@ const metadataFieldOptions = computed(() => {
     "director",
   ].map((value) => ({ value, label: labels[value as keyof typeof labels] || value }));
 });
+const previewStatItems = computed(() => [
+  { label: messages.common.total, value: previewStore.stats.total, tone: "default" as const },
+  { label: messages.status.generated, value: previewStore.stats.generated, tone: "success" as const },
+  { label: messages.status.needsReview, value: previewStore.stats.needsReview, tone: "warning" as const },
+  { label: messages.status.edited, value: previewStore.stats.edited, tone: "edited" as const },
+  { label: messages.status.renamed, value: previewStore.stats.renamed, tone: "renamed" as const },
+  { label: messages.status.noRename, value: previewStore.stats.noRename, tone: "success" as const },
+  { label: messages.status.unableRename, value: previewStore.stats.unableRename, tone: "danger" as const },
+]);
 const visibleOperationResultLogs = computed(() =>
   operationResultExpanded.value ? operationResultLogs.value : operationResultLogs.value.slice(0, 8),
 );
@@ -1082,13 +1091,23 @@ onMounted(async () => {
           </el-table>
           <div class="rename-table-footer">
             <div class="rename-footer-stats">
-              <ListStatItem :label="messages.common.total" :value="previewStore.stats.total" />
-              <ListStatItem :label="messages.status.generated" :value="previewStore.stats.generated" tone="success" />
-              <ListStatItem :label="messages.status.needsReview" :value="previewStore.stats.needsReview" tone="warning" />
-              <ListStatItem :label="messages.status.edited" :value="previewStore.stats.edited" tone="edited" />
-              <ListStatItem :label="messages.status.renamed" :value="previewStore.stats.renamed" tone="renamed" />
-              <ListStatItem :label="messages.status.noRename" :value="previewStore.stats.noRename" tone="success" />
-              <ListStatItem :label="messages.status.unableRename" :value="previewStore.stats.unableRename" tone="danger" />
+              <el-popover placement="top-start" :trigger="['hover', 'click']" width="220" popper-class="rename-stats-popover">
+                <template #reference>
+                  <el-button class="rename-stats-button" size="small">
+                    <span class="rename-stats-icon" aria-hidden="true">📊</span>
+                    <span>{{ messages.common.statistics }}</span>
+                  </el-button>
+                </template>
+                <div class="rename-stats-popover-list">
+                  <ListStatItem
+                    v-for="item in previewStatItems"
+                    :key="item.label"
+                    :label="item.label"
+                    :value="item.value"
+                    :tone="item.tone"
+                  />
+                </div>
+              </el-popover>
             </div>
             <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" :pager-count="3" />
           </div>

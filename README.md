@@ -2,11 +2,11 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与安全重命名工具。项目目标是安全整理本地或服务端可访问目录中的媒体文件，并提供元数据匹配、命名规则和共享目录能力。
 
-当前版本：`0.6.8`
+当前版本：`0.6.9`
 
-最近正式发布版本：`v0.5.4`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.5.4)
+最近正式发布版本：`v0.6.9`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.6.9)
 
-当前阶段：M6 AI 智能解析完成，待正式发布。
+当前阶段：M6 AI 智能解析正式发布，M7 增量扫描已完成设计，准备进入开发。
 
 ## 当前能力
 
@@ -208,6 +208,9 @@ npm run release:publish
 - M6 验收清单：[docs/development/m6/M6-AI智能解析验收清单.md](docs/development/m6/M6-AI智能解析验收清单.md)
 - M6 设计手册：[docs/design/M6-design-manual.md](docs/design/M6-design-manual.md)
 - M6 用户手册：[docs/manuals/M6-user-manual-cn.md](docs/manuals/M6-user-manual-cn.md)
+- M7 开发计划：[docs/development/m7/M7-增量扫描开发计划.md](docs/development/m7/M7-增量扫描开发计划.md)
+- M7 验收清单：[docs/development/m7/M7-增量扫描验收清单.md](docs/development/m7/M7-增量扫描验收清单.md)
+- M7 设计手册：[docs/design/M7-design-manual.md](docs/design/M7-design-manual.md)
 
 ## Git 分支
 
