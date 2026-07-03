@@ -141,6 +141,40 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual("Movie.Safe.mkv", updated_preview.file_name)
         self.assertEqual("renamed", updated_preview.status)
 
+    def test_execute_updates_scan_file_index_after_successful_rename(self):
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+        update_rename_preview(self.settings, preview.id, "Movie.Index")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO scan_file_index "
+                "(media_source_id, file_path, normalized_path, file_name, extension, file_size, "
+                "modified_at, fingerprint, last_scan_job_id, last_seen_at, status, created_at, updated_at) "
+                "VALUES (1, ?, ?, ?, '.mkv', 5, 'now', 'old', 1, 'now', 'active', 'now', 'now')",
+                (str(self.source), self.source.name.lower(), self.source.name),
+            )
+            connection.commit()
+        operation = create_rename_dry_run(self.settings, [preview.id])
+
+        execute_rename_operation(self.settings, operation.id)
+
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            source_row = connection.execute(
+                "SELECT status, rename_preview_id FROM scan_file_index WHERE normalized_path = ?",
+                (self.source.name.lower(),),
+            ).fetchone()
+            target_row = connection.execute(
+                "SELECT status, rename_preview_id, file_name FROM scan_file_index WHERE normalized_path = ?",
+                ("movie.index.mkv",),
+            ).fetchone()
+
+        self.assertEqual("renamed", source_row["status"])
+        self.assertEqual(preview.id, source_row["rename_preview_id"])
+        self.assertEqual("active", target_row["status"])
+        self.assertEqual(preview.id, target_row["rename_preview_id"])
+        self.assertEqual("Movie.Index.mkv", target_row["file_name"])
+
     def test_execute_completed_operation_keeps_previous_result(self):
         generate_rename_previews(self.settings)
         preview = list_rename_previews(self.settings)[0]

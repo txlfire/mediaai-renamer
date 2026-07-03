@@ -9,6 +9,7 @@ import sqlite3
 from app.core.config import AppSettings
 from app.schema.media import RenameOperation, RenameOperationItem
 from app.service.media_source_service import get_media_source_protocol_context
+from app.service.scan_service import _file_modified_at, _normalized_index_path, _upsert_scan_file_index
 from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
 
@@ -86,6 +87,59 @@ def _update_successful_media_record(
     connection.execute(
         "UPDATE rename_previews SET status = ?, message = ?, updated_at = ? WHERE id = ?",
         ("renamed", None, updated_at, rename_preview_id),
+    )
+
+
+def _sync_scan_index_after_rename(
+    connection: sqlite3.Connection,
+    rename_preview_id: int,
+    source_path: Path,
+    target_path: Path,
+    updated_at: str,
+) -> None:
+    """真实重命名成功后同步增量扫描索引。"""
+
+    row = connection.execute(
+        "SELECT mf.media_source_id, mf.scan_job_id, ms.path AS media_source_path "
+        "FROM rename_previews rp "
+        "JOIN media_files mf ON mf.id = rp.media_file_id "
+        "JOIN media_sources ms ON ms.id = mf.media_source_id "
+        "WHERE rp.id = ?",
+        (rename_preview_id,),
+    ).fetchone()
+    if row is None:
+        return
+
+    media_source_id = int(row["media_source_id"])
+    scan_job_id = int(row["scan_job_id"])
+    media_source_path = Path(str(row["media_source_path"]))
+    source_normalized_path = _normalized_index_path(source_path, media_source_path)
+    connection.execute(
+        "UPDATE scan_file_index SET status = ?, rename_preview_id = ?, updated_at = ? "
+        "WHERE media_source_id = ? AND normalized_path = ?",
+        ("renamed", rename_preview_id, updated_at, media_source_id, source_normalized_path),
+    )
+
+    if not target_path.exists():
+        return
+
+    stat = target_path.stat()
+    _upsert_scan_file_index(
+        connection,
+        media_source_id,
+        scan_job_id,
+        target_path,
+        media_source_path,
+        stat.st_size,
+        _file_modified_at(stat),
+        "active",
+        updated_at,
+    )
+    target_normalized_path = _normalized_index_path(target_path, media_source_path)
+    connection.execute(
+        "UPDATE scan_file_index SET rename_preview_id = ? "
+        "WHERE media_source_id = ? AND normalized_path = ?",
+        (rename_preview_id, media_source_id, target_normalized_path),
     )
 
 
@@ -237,15 +291,20 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                 if not readiness.success:
                     raise ValueError(readiness.message)
                 source_path.rename(target_path)
-                connection.execute(
-                    "UPDATE rename_operation_items SET status = ?, message = ?, updated_at = ? WHERE id = ?",
-                    ("renamed", None, now, item.id),
-                )
                 _update_successful_media_record(
                     connection,
                     item.rename_preview_id,
                     target_path,
                     now,
+                )
+                sync_message = None
+                try:
+                    _sync_scan_index_after_rename(connection, item.rename_preview_id, source_path, target_path, now)
+                except Exception as sync_exc:  # noqa: BLE001 - 文件已重命名，索引失败只记录提示。
+                    sync_message = f"索引同步失败：{sync_exc}"
+                connection.execute(
+                    "UPDATE rename_operation_items SET status = ?, message = ?, updated_at = ? WHERE id = ?",
+                    ("renamed", sync_message, now, item.id),
                 )
                 renamed_count += 1
             except Exception as exc:  # noqa: BLE001 - per-item failure must be recorded.

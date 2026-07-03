@@ -128,6 +128,10 @@ class RenamePreview:
     created_at: str
     updated_at: str
     metadata_candidate_count: int = 0
+    title_source: str = "file_name"
+    parent_folder_title: str | None = None
+    recognition_mode: str = "parent_folder_fallback"
+    title_conflict_message: str | None = None
 
 
 @dataclass(frozen=True)

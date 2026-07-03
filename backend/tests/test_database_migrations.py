@@ -70,6 +70,10 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("metadata_source", preview_columns)
             self.assertIn("metadata_match_status", preview_columns)
             self.assertIn("metadata_match_score", preview_columns)
+            self.assertIn("title_source", preview_columns)
+            self.assertIn("parent_folder_title", preview_columns)
+            self.assertIn("recognition_mode", preview_columns)
+            self.assertIn("title_conflict_message", preview_columns)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
     def test_new_database_records_current_schema_version(self):
@@ -103,6 +107,46 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("skipped_count", scan_job_columns)
             self.assertIn("missing_count", scan_job_columns)
             self.assertIn("indexed_count", scan_job_columns)
+
+    def test_existing_m11_database_is_migrated_to_parent_title_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '11')")
+                connection.execute(
+                    "CREATE TABLE rename_previews "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, media_file_id INTEGER NOT NULL UNIQUE, "
+                    "media_type TEXT NOT NULL, parsed_title TEXT NOT NULL, parsed_year INTEGER, "
+                    "season INTEGER, episode INTEGER, original_extension TEXT NOT NULL, "
+                    "suggested_name TEXT NOT NULL, edited_name TEXT, metadata_source TEXT, "
+                    "metadata_match_status TEXT, metadata_match_score INTEGER NOT NULL DEFAULT 0, "
+                    "metadata_message TEXT, metadata_candidates_json TEXT, status TEXT NOT NULL, "
+                    "message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                preview_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(rename_previews)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("title_source", preview_columns)
+            self.assertIn("parent_folder_title", preview_columns)
+            self.assertIn("recognition_mode", preview_columns)
+            self.assertIn("title_conflict_message", preview_columns)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
     def test_existing_media_sources_are_migrated_to_m5_shared_path_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:

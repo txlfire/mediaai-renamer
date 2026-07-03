@@ -121,9 +121,6 @@ def parse_media_filename(file_name: str) -> ParsedMediaName:
             continue
 
         title = _clean_title(match.group("title"))
-        if not title:
-            return ParsedMediaName("unknown", "", None, None, None, "无法识别标题")
-
         season_text = match.groupdict().get("season")
         return ParsedMediaName(
             media_type="episode",
@@ -131,6 +128,7 @@ def parse_media_filename(file_name: str) -> ParsedMediaName:
             year=None,
             season=int(season_text) if season_text else 1,
             episode=int(match.group("episode")),
+            message=None if title else "无法识别标题",
         )
 
     year_match = YEAR_PATTERN.search(stem)

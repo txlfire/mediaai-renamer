@@ -10,6 +10,7 @@ from app.service.preview_service import (
     METADATA_MATCH_SOURCES,
     apply_ai_parse_candidate,
     apply_metadata_candidate,
+    exclude_rename_preview,
     generate_rename_previews,
     list_metadata_candidates,
     list_rename_previews,
@@ -36,6 +37,12 @@ class UpdateRenamePreviewRequest(BaseModel):
     """Rename preview edit request."""
 
     target_name: str
+
+
+class ExcludeRenamePreviewRequest(BaseModel):
+    """Manual preview exclusion request."""
+
+    reason: str = "manual_excluded"
 
 
 class ApplyMetadataCandidateRequest(BaseModel):
@@ -116,6 +123,20 @@ def update_preview(preview_id: int, payload: UpdateRenamePreviewRequest, request
             request.app.state.settings,
             preview_id,
             payload.target_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{preview_id}/exclude")
+def exclude_preview(preview_id: int, payload: ExcludeRenamePreviewRequest, request: Request):
+    """Move one preview to the pending list without touching the real file."""
+
+    try:
+        return exclude_rename_preview(
+            request.app.state.settings,
+            preview_id,
+            payload.reason,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

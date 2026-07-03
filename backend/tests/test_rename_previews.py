@@ -14,10 +14,12 @@ from app.core.database import ensure_database
 from app.core.logger import shutdown_logging
 from app.main import create_app
 from app.service.preview_service import (
+    exclude_rename_preview,
     generate_rename_previews,
     list_rename_previews,
     update_rename_preview,
 )
+from app.service.pending_file_service import list_pending_files
 from app.service.settings_service import update_setting_values
 
 
@@ -155,6 +157,47 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
 
         self.assertEqual(1, len(previews))
         self.assertEqual("Show.Name.S02E03.mp4", previews[0].current_target_name)
+
+    def test_generate_preview_can_use_parent_folder_title_for_episode_file(self):
+        show_dir = self.media_dir / "Better Show"
+        show_dir.mkdir()
+        episode = show_dir / "S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    3,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+
+        generate_rename_previews(self.settings, media_file_ids=[3])
+        preview = list_rename_previews(self.settings, keyword="Better")[0]
+
+        self.assertEqual("episode", preview.media_type)
+        self.assertEqual("Better Show", preview.parsed_title)
+        self.assertEqual(1, preview.season)
+        self.assertEqual(2, preview.episode)
+        self.assertEqual("parent_folder", preview.title_source)
+        self.assertEqual("Better Show", preview.parent_folder_title)
+
+    def test_preview_can_be_manually_excluded_to_pending_list(self):
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+
+        excluded = exclude_rename_preview(self.settings, preview.id)
+
+        self.assertEqual("excluded", excluded.status)
+        self.assertEqual(1, len(list_pending_files(self.settings)))
+        self.assertNotIn(preview.id, {item.id for item in list_rename_previews(self.settings)})
+        self.assertEqual(preview.id, list_rename_previews(self.settings, status="excluded")[0].id)
 
 
 class RenamePreviewApiTest(RenamePreviewTestCase):

@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -181,6 +181,15 @@ def _ensure_rename_preview_metadata_columns(connection: sqlite3.Connection) -> N
     _ensure_column(connection, "rename_previews", "metadata_candidates_json", "TEXT")
 
 
+def _ensure_rename_preview_title_source_columns(connection: sqlite3.Connection) -> None:
+    if "rename_previews" not in _table_names(connection):
+        return
+    _ensure_column(connection, "rename_previews", "title_source", "TEXT NOT NULL DEFAULT 'file_name'")
+    _ensure_column(connection, "rename_previews", "parent_folder_title", "TEXT")
+    _ensure_column(connection, "rename_previews", "recognition_mode", "TEXT NOT NULL DEFAULT 'parent_folder_fallback'")
+    _ensure_column(connection, "rename_previews", "title_conflict_message", "TEXT")
+
+
 def _ensure_pending_files_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS pending_files "
@@ -263,6 +272,10 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
     if version < 11:
         _ensure_scan_job_incremental_columns(connection)
         _ensure_scan_file_index_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 12:
+        _ensure_rename_preview_title_source_columns(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 
@@ -364,6 +377,10 @@ def ensure_database(settings: AppSettings) -> Path:
             "metadata_match_score INTEGER NOT NULL DEFAULT 0, "
             "metadata_message TEXT, "
             "metadata_candidates_json TEXT, "
+            "title_source TEXT NOT NULL DEFAULT 'file_name', "
+            "parent_folder_title TEXT, "
+            "recognition_mode TEXT NOT NULL DEFAULT 'parent_folder_fallback', "
+            "title_conflict_message TEXT, "
             "status TEXT NOT NULL, "
             "message TEXT, "
             "created_at TEXT NOT NULL, "
@@ -399,6 +416,7 @@ def ensure_database(settings: AppSettings) -> Path:
         )
         _ensure_pending_files_table(connection)
         _ensure_scan_job_incremental_columns(connection)
+        _ensure_rename_preview_title_source_columns(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)

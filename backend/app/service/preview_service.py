@@ -16,6 +16,7 @@ from app.service.ai_parse_service import parse_media_with_ai
 from app.service.external_submission_guard import check_external_submission
 from app.service.metadata_matcher import MATCH_STATUS_HIGH
 from app.service.metadata_service import MetadataProvider, match_metadata_candidates
+from app.service.pending_file_service import add_pending_file
 from app.service.settings_service import get_effective_settings
 from app.utils.filename_parser import parse_media_filename
 from app.utils.naming_template import build_preview_name_with_settings, template_variables_for_media_type
@@ -59,6 +60,10 @@ def _row_to_preview(row: sqlite3.Row) -> RenamePreview:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         metadata_candidate_count=len(_deserialize_metadata_matches(metadata_candidates_json)),
+        title_source=str(row["title_source"]) if "title_source" in row.keys() else "file_name",
+        parent_folder_title=row["parent_folder_title"] if "parent_folder_title" in row.keys() else None,
+        recognition_mode=str(row["recognition_mode"]) if "recognition_mode" in row.keys() else "parent_folder_fallback",
+        title_conflict_message=row["title_conflict_message"] if "title_conflict_message" in row.keys() else None,
     )
 
 
@@ -101,6 +106,50 @@ def _status_for_target(file_path: str, original_name: str, target_name: str, fal
     if path.exists() and os.access(path, os.R_OK | os.W_OK):
         return "no_rename"
     return "unable_rename"
+
+
+def _has_usable_title(parsed: ParsedMediaName) -> bool:
+    return bool(parsed.title and parsed.title.strip())
+
+
+def _message_without_title_warning(message: str | None) -> str | None:
+    if message == "无法识别标题":
+        return None
+    return message
+
+
+def _merge_parent_folder_title(row: sqlite3.Row, parsed: ParsedMediaName) -> tuple[ParsedMediaName, str, str | None, str | None]:
+    """用上级文件夹名称补全弱文件名解析结果，保留文件名中的季集信息。"""
+
+    parent_name = Path(str(row["file_path"])).parent.name
+    if not parent_name:
+        return parsed, "file_name", None, None
+
+    parent_parsed = parse_media_filename(parent_name)
+    parent_title = parent_parsed.title.strip()
+    if not parent_title:
+        return parsed, "file_name", None, None
+
+    if not _has_usable_title(parsed):
+        media_type = parsed.media_type if parsed.media_type != "unknown" else parent_parsed.media_type
+        if parsed.season is not None or parsed.episode is not None:
+            media_type = "episode"
+        return (
+            ParsedMediaName(
+                media_type=media_type,
+                title=parent_title,
+                year=parsed.year if parsed.year is not None else parent_parsed.year,
+                season=parsed.season,
+                episode=parsed.episode,
+                message=_message_without_title_warning(parsed.message),
+                extra=parsed.extra,
+            ),
+            "parent_folder",
+            parent_title,
+            None,
+        )
+
+    return parsed, "file_name", parent_title, None
 
 
 def _query_media_files(
@@ -150,8 +199,12 @@ def generate_rename_previews(
         rows = _query_media_files(connection, media_source_id, scan_job_id, media_file_ids)
         for row in rows:
             parsed = parse_media_filename(str(row["file_name"]))
+            parsed, title_source, parent_folder_title, title_conflict_message = _merge_parent_folder_title(row, parsed)
             suggested_name = build_preview_name_with_settings(parsed, str(row["extension"]), effective_settings)
             status = "needs_review" if parsed.media_type == "unknown" or parsed.message else "generated"
+            message = title_conflict_message or parsed.message
+            if title_conflict_message:
+                status = "needs_review"
             status = _status_for_target(str(row["file_path"]), str(row["file_name"]), suggested_name, status)
             if status == "needs_review":
                 needs_review_count += 1
@@ -171,8 +224,9 @@ def generate_rename_previews(
             connection.execute(
                 "INSERT INTO rename_previews "
                 "(media_file_id, media_type, parsed_title, parsed_year, season, episode, "
-                "original_extension, suggested_name, edited_name, status, message, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "original_extension, suggested_name, edited_name, title_source, parent_folder_title, "
+                "recognition_mode, title_conflict_message, status, message, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(media_file_id) DO UPDATE SET "
                 "media_type = excluded.media_type, "
                 "parsed_title = excluded.parsed_title, "
@@ -182,6 +236,10 @@ def generate_rename_previews(
                 "original_extension = excluded.original_extension, "
                 "suggested_name = excluded.suggested_name, "
                 "edited_name = excluded.edited_name, "
+                "title_source = excluded.title_source, "
+                "parent_folder_title = excluded.parent_folder_title, "
+                "recognition_mode = excluded.recognition_mode, "
+                "title_conflict_message = excluded.title_conflict_message, "
                 "metadata_candidates_json = NULL, "
                 "status = excluded.status, "
                 "message = excluded.message, "
@@ -196,8 +254,12 @@ def generate_rename_previews(
                     str(row["extension"]).lower(),
                     suggested_name,
                     edited_name,
+                    title_source,
+                    parent_folder_title,
+                    "parent_folder_fallback",
+                    title_conflict_message,
                     status,
-                    parsed.message,
+                    message,
                     now,
                     now,
                 ),
@@ -228,6 +290,9 @@ def list_rename_previews(
     if status:
         conditions.append("rp.status = ?")
         params.append(status)
+    else:
+        conditions.append("rp.status != ?")
+        params.append("excluded")
     if media_type:
         conditions.append("rp.media_type = ?")
         params.append(media_type)
@@ -247,6 +312,7 @@ def list_rename_previews(
             "rp.parsed_title, rp.parsed_year, rp.season, rp.episode, rp.original_extension, "
             "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
             "rp.metadata_match_score, rp.metadata_message, rp.metadata_candidates_json, rp.status, rp.message, "
+            "rp.title_source, rp.parent_folder_title, rp.recognition_mode, rp.title_conflict_message, "
             "rp.created_at, rp.updated_at "
             "FROM rename_previews rp "
             "JOIN media_files mf ON mf.id = rp.media_file_id"
@@ -299,12 +365,45 @@ def update_rename_preview(
     raise ValueError("命名预览不存在")
 
 
+def exclude_rename_preview(settings: AppSettings, preview_id: int, reason: str = "manual_excluded") -> RenamePreview:
+    """把预览项手动排除到待处理列表，不删除真实文件。"""
+
+    now = _utc_now()
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT rp.id, mf.media_source_id, mf.scan_job_id, mf.file_path, mf.file_size "
+            "FROM rename_previews rp JOIN media_files mf ON mf.id = rp.media_file_id "
+            "WHERE rp.id = ?",
+            (preview_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("命名预览不存在")
+
+        add_pending_file(
+            connection,
+            int(row["media_source_id"]),
+            int(row["scan_job_id"]),
+            Path(str(row["file_path"])),
+            int(row["file_size"]),
+            reason,
+        )
+        connection.execute(
+            "UPDATE rename_previews SET status = ?, message = ?, updated_at = ? WHERE id = ?",
+            ("excluded", "用户手动排除到待处理列表", now, preview_id),
+        )
+        connection.commit()
+
+    return _preview_by_id(settings, preview_id)
+
+
 def _get_preview_row(connection: sqlite3.Connection, preview_id: int) -> sqlite3.Row:
     row = connection.execute(
         "SELECT rp.id, rp.media_file_id, mf.file_path, mf.file_name, rp.media_type, "
         "rp.parsed_title, rp.parsed_year, rp.season, rp.episode, rp.original_extension, "
         "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
         "rp.metadata_match_score, rp.metadata_message, rp.metadata_candidates_json, rp.status, rp.message, "
+        "rp.title_source, rp.parent_folder_title, rp.recognition_mode, rp.title_conflict_message, "
         "rp.created_at, rp.updated_at "
         "FROM rename_previews rp "
         "JOIN media_files mf ON mf.id = rp.media_file_id "
