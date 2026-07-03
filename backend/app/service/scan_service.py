@@ -19,6 +19,11 @@ from app.service.settings_service import get_effective_settings
 from app.utils.media_file import is_video_file
 
 
+SCAN_MODE_FULL = "full"
+SCAN_MODE_INCREMENTAL = "incremental"
+SCAN_MODES = {SCAN_MODE_FULL, SCAN_MODE_INCREMENTAL}
+
+
 def _utc_now() -> str:
     """返回 ISO 8601 UTC 时间字符串。"""
 
@@ -41,6 +46,12 @@ def _row_to_scan_job(row: sqlite3.Row) -> ScanJob:
         started_at=row["started_at"],
         ended_at=row["ended_at"],
         created_at=str(row["created_at"]),
+        scan_mode=str(row["scan_mode"]),
+        new_count=int(row["new_count"]),
+        changed_count=int(row["changed_count"]),
+        skipped_count=int(row["skipped_count"]),
+        missing_count=int(row["missing_count"]),
+        indexed_count=int(row["indexed_count"]),
     )
 
 
@@ -65,8 +76,9 @@ def _fetch_scan_job(connection: sqlite3.Connection, job_id: int) -> ScanJob:
 
     row = connection.execute(
         "SELECT id, media_source_id, status, batch_size, batch_interval_seconds, "
-        "scanned_count, video_count, warning_count, error_message, started_at, "
-        "ended_at, created_at FROM scan_jobs WHERE id = ?",
+        "scan_mode, scanned_count, video_count, warning_count, new_count, "
+        "changed_count, skipped_count, missing_count, indexed_count, "
+        "error_message, started_at, ended_at, created_at FROM scan_jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     if row is None:
@@ -140,16 +152,110 @@ def _stat_with_nfs_retry(file_path: Path, retry_count: int, timeout_seconds: int
                 raise
 
 
-def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
-    """对媒体源执行全量扫描。
+def _normalized_index_path(file_path: Path, source_path: Path) -> str:
+    try:
+        relative_path = file_path.relative_to(source_path)
+        normalized = relative_path.as_posix()
+    except ValueError:
+        normalized = str(file_path).replace("\\", "/")
+    return normalized.lower()
 
-    Args:
-        settings: 应用运行配置。
-        media_source_id: 媒体源 ID。
 
-    Returns:
-        完成后的扫描任务。
-    """
+def _file_modified_at(stat: object) -> str:
+    return datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+
+
+def _file_fingerprint(normalized_path: str, file_size: int, modified_at: str, extension: str) -> str:
+    return f"{normalized_path}|{file_size}|{modified_at}|{extension.lower()}"
+
+
+def _get_index_row(
+    connection: sqlite3.Connection,
+    media_source_id: int,
+    normalized_path: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        "SELECT id, fingerprint, status FROM scan_file_index "
+        "WHERE media_source_id = ? AND normalized_path = ?",
+        (media_source_id, normalized_path),
+    ).fetchone()
+
+
+def _upsert_scan_file_index(
+    connection: sqlite3.Connection,
+    media_source_id: int,
+    job_id: int,
+    file_path: Path,
+    source_path: Path,
+    file_size: int,
+    modified_at: str,
+    status: str,
+    now: str,
+) -> tuple[str, str]:
+    normalized_path = _normalized_index_path(file_path, source_path)
+    extension = file_path.suffix.lower()
+    fingerprint = _file_fingerprint(normalized_path, file_size, modified_at, extension)
+    connection.execute(
+        "INSERT INTO scan_file_index "
+        "(media_source_id, file_path, normalized_path, file_name, extension, file_size, "
+        "modified_at, fingerprint, last_scan_job_id, last_seen_at, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(media_source_id, normalized_path) DO UPDATE SET "
+        "file_path = excluded.file_path, "
+        "file_name = excluded.file_name, "
+        "extension = excluded.extension, "
+        "file_size = excluded.file_size, "
+        "modified_at = excluded.modified_at, "
+        "fingerprint = excluded.fingerprint, "
+        "last_scan_job_id = excluded.last_scan_job_id, "
+        "last_seen_at = excluded.last_seen_at, "
+        "status = excluded.status, "
+        "updated_at = excluded.updated_at",
+        (
+            media_source_id,
+            str(file_path),
+            normalized_path,
+            file_path.name,
+            extension,
+            file_size,
+            modified_at,
+            fingerprint,
+            job_id,
+            now,
+            status,
+            now,
+            now,
+        ),
+    )
+    return normalized_path, fingerprint
+
+
+def _mark_missing_scan_indexes(
+    connection: sqlite3.Connection,
+    media_source_id: int,
+    seen_paths: set[str],
+    now: str,
+) -> int:
+    rows = connection.execute(
+        "SELECT normalized_path FROM scan_file_index "
+        "WHERE media_source_id = ? AND status IN ('active', 'ignored')",
+        (media_source_id,),
+    ).fetchall()
+    missing_paths = [str(row["normalized_path"]) for row in rows if str(row["normalized_path"]) not in seen_paths]
+    for normalized_path in missing_paths:
+        connection.execute(
+            "UPDATE scan_file_index SET status = 'missing', updated_at = ? "
+            "WHERE media_source_id = ? AND normalized_path = ?",
+            (now, media_source_id, normalized_path),
+        )
+    return len(missing_paths)
+
+
+def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = SCAN_MODE_FULL) -> ScanJob:
+    """执行媒体源扫描，兼容全量和增量模式。"""
+
+    if scan_mode not in SCAN_MODES:
+        raise ValueError("扫描模式不受支持")
 
     source = get_media_source(settings, media_source_id)
     if not source.enabled:
@@ -180,13 +286,14 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
         connection.row_factory = sqlite3.Row
         cursor = connection.execute(
             "INSERT INTO scan_jobs "
-            "(media_source_id, status, batch_size, batch_interval_seconds, "
-            "started_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "(media_source_id, status, batch_size, batch_interval_seconds, scan_mode, "
+            "started_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 media_source_id,
                 "running",
                 batch_size,
                 batch_interval_seconds,
+                scan_mode,
                 created_at,
                 created_at,
             ),
@@ -197,6 +304,12 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
         scanned_count = 0
         video_count = 0
         warning_count = 0
+        new_count = 0
+        changed_count = 0
+        skipped_count = 0
+        missing_count = 0
+        indexed_count = 0
+        seen_index_paths: set[str] = set()
         warning_details: list[str] = []
         try:
             path_iterator = source_path.rglob("*") if recursive else source_path.iterdir()
@@ -225,6 +338,41 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                             warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
                             continue
                         raise
+
+                    now = _utc_now()
+                    modified_at = _file_modified_at(stat)
+                    normalized_path = _normalized_index_path(file_path, source_path)
+                    extension = file_path.suffix.lower()
+                    fingerprint = _file_fingerprint(normalized_path, stat.st_size, modified_at, extension)
+                    index_row = _get_index_row(connection, media_source_id, normalized_path)
+                    seen_index_paths.add(normalized_path)
+
+                    if (
+                        scan_mode == SCAN_MODE_INCREMENTAL
+                        and index_row is not None
+                        and str(index_row["fingerprint"]) == fingerprint
+                        and str(index_row["status"]) in {"active", "ignored"}
+                    ):
+                        _upsert_scan_file_index(
+                            connection,
+                            media_source_id,
+                            job_id,
+                            file_path,
+                            source_path,
+                            stat.st_size,
+                            modified_at,
+                            str(index_row["status"]),
+                            now,
+                        )
+                        skipped_count += 1
+                        indexed_count += 1
+                        continue
+
+                    if index_row is None:
+                        new_count += 1
+                    elif str(index_row["fingerprint"]) != fingerprint or str(index_row["status"]) == "missing":
+                        changed_count += 1
+
                     if stat.st_size < minimum_file_size:
                         add_pending_file(
                             connection,
@@ -234,10 +382,22 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                             stat.st_size,
                             "size_filtered",
                         )
+                        _upsert_scan_file_index(
+                            connection,
+                            media_source_id,
+                            job_id,
+                            file_path,
+                            source_path,
+                            stat.st_size,
+                            modified_at,
+                            "ignored",
+                            now,
+                        )
+                        indexed_count += 1
                         warning_count += 1
                         warning_details.append(f"{file_path.name}: 文件小于最小扫描大小")
                         continue
-                    now = _utc_now()
+
                     connection.execute(
                         "INSERT INTO media_files "
                         "(media_source_id, scan_job_id, file_path, file_name, "
@@ -248,37 +408,57 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
                             job_id,
                             str(file_path),
                             file_path.name,
-                            file_path.suffix.lower(),
+                            extension,
                             stat.st_size,
-                            datetime.fromtimestamp(
-                                stat.st_mtime, timezone.utc
-                            ).isoformat(),
+                            modified_at,
                             now,
                         ),
                     )
+                    _upsert_scan_file_index(
+                        connection,
+                        media_source_id,
+                        job_id,
+                        file_path,
+                        source_path,
+                        stat.st_size,
+                        modified_at,
+                        "active",
+                        now,
+                    )
+                    indexed_count += 1
                     video_count += 1
 
-                if (
-                    batch_interval_seconds > 0
-                    and scanned_count % batch_size == 0
-                ):
+                if batch_interval_seconds > 0 and scanned_count % batch_size == 0:
                     time.sleep(batch_interval_seconds)
 
             ended_at = _utc_now()
+            missing_count = _mark_missing_scan_indexes(
+                connection,
+                media_source_id,
+                seen_index_paths,
+                ended_at,
+            )
             completed_status = "partial_completed" if warning_count else "completed"
             warning_message = None
             if warning_count:
-                detail_text = "，".join(warning_details[:5])
+                detail_text = "；".join(warning_details[:5])
                 more_text = f" 等{warning_count}个文件" if warning_count > len(warning_details[:5]) else ""
                 warning_message = f"部分完成：{warning_count}个文件扫描失败（{detail_text}{more_text}）"
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
-                "video_count = ?, warning_count = ?, error_message = ?, ended_at = ? WHERE id = ?",
+                "video_count = ?, warning_count = ?, new_count = ?, changed_count = ?, "
+                "skipped_count = ?, missing_count = ?, indexed_count = ?, "
+                "error_message = ?, ended_at = ? WHERE id = ?",
                 (
                     completed_status,
                     scanned_count,
                     video_count,
                     warning_count,
+                    new_count,
+                    changed_count,
+                    skipped_count,
+                    missing_count,
+                    indexed_count,
                     warning_message,
                     ended_at,
                     job_id,
@@ -290,13 +470,19 @@ def run_full_scan(settings: AppSettings, media_source_id: int) -> ScanJob:
             failure_status = _scan_failure_status(exc)
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
-                "video_count = ?, warning_count = ?, error_message = ?, "
+                "video_count = ?, warning_count = ?, new_count = ?, changed_count = ?, "
+                "skipped_count = ?, missing_count = ?, indexed_count = ?, error_message = ?, "
                 "ended_at = ? WHERE id = ?",
                 (
                     failure_status,
                     scanned_count,
                     video_count,
                     warning_count,
+                    new_count,
+                    changed_count,
+                    skipped_count,
+                    missing_count,
+                    indexed_count,
                     _scan_error_message(exc),
                     ended_at,
                     job_id,
@@ -315,8 +501,9 @@ def _list_scan_jobs_unfiltered(settings: AppSettings) -> list[ScanJob]:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             "SELECT id, media_source_id, status, batch_size, batch_interval_seconds, "
-            "scanned_count, video_count, warning_count, error_message, started_at, "
-            "ended_at, created_at FROM scan_jobs ORDER BY id"
+            "scan_mode, scanned_count, video_count, warning_count, new_count, "
+            "changed_count, skipped_count, missing_count, indexed_count, "
+            "error_message, started_at, ended_at, created_at FROM scan_jobs ORDER BY id"
         ).fetchall()
     return [_row_to_scan_job(row) for row in rows]
 
@@ -348,8 +535,9 @@ def list_scan_jobs(settings: AppSettings, media_source_id: int | None = None) ->
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             "SELECT id, media_source_id, status, batch_size, batch_interval_seconds, "
-            "scanned_count, video_count, warning_count, error_message, started_at, "
-            f"ended_at, created_at FROM scan_jobs{where_clause} ORDER BY id",
+            "scan_mode, scanned_count, video_count, warning_count, new_count, "
+            "changed_count, skipped_count, missing_count, indexed_count, "
+            f"error_message, started_at, ended_at, created_at FROM scan_jobs{where_clause} ORDER BY id",
             params,
         ).fetchall()
     return [_row_to_scan_job(row) for row in rows]

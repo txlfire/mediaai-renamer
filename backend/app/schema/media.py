@@ -66,6 +66,12 @@ class ScanJob:
     started_at: str | None
     ended_at: str | None
     created_at: str
+    scan_mode: str = "full"
+    new_count: int = 0
+    changed_count: int = 0
+    skipped_count: int = 0
+    missing_count: int = 0
+    indexed_count: int = 0
 
 
 @dataclass(frozen=True)

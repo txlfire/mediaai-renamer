@@ -59,6 +59,68 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(3, len(files))
             self.assertEqual(1, len(jobs))
             self.assertEqual({"a.mkv", "b.MP4", "c.rmvb"}, {file.file_name for file in files})
+            self.assertEqual("full", job.scan_mode)
+            self.assertEqual(3, job.new_count)
+            self.assertEqual(0, job.changed_count)
+            self.assertEqual(0, job.skipped_count)
+            self.assertEqual(0, job.missing_count)
+            self.assertEqual(3, job.indexed_count)
+
+    def test_incremental_scan_skips_unchanged_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            (media_dir / "movie.mkv").write_text("movie", encoding="utf-8")
+
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "media", media_dir, True)
+
+            first_job = run_full_scan(settings, source.id)
+            second_job = run_full_scan(settings, source.id, scan_mode="incremental")
+            second_files = list_media_files(settings, scan_job_id=second_job.id)
+
+            self.assertEqual("completed", first_job.status)
+            self.assertEqual("incremental", second_job.scan_mode)
+            self.assertEqual(0, second_job.video_count)
+            self.assertEqual(0, second_job.new_count)
+            self.assertEqual(0, second_job.changed_count)
+            self.assertEqual(1, second_job.skipped_count)
+            self.assertEqual(0, second_job.missing_count)
+            self.assertEqual(1, second_job.indexed_count)
+            self.assertEqual([], second_files)
+
+    def test_incremental_scan_detects_new_changed_and_missing_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            changed_file = media_dir / "changed.mkv"
+            missing_file = media_dir / "missing.mkv"
+            changed_file.write_text("old", encoding="utf-8")
+            missing_file.write_text("missing", encoding="utf-8")
+
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "media", media_dir, True)
+
+            run_full_scan(settings, source.id)
+            changed_file.write_text("changed content", encoding="utf-8")
+            missing_file.unlink()
+            (media_dir / "new.mkv").write_text("new", encoding="utf-8")
+
+            job = run_full_scan(settings, source.id, scan_mode="incremental")
+            files = list_media_files(settings, scan_job_id=job.id)
+
+            self.assertEqual("completed", job.status)
+            self.assertEqual(2, job.video_count)
+            self.assertEqual(1, job.new_count)
+            self.assertEqual(1, job.changed_count)
+            self.assertEqual(0, job.skipped_count)
+            self.assertEqual(1, job.missing_count)
+            self.assertEqual(2, job.indexed_count)
+            self.assertEqual({"changed.mkv", "new.mkv"}, {file.file_name for file in files})
 
     def test_run_full_scan_uses_hot_scan_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
