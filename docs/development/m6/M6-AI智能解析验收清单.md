@@ -1,5 +1,14 @@
 # M6 AI 智能解析验收清单
 
+验收结论：`0.6.8` 已完成 M6 核心验收范围。AI 调用必须由用户主动触发；命中敏感词时后端会阻断 TMDB / IMDb / AI 外部提交并记录拦截；重命名预览支持 AI 候选确认回填；待处理文件支持 AI 候选展示。批量 AI 解析按开发计划仍为预留入口，不在 M6 首版执行。
+
+最近验证：
+
+- `npm.cmd run backend:test`：155 个测试通过。
+- `npm.cmd run frontend:test`：11 个测试文件、55 个测试通过。
+- `npm.cmd run frontend:build`：通过，仅保留既有 Vite chunk 体积提示。
+- `npm.cmd run check:encoding`：通过。
+
 ## 0. 敏感词过滤验收
 
 - 系统内置默认影视内容风险敏感词，覆盖可能在 DeepSeek、TMDB、IMDb 或后续刮削网站中引发风险的黄色、暴力、血腥、毒品等影视内容词汇。

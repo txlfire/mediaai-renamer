@@ -153,6 +153,26 @@ README 保持正式版口径，只展示 M5 `v0.5.4` 已发布能力，不写入
 - `npm.cmd run check:encoding`：通过。
 - `git diff --check`：通过。
 
+## 2026-07-03 v0.6.8 M6 文档收尾
+
+完成 M6 文档和版本收尾：
+
+- 新增 `docs/design/M6-design-manual.md`，记录 AI Provider、结构化解析、外部提交保护、前端交互和回填规则。
+- 新增 `docs/manuals/M6-user-manual-cn.md`，说明 AI 配置、敏感词设置、重命名预览 AI 解析、待处理文件 AI 解析和安全边界。
+- 更新完整用户手册 `docs/manuals/MediaAI-Renamer-用户手册.md`，覆盖范围从 M1-M5 更新为 M1-M6。
+- 更新 README，区分当前开发完成版本 `0.6.8` 和最近正式发布版本 `v0.5.4`，补充 M6 能力和文档索引。
+- 更新 M6 验收清单，补充 `0.6.8` 验收结论和最近验证结果。
+- 开发版本号升级到 `0.6.8`。
+
+验证结果：
+
+- `npm.cmd run backend:test`：通过，155 个测试通过。
+- `npm.cmd run frontend:test`：通过，11 个测试文件、55 个测试通过。
+- `npm.cmd run frontend:build`：通过，仅保留既有 Vite chunk 体积提示。
+- `npm.cmd run check:encoding`：通过。
+- `npm.cmd run release:package`：通过，生成 `releases/mediaai-renamer-frontend-v0.6.8.zip`。
+- `git diff --check`：通过，仅提示 README 工作区 CRLF 将按 Git 属性转换为 LF。
+
 ## 2026-07-03 v0.6.7 M6-3C 待处理文件 AI 解析入口
 
 完成待处理文件列表单条 AI 解析入口：
