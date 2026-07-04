@@ -132,14 +132,31 @@ export type ScanJob = {
   id: number;
   media_source_id: number;
   status: string;
+  scan_mode?: "full" | "incremental" | string;
   batch_size?: number;
   batch_interval_seconds?: number;
   scanned_count?: number;
   video_count?: number;
   warning_count?: number;
+  new_count?: number;
+  changed_count?: number;
+  skipped_count?: number;
+  missing_count?: number;
+  indexed_count?: number;
   error_message?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
+};
+
+export type ScanMode = "full" | "incremental";
+
+export type ScanModeSuggestion = {
+  media_source_id: number;
+  recommended_mode: ScanMode;
+  has_index: boolean;
+  indexed_count: number;
+  last_scan_status: string | null;
+  reason: string;
 };
 
 export type ScanJobFilters = {
@@ -188,6 +205,10 @@ export type RenamePreview = {
   metadata_match_score: number;
   metadata_message: string | null;
   metadata_candidate_count: number;
+  title_source?: string;
+  parent_folder_title?: string | null;
+  recognition_mode?: string;
+  title_conflict_message?: string | null;
   message: string | null;
   updated_at: string;
 };
@@ -251,6 +272,8 @@ export type BatchMetadataMatchResult = {
   items: RenamePreview[];
   failed_items: Array<{ id: number; message: string }>;
 };
+
+export type BatchRenamePreviewExcludeResult = BatchMetadataMatchResult;
 
 export type RenamePreviewFilters = {
   media_source_id?: number;
@@ -605,10 +628,16 @@ export async function fetchLocalDirectories(
 
 export async function createScanJob(
   mediaSourceId: number,
+  scanModeOrHttpClient: ScanMode | ApiHttpClient = "full",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<ScanJob> {
-  const post = requirePost(httpClient);
-  const response = await post<ScanJob>("/scan-jobs", { media_source_id: mediaSourceId });
+  const scanMode = typeof scanModeOrHttpClient === "string" ? scanModeOrHttpClient : "full";
+  const client = typeof scanModeOrHttpClient === "string" ? httpClient : scanModeOrHttpClient;
+  const post = requirePost(client);
+  const response = await post<ScanJob>("/scan-jobs", {
+    media_source_id: mediaSourceId,
+    scan_mode: scanMode,
+  });
   return response.data;
 }
 
@@ -628,6 +657,16 @@ export async function fetchScanJobs(
 ): Promise<ScanJob[]> {
   const query = buildQueryString(filters);
   const response = await httpClient.get<ScanJob[]>(query ? `/scan-jobs?${query}` : "/scan-jobs");
+  return response.data;
+}
+
+export async function fetchScanModeSuggestion(
+  mediaSourceId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<ScanModeSuggestion> {
+  const response = await httpClient.get<ScanModeSuggestion>(
+    `/scan-jobs/mode-suggestion?media_source_id=${encodeURIComponent(String(mediaSourceId))}`,
+  );
   return response.data;
 }
 
@@ -679,6 +718,29 @@ export async function updateRenamePreview(
   const put = requirePut(httpClient);
   const response = await put<RenamePreview>(`/rename-previews/${previewId}`, {
     target_name: targetName,
+  });
+  return response.data;
+}
+
+export async function excludeRenamePreview(
+  previewId: number,
+  reason = "manual_excluded",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreview> {
+  const post = requirePost(httpClient);
+  const response = await post<RenamePreview>(`/rename-previews/${previewId}/exclude`, { reason });
+  return response.data;
+}
+
+export async function excludeRenamePreviews(
+  renamePreviewIds: number[],
+  reason = "manual_excluded",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<BatchRenamePreviewExcludeResult> {
+  const post = requirePost(httpClient);
+  const response = await post<BatchRenamePreviewExcludeResult>("/rename-previews/exclude", {
+    rename_preview_ids: renamePreviewIds,
+    reason,
   });
   return response.data;
 }

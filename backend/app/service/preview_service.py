@@ -397,6 +397,31 @@ def exclude_rename_preview(settings: AppSettings, preview_id: int, reason: str =
     return _preview_by_id(settings, preview_id)
 
 
+def exclude_rename_previews(
+    settings: AppSettings,
+    preview_ids: list[int],
+    reason: str = "manual_excluded",
+) -> dict[str, object]:
+    """批量把预览项排除到待处理列表。"""
+
+    unique_ids = list(dict.fromkeys(preview_ids))
+    items: list[RenamePreview] = []
+    failed_items: list[dict[str, object]] = []
+    for preview_id in unique_ids:
+        try:
+            items.append(exclude_rename_preview(settings, preview_id, reason))
+        except ValueError as exc:
+            failed_items.append({"id": preview_id, "message": str(exc)})
+
+    return {
+        "total_count": len(unique_ids),
+        "success_count": len(items),
+        "failed_count": len(failed_items),
+        "items": items,
+        "failed_items": failed_items,
+    }
+
+
 def _get_preview_row(connection: sqlite3.Connection, preview_id: int) -> sqlite3.Row:
     row = connection.execute(
         "SELECT rp.id, rp.media_file_id, mf.file_path, mf.file_name, rp.media_type, "

@@ -75,6 +75,18 @@ class ScanJob:
 
 
 @dataclass(frozen=True)
+class ScanModeSuggestion:
+    """扫描模式建议。"""
+
+    media_source_id: int
+    recommended_mode: str
+    has_index: bool
+    indexed_count: int
+    last_scan_status: str | None
+    reason: str
+
+
+@dataclass(frozen=True)
 class MediaFile:
     """扫描识别出的媒体文件。"""
 

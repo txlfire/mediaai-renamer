@@ -2490,6 +2490,36 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   border-left: 1px solid var(--border-color);
 }
 
+.scan-mode-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.scan-mode-selector .el-radio-button__inner {
+  padding-inline: 0.85rem;
+}
+
+.parsed-title-cell {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.title-source-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.title-source-line .text-cell {
+  min-width: 0;
+}
+
 .rename-operation-compact-progress {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;

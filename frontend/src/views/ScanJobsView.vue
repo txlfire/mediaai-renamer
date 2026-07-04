@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Files, MagicStick, Notebook, Refresh, Search, VideoPlay } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import type { ScanMode } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import OperationProgressLog from "../components/OperationProgressLog.vue";
 import TablePagination from "../components/TablePagination.vue";
@@ -21,6 +22,7 @@ const tableSortStore = useTableSortStore();
 const route = useRoute();
 const router = useRouter();
 const selectedSourceId = ref<number>();
+const scanMode = ref<ScanMode>("full");
 const scanLogDialogVisible = ref(false);
 const selectedScanLog = ref("");
 const scanProgressVisible = ref(false);
@@ -47,6 +49,7 @@ const selectedSource = computed(() =>
   mediaStore.mediaSources.find((source) => source.id === selectedSourceId.value),
 );
 const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled));
+const scanModeSuggestion = computed(() => mediaStore.scanModeSuggestion);
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
   tableSortStore.setSort("scan-jobs", event.prop, event.order);
@@ -75,7 +78,7 @@ async function startScan() {
   scanProgressText.value = pageText.scanProgressStart;
   scanProgressLogs.value = [formatMessage(pageText.scanLogStart, { name: selectedSource.value.name })];
   scanProgressSummary.value = "";
-  await mediaStore.startScan(selectedSourceId.value);
+  await mediaStore.startScan(selectedSourceId.value, scanMode.value);
   scanProgressPercent.value = 100;
   scanProgressText.value = pageText.scanProgressDone;
   scanProgressSummary.value = mediaStore.errorMessage ? pageText.scanFailedSummary : pageText.scanSuccessSummary;
@@ -87,11 +90,28 @@ async function queryScanJobs() {
     return;
   }
   await mediaStore.loadScanJobs({ media_source_id: selectedSourceId.value });
+  await loadScanModeSuggestion(selectedSourceId.value);
 }
 
 async function resetScanJobs() {
   selectedSourceId.value = undefined;
+  scanMode.value = "full";
+  mediaStore.scanModeSuggestion = null;
   mediaStore.scanJobs = [];
+}
+
+async function loadScanModeSuggestion(mediaSourceId: number) {
+  try {
+    const suggestion = await mediaStore.loadScanModeSuggestion(mediaSourceId);
+    scanMode.value = suggestion.recommended_mode;
+  } catch {
+    mediaStore.scanModeSuggestion = null;
+    scanMode.value = "full";
+  }
+}
+
+function scanModeLabel(value: string) {
+  return value === "incremental" ? pageText.scanModes.incremental : pageText.scanModes.full;
 }
 
 function viewScanResults(row: { id: number; media_source_id: number }) {
@@ -151,6 +171,15 @@ onMounted(async () => {
     await queryScanJobs();
   }
 });
+
+watch(selectedSourceId, async (value) => {
+  if (!value) {
+    mediaStore.scanModeSuggestion = null;
+    scanMode.value = "full";
+    return;
+  }
+  await loadScanModeSuggestion(value);
+});
 </script>
 
 <template>
@@ -175,6 +204,21 @@ onMounted(async () => {
     </template>
 
     <template #filterActions>
+      <div class="scan-mode-selector">
+        <el-radio-group v-model="scanMode" :disabled="!selectedSourceId || mediaStore.loading" size="large">
+          <el-radio-button label="full">{{ messages.scanJobs.scanModes.full }}</el-radio-button>
+          <el-radio-button label="incremental">{{ messages.scanJobs.scanModes.incremental }}</el-radio-button>
+        </el-radio-group>
+        <el-tooltip
+          v-if="scanModeSuggestion"
+          :content="scanModeSuggestion.reason"
+          placement="top"
+        >
+          <el-tag type="info" effect="light">
+            {{ formatMessage(messages.scanJobs.recommendedMode, { mode: scanModeLabel(scanModeSuggestion.recommended_mode) }) }}
+          </el-tag>
+        </el-tooltip>
+      </div>
       <el-button
         type="primary"
         :icon="VideoPlay"
@@ -207,6 +251,13 @@ onMounted(async () => {
         @sort-change="handleSortChange"
       >
         <el-table-column prop="id" :label="messages.scanJobs.columns.taskId" min-width="92" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="scan_mode" :label="messages.scanJobs.columns.scanMode" min-width="92" align="center" header-align="center" sortable="custom">
+          <template #default="{ row }">
+            <el-tag effect="light" :type="row.scan_mode === 'incremental' ? 'success' : 'info'">
+              {{ scanModeLabel(row.scan_mode) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column :label="messages.common.status" min-width="240" align="left" header-align="left">
           <template #default="{ row }">
             <div class="scan-status-cell">
@@ -227,6 +278,10 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="scanned_count" :label="messages.scanJobs.columns.scanned" min-width="90" align="center" header-align="center" sortable="custom" />
         <el-table-column prop="video_count" :label="messages.scanJobs.columns.videos" min-width="76" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="new_count" :label="messages.scanJobs.columns.newFiles" min-width="76" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="changed_count" :label="messages.scanJobs.columns.changedFiles" min-width="76" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="skipped_count" :label="messages.scanJobs.columns.skippedFiles" min-width="76" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="missing_count" :label="messages.scanJobs.columns.missingFiles" min-width="76" align="center" header-align="center" sortable="custom" />
         <el-table-column prop="warning_count" :label="messages.scanJobs.columns.warnings" min-width="76" align="center" header-align="center" sortable="custom" />
         <el-table-column prop="batch_size" :label="messages.scanJobs.columns.batchSize" min-width="100" align="center" header-align="center" sortable="custom" />
         <el-table-column

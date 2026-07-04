@@ -10,6 +10,7 @@ import {
   fetchMediaFiles,
   fetchMediaSources,
   fetchScanJobs,
+  fetchScanModeSuggestion,
   setMediaSourceEnabled,
   updateMediaSource,
   type CleanupSummary,
@@ -23,6 +24,8 @@ import {
   type MediaSourceUpdatePayload,
   type ScanJob,
   type ScanJobFilters,
+  type ScanMode,
+  type ScanModeSuggestion,
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 
@@ -30,6 +33,7 @@ export const useMediaStore = defineStore("media", {
   state: () => ({
     mediaSources: [] as MediaSource[],
     scanJobs: [] as ScanJob[],
+    scanModeSuggestion: null as ScanModeSuggestion | null,
     mediaFiles: [] as MediaFile[],
     logItems: [] as LogItem[],
     loading: false,
@@ -80,14 +84,20 @@ export const useMediaStore = defineStore("media", {
       this.scanJobs = await fetchScanJobs(filters);
     },
 
-    async startScan(mediaSourceId: number) {
+    async loadScanModeSuggestion(mediaSourceId: number) {
+      this.scanModeSuggestion = await fetchScanModeSuggestion(mediaSourceId);
+      return this.scanModeSuggestion;
+    },
+
+    async startScan(mediaSourceId: number, scanMode: ScanMode = "full") {
       this.loading = true;
       this.errorMessage = "";
       try {
-        await createScanJob(mediaSourceId);
+        await createScanJob(mediaSourceId, scanMode);
         await Promise.all([
           this.loadScanJobs({ media_source_id: mediaSourceId }),
           this.loadLogs(),
+          this.loadScanModeSuggestion(mediaSourceId),
         ]);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.scanJobFailed;

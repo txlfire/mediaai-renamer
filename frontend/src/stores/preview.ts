@@ -3,6 +3,8 @@ import { defineStore } from "pinia";
 import {
   applyRenamePreviewMetadataCandidate,
   applyAiParseCandidate,
+  excludeRenamePreview,
+  excludeRenamePreviews,
   fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   generateRenamePreviews,
@@ -14,6 +16,7 @@ import {
   type AiParseCandidate,
   type AiParseResult,
   type BatchMetadataMatchResult,
+  type BatchRenamePreviewExcludeResult,
   type GenerateRenamePreviewsPayload,
   type MetadataMatchSource,
   type MetadataMatchResult,
@@ -67,6 +70,27 @@ export const usePreviewStore = defineStore("preview", {
       const updated = await updateRenamePreview(previewId, targetName);
       this.replacePreview(updated);
       return updated;
+    },
+
+    async excludePreview(previewId: number, reason = "manual_excluded") {
+      const updated = await excludeRenamePreview(previewId, reason);
+      this.replacePreview(updated);
+      return updated;
+    },
+
+    async excludePreviews(previewIds: number[], reason = "manual_excluded"): Promise<BatchRenamePreviewExcludeResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await excludeRenamePreviews(previewIds, reason);
+        result.items.forEach((item) => this.replacePreview(item));
+        return result;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
     },
 
     replacePreview(updated: RenamePreview) {

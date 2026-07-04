@@ -11,6 +11,7 @@ from app.service.preview_service import (
     apply_ai_parse_candidate,
     apply_metadata_candidate,
     exclude_rename_preview,
+    exclude_rename_previews,
     generate_rename_previews,
     list_metadata_candidates,
     list_rename_previews,
@@ -64,6 +65,13 @@ class BatchMetadataMatchRequest(BaseModel):
 
     rename_preview_ids: list[int]
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
+
+
+class BatchExcludeRenamePreviewRequest(BaseModel):
+    """Batch manual preview exclusion request."""
+
+    rename_preview_ids: list[int]
+    reason: str = "manual_excluded"
 
 
 class AllMetadataMatchRequest(BaseModel):
@@ -140,6 +148,17 @@ def exclude_preview(preview_id: int, payload: ExcludeRenamePreviewRequest, reque
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/exclude")
+def exclude_previews(payload: BatchExcludeRenamePreviewRequest, request: Request):
+    """Move selected previews to the pending list without touching real files."""
+
+    return exclude_rename_previews(
+        request.app.state.settings,
+        payload.rename_preview_ids,
+        payload.reason,
+    )
 
 
 @router.post("/{preview_id}/metadata-match")

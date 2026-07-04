@@ -15,6 +15,7 @@ from app.core.logger import shutdown_logging
 from app.main import create_app
 from app.service.preview_service import (
     exclude_rename_preview,
+    exclude_rename_previews,
     generate_rename_previews,
     list_rename_previews,
     update_rename_preview,
@@ -198,6 +199,17 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
         self.assertEqual(1, len(list_pending_files(self.settings)))
         self.assertNotIn(preview.id, {item.id for item in list_rename_previews(self.settings)})
         self.assertEqual(preview.id, list_rename_previews(self.settings, status="excluded")[0].id)
+
+    def test_previews_can_be_manually_excluded_in_batch(self):
+        generate_rename_previews(self.settings)
+        preview_ids = [preview.id for preview in list_rename_previews(self.settings)]
+
+        result = exclude_rename_previews(self.settings, preview_ids)
+
+        self.assertEqual(2, result["success_count"])
+        self.assertEqual(0, result["failed_count"])
+        self.assertEqual(2, len(list_pending_files(self.settings)))
+        self.assertEqual(2, len(list_rename_previews(self.settings, status="excluded")))
 
 
 class RenamePreviewApiTest(RenamePreviewTestCase):

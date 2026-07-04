@@ -11,7 +11,7 @@ import sqlite3
 import time
 
 from app.core.config import AppSettings
-from app.schema.media import MediaFile, ScanJob
+from app.schema.media import MediaFile, ScanJob, ScanModeSuggestion
 from app.service.media_source_service import get_media_source, get_media_source_protocol_context
 from app.service.pending_file_service import add_pending_file
 from app.service.shared_protocols.registry import get_protocol
@@ -68,6 +68,61 @@ def _row_to_media_file(row: sqlite3.Row) -> MediaFile:
         file_size=int(row["file_size"]),
         modified_at=str(row["modified_at"]),
         created_at=str(row["created_at"]),
+    )
+
+
+def get_scan_mode_suggestion(settings: AppSettings, media_source_id: int) -> ScanModeSuggestion:
+    """根据已有索引和最近任务状态给出扫描模式建议。"""
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        source_row = connection.execute(
+            "SELECT id FROM media_sources WHERE id = ?",
+            (media_source_id,),
+        ).fetchone()
+        if source_row is None:
+            raise ValueError("媒体源不存在")
+
+        indexed_count = int(
+            connection.execute(
+                "SELECT COUNT(1) FROM scan_file_index WHERE media_source_id = ?",
+                (media_source_id,),
+            ).fetchone()[0]
+            or 0
+        )
+        last_job = connection.execute(
+            "SELECT status FROM scan_jobs WHERE media_source_id = ? ORDER BY id DESC LIMIT 1",
+            (media_source_id,),
+        ).fetchone()
+
+    last_scan_status = str(last_job["status"]) if last_job is not None else None
+    if indexed_count <= 0:
+        return ScanModeSuggestion(
+            media_source_id=media_source_id,
+            recommended_mode=SCAN_MODE_FULL,
+            has_index=False,
+            indexed_count=0,
+            last_scan_status=last_scan_status,
+            reason="当前媒体源还没有扫描索引，建议先执行全量扫描",
+        )
+
+    if last_scan_status in {"failed", "connection_lost"}:
+        return ScanModeSuggestion(
+            media_source_id=media_source_id,
+            recommended_mode=SCAN_MODE_FULL,
+            has_index=True,
+            indexed_count=indexed_count,
+            last_scan_status=last_scan_status,
+            reason="上一次扫描未正常完成，建议执行全量扫描校准索引",
+        )
+
+    return ScanModeSuggestion(
+        media_source_id=media_source_id,
+        recommended_mode=SCAN_MODE_INCREMENTAL,
+        has_index=True,
+        indexed_count=indexed_count,
+        last_scan_status=last_scan_status,
+        reason="已存在扫描索引，可优先使用增量扫描",
     )
 
 

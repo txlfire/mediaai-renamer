@@ -180,7 +180,7 @@ describe("media source API client", () => {
     await fetchLogs(httpClient);
 
     expect(calls).toEqual([
-      'POST /scan-jobs:{"media_source_id":1}',
+      'POST /scan-jobs:{"media_source_id":1,"scan_mode":"full"}',
       "GET /scan-jobs?media_source_id=1",
       "GET /media-files?media_source_id=1&scan_job_id=2",
       "GET /logs",

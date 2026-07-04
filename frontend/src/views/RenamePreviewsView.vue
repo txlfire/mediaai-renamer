@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Connection, Delete, Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
+import { CloseBold, Connection, Delete, Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
@@ -157,6 +157,11 @@ function mediaTypeLabel(value: string) {
   return labels[value] ?? value;
 }
 
+function titleSourceLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = messages.renamePreviews.titleSources;
+  return value ? (labels[value] ?? value) : "-";
+}
+
 function statusLabel(value: string) {
   const labels: Record<string, string> = {
     generated: messages.status.generated,
@@ -165,6 +170,7 @@ function statusLabel(value: string) {
     renamed: messages.status.renamed,
     no_rename: messages.status.noRename,
     unable_rename: messages.status.unableRename,
+    excluded: messages.status.excluded,
   };
   return labels[value] ?? value;
 }
@@ -181,6 +187,9 @@ function statusTagType(value: string) {
   }
   if (value === "unable_rename") {
     return "danger";
+  }
+  if (value === "excluded") {
+    return "info";
   }
   return "info";
 }
@@ -293,6 +302,8 @@ const detailRows = computed(() => {
     { label: messages.renamePreviews.columns.originalName, value: row.file_name },
     { label: messages.renamePreviews.columns.targetName, value: row.current_target_name },
     { label: messages.renamePreviews.columns.parsedTitle, value: row.parsed_title },
+    { label: messages.renamePreviews.columns.titleSource, value: titleSourceLabel(row.title_source) },
+    { label: messages.renamePreviews.columns.parentFolderTitle, value: row.parent_folder_title ?? "-" },
     { label: messages.renamePreviews.columns.metadataSource, value: row.metadata_source ?? "-" },
     { label: messages.renamePreviews.columns.metadataScore, value: `${row.metadata_match_score ?? 0}%` },
     { label: messages.renamePreviews.columns.metadata, value: metadataStatusLabel(row.metadata_match_status) },
@@ -591,6 +602,47 @@ async function matchAllMetadata() {
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
 
+async function excludeSelectedPreviews() {
+  if (selectedPreviewIds.value.length === 0) {
+    return;
+  }
+  await confirmResourceOperation(messages.renamePreviews.excludeSelected, selectedPreviewIds.value.length);
+  resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.excludeSelected);
+  const result = await previewStore.excludePreviews(selectedPreviewIds.value);
+  result.items.forEach((item) => {
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.excludeSuccessLog, { name: item.file_name }),
+    );
+  });
+  result.failed_items.forEach((item) => {
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.excludeFailedLog, {
+        id: item.id,
+        reason: item.message,
+      }),
+    );
+  });
+  selectedPreviewIds.value = [];
+  selectedPreviewRows.value = [];
+  await previewStore.loadPreviews(previewStore.filters);
+  await pendingFileStore.loadPendingFiles({
+    media_source_id: previewStore.filters.media_source_id,
+    scan_job_id: previewStore.filters.scan_job_id,
+  });
+  finishOperationProgress(result.total_count, result.success_count, result.failed_count);
+}
+
+async function excludeSinglePreview(row: RenamePreview) {
+  await confirmResourceOperation(messages.renamePreviews.excludeSingle, 1);
+  await previewStore.excludePreview(row.id);
+  await previewStore.loadPreviews(previewStore.filters);
+  await pendingFileStore.loadPendingFiles({
+    media_source_id: previewStore.filters.media_source_id,
+    scan_job_id: previewStore.filters.scan_job_id,
+  });
+  ElMessage.success(messages.renamePreviews.excludeSingleSuccess);
+}
+
 async function applyMetadataCandidate(match: MetadataMatchResult) {
   if (!metadataPreviewId.value) {
     return;
@@ -820,6 +872,14 @@ onMounted(async () => {
               {{ messages.common.refresh }}
             </el-button>
             <el-button
+              :icon="CloseBold"
+              :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.excludeSelected"
+              @click="excludeSelectedPreviews"
+            >
+              {{ operationButtonLabel(messages.renamePreviews.excludeSelected, messages.renamePreviews.operationResultDialog.runningExclude) }}
+            </el-button>
+            <el-button
               type="primary"
               :icon="MagicStick"
               :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.generate"
@@ -965,7 +1025,19 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="176" align="left" header-align="left">
           <template #default="{ row }">
-          <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+          <div class="parsed-title-cell">
+            <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+            <div class="title-source-line">
+              <el-tag size="small" effect="plain">
+                {{ titleSourceLabel(row.title_source) }}
+              </el-tag>
+              <TextCell
+                v-if="row.parent_folder_title"
+                :value="row.parent_folder_title"
+                :max-length="tableDisplayConfig.tableTextMaxBytes"
+              />
+            </div>
+          </div>
           </template>
           </el-table-column>
           <el-table-column
@@ -1041,7 +1113,7 @@ onMounted(async () => {
           >
           <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column :label="messages.common.actions" width="176" align="center" header-align="center" fixed="right">
+          <el-table-column :label="messages.common.actions" width="216" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
           <div class="table-actions">
           <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
@@ -1075,6 +1147,15 @@ onMounted(async () => {
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
           <el-button class="table-action-button action-edit" :icon="Edit" text circle @click.stop="openEditDialog(row)" />
+          </el-tooltip>
+          <el-tooltip :content="messages.renamePreviews.actions.exclude" placement="top">
+          <el-button
+          class="table-action-button action-delete"
+          :icon="CloseBold"
+          text
+          circle
+          @click.stop="excludeSinglePreview(row)"
+          />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.execute" placement="top">
           <el-button

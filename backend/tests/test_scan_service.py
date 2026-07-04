@@ -9,6 +9,7 @@ from app.core.config import AppSettings, LoggingSettings, ScanSettings
 from app.core.database import ensure_database
 from app.service.media_source_service import create_media_source
 from app.service.scan_service import (
+    get_scan_mode_suggestion,
     list_media_files,
     list_scan_jobs,
     recover_interrupted_scan_jobs,
@@ -90,6 +91,27 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(0, second_job.missing_count)
             self.assertEqual(1, second_job.indexed_count)
             self.assertEqual([], second_files)
+
+    def test_scan_mode_suggestion_prefers_incremental_after_index_exists(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            (media_dir / "movie.mkv").write_text("movie", encoding="utf-8")
+
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "media", media_dir, True)
+
+            before_scan = get_scan_mode_suggestion(settings, source.id)
+            run_full_scan(settings, source.id)
+            after_scan = get_scan_mode_suggestion(settings, source.id)
+
+            self.assertEqual("full", before_scan.recommended_mode)
+            self.assertFalse(before_scan.has_index)
+            self.assertEqual("incremental", after_scan.recommended_mode)
+            self.assertTrue(after_scan.has_index)
+            self.assertEqual(1, after_scan.indexed_count)
 
     def test_incremental_scan_detects_new_changed_and_missing_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
