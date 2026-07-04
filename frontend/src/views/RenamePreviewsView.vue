@@ -970,7 +970,7 @@ onMounted(async () => {
           :data="pagedPreviews"
           class="data-table rename-previews-table"
           height="100%"
-          table-layout="auto"
+          table-layout="fixed"
           :default-sort="defaultSort"
           @row-click="openDetailDialog"
           @selection-change="handleSelectionChange"
@@ -996,7 +996,7 @@ onMounted(async () => {
           <el-table-column
           prop="status"
           :label="messages.common.status"
-          width="96"
+          width="70"
           class-name="preview-compact-column preview-status-column"
           align="center"
           header-align="center"
@@ -1006,7 +1006,7 @@ onMounted(async () => {
           <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag>
           </template>
           </el-table-column>
-          <el-table-column prop="file_name" :label="messages.renamePreviews.columns.originalName" min-width="150" align="left" header-align="left" sortable="custom">
+          <el-table-column prop="file_name" :label="messages.renamePreviews.columns.originalName" min-width="220" align="left" header-align="left" sortable="custom">
           <template #default="{ row }">
           <TextCell :value="row.file_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
           </template>
@@ -1014,7 +1014,7 @@ onMounted(async () => {
           <el-table-column
           prop="current_target_name"
           :label="messages.renamePreviews.columns.targetName"
-          min-width="150"
+          min-width="220"
           align="left"
           header-align="left"
           sortable="custom"
@@ -1023,26 +1023,19 @@ onMounted(async () => {
           <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
           </template>
           </el-table-column>
-          <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="176" align="left" header-align="left">
+          <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="132" align="left" header-align="left">
           <template #default="{ row }">
-          <div class="parsed-title-cell">
+          <el-tooltip
+            :content="`${row.parsed_title || '-'} · ${messages.renamePreviews.columns.titleSource}: ${titleSourceLabel(row.title_source)}${row.parent_folder_title ? ` · ${messages.renamePreviews.columns.parentFolderTitle}: ${row.parent_folder_title}` : ''}`"
+            placement="top"
+          >
             <TextCell :value="row.parsed_title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
-            <div class="title-source-line">
-              <el-tag size="small" effect="plain">
-                {{ titleSourceLabel(row.title_source) }}
-              </el-tag>
-              <TextCell
-                v-if="row.parent_folder_title"
-                :value="row.parent_folder_title"
-                :max-length="tableDisplayConfig.tableTextMaxBytes"
-              />
-            </div>
-          </div>
+          </el-tooltip>
           </template>
           </el-table-column>
           <el-table-column
           :label="messages.renamePreviews.columns.metadata"
-          width="128"
+          width="80"
           class-name="nowrap-column"
           align="center"
           header-align="center"
@@ -1058,7 +1051,7 @@ onMounted(async () => {
           <el-table-column
           prop="metadata_match_score"
           :label="messages.renamePreviews.columns.metadataScore"
-          width="112"
+          width="70"
           class-name="metadata-score-column"
           header-class-name="metadata-score-column"
           align="center"
@@ -1074,7 +1067,7 @@ onMounted(async () => {
           <el-table-column
           prop="media_type"
           :label="messages.renamePreviews.type"
-          width="96"
+          width="60"
           class-name="preview-compact-column preview-type-column"
           align="center"
           header-align="center"
@@ -1085,7 +1078,7 @@ onMounted(async () => {
           <el-table-column
           prop="parsed_year"
           :label="messages.renamePreviews.columns.year"
-          width="92"
+          width="60"
           class-name="preview-year-column"
           align="center"
           header-align="center"
@@ -1095,7 +1088,7 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column
           :label="messages.renamePreviews.columns.seasonEpisode"
-          width="104"
+          width="70"
           class-name="preview-season-episode-column"
           align="center"
           header-align="center"
@@ -1113,7 +1106,7 @@ onMounted(async () => {
           >
           <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column :label="messages.common.actions" width="216" align="center" header-align="center" fixed="right">
+          <el-table-column :label="messages.common.actions" width="164" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
           <div class="table-actions">
           <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
