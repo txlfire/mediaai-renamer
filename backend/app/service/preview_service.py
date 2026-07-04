@@ -675,6 +675,62 @@ def parse_rename_preview_with_ai(settings: AppSettings, preview_id: int) -> AiPa
     )
 
 
+def _merge_ai_usage(total_usage: dict[str, object], usage: dict[str, object]) -> dict[str, object]:
+    """合并 AI 用量统计，仅累加数值字段。"""
+
+    for key, value in usage.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            current = total_usage.get(key, 0)
+            total_usage[key] = (current if isinstance(current, (int, float)) else 0) + value
+    return total_usage
+
+
+def parse_rename_previews_with_ai(settings: AppSettings, preview_ids: list[int]) -> dict[str, object]:
+    """Batch AI parse selected previews without mutating preview records."""
+
+    unique_ids = list(dict.fromkeys(preview_ids))
+    items: list[dict[str, object]] = []
+    failed_items: list[dict[str, object]] = []
+    success_count = 0
+    failed_count = 0
+    blocked_count = 0
+    skipped_count = 0
+    usage: dict[str, object] = {}
+
+    for preview_id in unique_ids:
+        try:
+            result = parse_rename_preview_with_ai(settings, preview_id)
+        except ValueError as exc:
+            failed_count += 1
+            failed_items.append({"id": preview_id, "message": str(exc)})
+            continue
+
+        if result.status == "success":
+            success_count += 1
+            _merge_ai_usage(usage, result.usage)
+        elif result.status == "blocked":
+            blocked_count += 1
+        elif result.status == "skipped":
+            skipped_count += 1
+        else:
+            failed_count += 1
+
+        items.append({"id": preview_id, "result": result})
+
+    return {
+        "total_count": len(unique_ids),
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "blocked_count": blocked_count,
+        "skipped_count": skipped_count,
+        "usage": usage,
+        "items": items,
+        "failed_items": failed_items,
+    }
+
+
 def match_rename_preview_metadata(
     settings: AppSettings,
     preview_id: int,

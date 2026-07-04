@@ -19,6 +19,7 @@ from app.service.preview_service import (
     match_rename_preview_metadata,
     match_rename_previews_metadata,
     parse_rename_preview_with_ai,
+    parse_rename_previews_with_ai,
     update_rename_preview,
 )
 
@@ -65,6 +66,12 @@ class BatchMetadataMatchRequest(BaseModel):
 
     rename_preview_ids: list[int]
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
+
+
+class BatchAiParseRequest(BaseModel):
+    """Batch AI structured parse request."""
+
+    rename_preview_ids: list[int]
 
 
 class BatchExcludeRenamePreviewRequest(BaseModel):
@@ -228,6 +235,16 @@ def parse_preview_with_ai(preview_id: int, request: Request):
         return parse_rename_preview_with_ai(request.app.state.settings, preview_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/ai-parse/batch")
+def parse_previews_with_ai(payload: BatchAiParseRequest, request: Request):
+    """Run AI structured parsing for selected previews without mutating records."""
+
+    return parse_rename_previews_with_ai(
+        request.app.state.settings,
+        payload.rename_preview_ids,
+    )
 
 
 @router.post("/{preview_id}/metadata-candidate")

@@ -2,7 +2,7 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与安全重命名工具。项目目标是安全整理本地或服务端可访问目录中的媒体文件，并提供元数据匹配、命名规则和共享目录能力。
 
-当前版本：`0.7.5`
+当前版本：`0.7.6`
 
 最近正式发布版本：`v0.6.9`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.6.9)
 

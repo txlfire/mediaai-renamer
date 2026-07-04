@@ -315,6 +315,57 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual(92, payload["candidates"][0]["confidence"])
         self.assertNotIn("sk-secret123456", str(payload))
 
+    def test_batch_ai_parse_preview_api_returns_summary(self):
+        update_setting_values(
+            self.settings,
+            {
+                "ai.enabled": "true",
+                "ai.provider": "deepseek",
+                "ai.model": "deepseek-chat",
+                "ai.api_key": "sk-secret123456",
+                "ai.base_url": "https://api.deepseek.com/v1",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        previews = client.get("/api/rename-previews").json()
+        preview_ids = [item["id"] for item in previews[:2]]
+
+        class FakeDeepSeekProvider:
+            def __init__(self, config):
+                self.config = config
+
+            def complete_chat(self, messages, max_tokens: int, temperature: float):
+                return {
+                    "status": "success",
+                    "content": (
+                        '{"title":"黑客帝国","media_type":"movie","year":1999,'
+                        '"season":null,"episode":null,"confidence":92,"reason":"标题和年份匹配"}'
+                    ),
+                    "response_ms": 15,
+                    "usage": {"total_tokens": 60, "prompt_tokens": 40},
+                }
+
+        with patch("app.service.ai_parse_service.DeepSeekProvider", FakeDeepSeekProvider):
+            response = client.post(
+                "/api/rename-previews/ai-parse/batch",
+                json={"rename_preview_ids": preview_ids},
+            )
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, payload["total_count"])
+        self.assertEqual(2, payload["success_count"])
+        self.assertEqual(0, payload["failed_count"])
+        self.assertEqual(0, payload["blocked_count"])
+        self.assertEqual(120, payload["usage"]["total_tokens"])
+        self.assertEqual(80, payload["usage"]["prompt_tokens"])
+        self.assertEqual("success", payload["items"][0]["result"]["status"])
+        self.assertEqual("黑客帝国", payload["items"][0]["result"]["candidates"][0]["title"])
+        self.assertNotIn("sk-secret123456", str(payload))
+
     def test_apply_ai_parse_candidate_api(self):
         app = create_app(self.settings)
         client = TestClient(app)
