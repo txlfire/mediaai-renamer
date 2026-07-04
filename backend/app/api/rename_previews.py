@@ -76,7 +76,7 @@ class AllMetadataMatchRequest(BaseModel):
 
 def _validate_metadata_match_source(value: str) -> str:
     if value not in METADATA_MATCH_SOURCES:
-        raise HTTPException(status_code=400, detail="涓嶆敮鎸佺殑 TMDB 鍖归厤鏉ユ簮")
+        raise HTTPException(status_code=400, detail="不支持的 TMDB 匹配来源")
     return value
 
 

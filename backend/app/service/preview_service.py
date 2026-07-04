@@ -420,7 +420,7 @@ def _parsed_from_preview(
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
 ) -> ParsedMediaName:
     if metadata_match_source not in METADATA_MATCH_SOURCES:
-        raise ValueError("涓嶆敮鎸佺殑 TMDB 鍖归厤鏉ユ簮")
+        raise ValueError("不支持的 TMDB 匹配来源")
     if metadata_match_source == METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME:
         return parse_media_filename(str(row["file_name"]))
     return ParsedMediaName(

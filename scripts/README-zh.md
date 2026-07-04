@@ -95,8 +95,20 @@
 - 关键步骤：
   - 收集 Git 已跟踪文件和未忽略的新文本文件。
   - 检查 UTF-8 BOM、混合换行和疑似乱码字符。
+  - 调用 `scripts/check-mojibake.py` 执行语义级乱码检测，识别 UTF-8 文本被 GBK/PowerShell 管道误写后的可逆乱码。
   - 检查 `frontend/src` 中非 `locales` 文件的中文硬编码。
   - 发现问题时输出问题类型和文件路径。
+
+### `check-mojibake.py`
+
+- 适用环境：Windows / Linux / macOS。
+- 推荐调用：由 `check-encoding.ps1` 自动调用。
+- 作用：补充检查语义级 mojibake，防止 `Get-Content | Set-Content` 等误操作污染源码。
+- 关键步骤：
+  - 收集 Git 已跟踪文件和未忽略的新文本文件。
+  - 严格按 UTF-8 解码文本文件。
+  - 检查替换字符、Unicode 私用区字符。
+  - 尝试按 `GBK bytes -> UTF-8` 反向修复单行文本；若修复后中文可读性显著提升，则报告 `SEMANTIC_MOJIBAKE`。
 
 ## 发布打包
 

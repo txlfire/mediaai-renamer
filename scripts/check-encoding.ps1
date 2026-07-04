@@ -78,6 +78,39 @@ foreach ($file in $files) {
     }
 }
 
+$pythonCandidates = @(
+    ".\.venv\Scripts\python.exe",
+    "python"
+)
+$pythonCommand = $null
+foreach ($candidate in $pythonCandidates) {
+    if ($candidate -like "*\*") {
+        if (Test-Path -LiteralPath $candidate) {
+            $pythonCommand = $candidate
+            break
+        }
+        continue
+    }
+    $command = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($command) {
+        $pythonCommand = $command.Source
+        break
+    }
+}
+
+if (-not $pythonCommand) {
+    $issues.Add("MOJIBAKE_CHECK_UNAVAILABLE`tpython not found")
+}
+else {
+    $mojibakeOutput = & $pythonCommand "scripts/check-mojibake.py" 2>&1
+    $mojibakeExitCode = $LASTEXITCODE
+    if ($mojibakeExitCode -ne 0) {
+        foreach ($line in $mojibakeOutput) {
+            $issues.Add("MOJIBAKE_SEMANTIC`t$line")
+        }
+    }
+}
+
 if ($issues.Count -eq 0) {
     Write-Output "Encoding check passed."
     exit 0

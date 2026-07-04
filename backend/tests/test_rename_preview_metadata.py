@@ -133,7 +133,7 @@ class RenamePreviewMetadataTest(unittest.TestCase):
         self.assertEqual("tmdb", blocks.items[0].target_service)
 
     def test_high_confidence_match_records_effective_metadata_source(self):
-        candidate = MetadataCandidate("TMDB", "603", "movie", "榛戝甯濆浗", "The Matrix", 1999, None, None, "")
+        candidate = MetadataCandidate("TMDB", "603", "movie", "黑客帝国", "The Matrix", 1999, None, None, "")
         summary = MetadataMatchSummary(
             status="high_confidence",
             message=None,
