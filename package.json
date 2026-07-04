@@ -1,6 +1,6 @@
 {
   "name": "mediaai-renamer",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,9 @@
     "dev:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-dev-lan.ps1",
     "dev:start": "powershell -ExecutionPolicy Bypass -File scripts/start-dev-lan.ps1",
     "dev:stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-dev-lan.ps1",
+    "dev:windows": "powershell -ExecutionPolicy Bypass -File scripts/dev-windows.ps1",
+    "dev:linux": "bash scripts/dev-linux.sh",
+    "dev:docker": "bash scripts/dev-docker.sh",
     "dev:start:linux": "bash scripts/start-dev-lan.sh",
     "dev:stop:linux": "bash scripts/stop-dev-lan.sh",
     "backend:dev:lan": "powershell -ExecutionPolicy Bypass -Command \"$env:PYTHONPATH='backend'; .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8970 --reload --app-dir backend\"",

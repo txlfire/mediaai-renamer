@@ -4,6 +4,48 @@
 
 ## 开发服务启停
 
+### `dev-windows.ps1`
+
+- 适用环境：Windows。
+- 推荐调用：`npm.cmd run dev:windows -- start`。
+- 支持动作：`start`、`stop`、`restart`、`status`。
+- 作用：Windows 下按输入动作一键后台启动、停止、重启或查看前后端开发服务状态。
+- 默认端口：前端 `5173`，后端 `8970`。
+- 关键步骤：
+  - 根据 `Action` 参数判断操作类型。
+  - 启动时调用 `start-dev-lan.ps1`。
+  - 停止时调用 `stop-dev-lan.ps1`。
+  - 状态检查时读取端口监听状态，不触发服务重启。
+
+### `dev-linux.sh`
+
+- 适用环境：Linux / macOS / NAS shell。
+- 推荐调用：`npm run dev:linux -- start`。
+- 支持动作：`start`、`stop`、`restart`、`status`。
+- 作用：Linux/macOS 下按输入动作一键后台启动、停止、重启或查看前后端开发服务状态。
+- 默认端口：可通过环境变量 `FRONTEND_PORT` 和 `BACKEND_PORT` 覆盖。
+- 关键步骤：
+  - 根据第一个参数判断操作类型。
+  - 启动时调用 `start-dev-lan.sh`。
+  - 停止时调用 `stop-dev-lan.sh`。
+  - 状态检查时使用 `ss` 或 `lsof` 判断端口监听状态。
+
+### `dev-docker.sh`
+
+- 适用环境：Docker Compose。
+- 推荐调用：`npm run dev:docker -- start`。
+- 支持动作：`start`、`stop`、`restart`、`down`、`status`、`logs`。
+- 作用：Docker Compose 下按输入动作一键管理容器化前后端服务。
+- 默认 compose 文件：`docker-compose.yml`。
+- 可选 compose 文件：通过 `COMPOSE_FILE=docker-compose.ghcr.yml` 使用 GHCR 镜像部署配置。
+- 关键步骤：
+  - 检查 `docker` 和 `docker compose` 是否可用。
+  - 根据 `COMPOSE_FILE` 选择 compose 文件。
+  - `start` 执行 `docker compose up -d`。
+  - `stop` 执行 `docker compose stop`。
+  - `down` 执行 `docker compose down`。
+  - `status` 输出 `docker compose ps`。
+
 ### `start-dev-lan.ps1`
 
 - 适用环境：Windows。
@@ -15,7 +57,7 @@
   - 调用 `stop-dev-lan.ps1` 清理旧进程和端口占用。
   - 创建 `.codex/run-logs` 日志目录。
   - 后台启动 `uvicorn app.main:app`。
-  - 后台启动 Vite 前端开发服务。
+  - 后台启动 `serve-frontend.py`，托管 `frontend/dist` 并代理 `/api` 到后端。
   - 写入 `backend.pid` 和 `frontend.pid`，供停止脚本使用。
 
 ### `stop-dev-lan.ps1`
@@ -63,6 +105,17 @@
   - 查找 Node 可执行文件。
   - 检查本地 Vite 入口是否存在。
   - 根据参数以前台或后台模式启动前端服务。
+
+### `serve-frontend.py`
+
+- 适用环境：Windows / Linux / macOS。
+- 推荐调用：由 `start-dev-lan.ps1` 自动调用。
+- 作用：托管 `frontend/dist` 静态文件，并把 `/api/*` 反向代理到后端服务。
+- 关键步骤：
+  - 检查 `frontend/dist/index.html` 是否存在。
+  - 将自身日志写入 `.codex/run-logs/frontend-vite.out.log` 和 `.codex/run-logs/frontend-vite.err.log`。
+  - 对普通页面请求返回静态文件，找不到路径时回退到 `index.html`。
+  - 对 `/api/*` 请求转发到 `http://127.0.0.1:8970`。
 
 ## 测试与校验
 

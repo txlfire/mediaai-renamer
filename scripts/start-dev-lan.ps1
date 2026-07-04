@@ -5,7 +5,6 @@ param(
 
 # Purpose: start FastAPI backend and Vite frontend for local/LAN development.
 # Flow: validate dependencies -> stop old services -> create logs -> start services -> write PID files.
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Normalize-ProcessPathVariable {
@@ -87,7 +86,7 @@ function Assert-DevDependencies {
     return $Python
 }
 
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $Root
 
 # Resolve the project root, validate dependencies, and reuse the stop script for cleanup.
@@ -107,42 +106,38 @@ $FrontendErr = Join-Path $LogDir "frontend-vite.err.log"
 $env:PYTHONPATH = "backend"
 $env:CI = "true"
 
+# Start frontend first by serving the built frontend and proxying /api to backend.
+$Frontend = $null
+$FrontendDist = "$Root\frontend\dist\index.html"
+if (-not (Test-Path $FrontendDist)) {
+    throw "Frontend dist was not found. Run npm.cmd run frontend:build first."
+}
+$FrontendCommand = "start `"MediaAI Frontend`" /min `"$Python`" scripts/serve-frontend.py --host 0.0.0.0 --port $FrontendPort --backend http://127.0.0.1:$BackendPort --dist frontend/dist"
+& cmd.exe /c "$FrontendCommand"
+if ($LASTEXITCODE -ne 0) {
+    throw "Frontend start command failed with code $LASTEXITCODE."
+}
+Start-Sleep -Seconds 1
+$FrontendProcessId = $null
+$FrontendConnection = Get-NetTCPConnection -LocalPort $FrontendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($FrontendConnection) {
+    $FrontendProcessId = $FrontendConnection.OwningProcess
+}
+
 # Start backend in a hidden background process with split stdout/stderr logs.
-$Backend = Start-Process `
-    -FilePath $Python `
-    -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--app-dir", "backend") `
-    -WorkingDirectory $Root `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $BackendOut `
-    -RedirectStandardError $BackendErr `
-    -PassThru
-
-$ViteEntry = Join-Path $Root "node_modules\vite\bin\vite.js"
-$FrontendArguments = @(
-    $ViteEntry,
-    "--host",
-    "0.0.0.0",
-    "--port",
-    "$FrontendPort",
-    "--config",
-    "frontend/vite.config.ts"
-)
-
-# Call the local Vite entry directly instead of relying on an npm shell wrapper.
-$Frontend = Start-Process `
-    -FilePath $Node `
-    -ArgumentList $FrontendArguments `
-    -WorkingDirectory $Root `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $FrontendOut `
-    -RedirectStandardError $FrontendErr `
-    -PassThru
+$Backend = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--app-dir", "backend") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $BackendOut -RedirectStandardError $BackendErr -PassThru
 
 # Save PID files so the stop script can terminate the exact processes first.
 Set-Content -Path (Join-Path $LogDir "backend.pid") -Value $Backend.Id -Encoding ascii
-Set-Content -Path (Join-Path $LogDir "frontend.pid") -Value $Frontend.Id -Encoding ascii
+if ($FrontendProcessId) {
+    Set-Content -Path (Join-Path $LogDir "frontend.pid") -Value $FrontendProcessId -Encoding ascii
+}
 
 Write-Host "Backend started. PID: $($Backend.Id), URL: http://127.0.0.1:$BackendPort/api/health"
-Write-Host "Frontend started. PID: $($Frontend.Id), URL: http://127.0.0.1:$FrontendPort"
+if ($FrontendProcessId) {
+    Write-Host "Frontend started. PID: $FrontendProcessId, URL: http://127.0.0.1:$FrontendPort"
+} else {
+    Write-Host "Frontend start command issued. PID unavailable, URL: http://127.0.0.1:$FrontendPort"
+}
 Write-Host "LAN URL: http://<this-machine-lan-ip>:$FrontendPort"
 Write-Host "Logs: $LogDir"
