@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { parseRenamePreviewsWithAi } from "../api/client";
 import { usePreviewStore } from "./preview";
 
 vi.mock("../api/client", () => ({
@@ -67,6 +68,37 @@ vi.mock("../api/client", () => ({
     current_target_name: "Matrix.Custom.mkv",
     status: "edited",
   })),
+  parseRenamePreviewsWithAi: vi.fn(async () => ({
+    total_count: 2,
+    success_count: 1,
+    failed_count: 0,
+    blocked_count: 1,
+    skipped_count: 0,
+    usage: { total_tokens: 10 },
+    items: [
+      {
+        id: 1,
+        result: {
+          status: "success",
+          message: "ok",
+          candidates: [
+            {
+              title: "黑客帝国",
+              media_type: "movie",
+              year: 1999,
+              season: null,
+              episode: null,
+              confidence: 90,
+              reason: "AI 识别到中文标题和年份",
+              raw_data: { source: "ai" },
+            },
+          ],
+          usage: { total_tokens: 10 },
+        },
+      },
+    ],
+    failed_items: [],
+  })),
 }));
 
 describe("preview store", () => {
@@ -94,5 +126,17 @@ describe("preview store", () => {
 
     expect(store.generationSummary?.generated_count).toBe(2);
     expect(store.previews).toHaveLength(3);
+  });
+
+  it("runs batch AI parse through the backend client", async () => {
+    const store = usePreviewStore();
+
+    const result = await store.parseBatchWithAi([1, 2]);
+
+    expect(parseRenamePreviewsWithAi).toHaveBeenCalledWith([1, 2]);
+    expect(result.total_count).toBe(2);
+    expect(result.success_count).toBe(1);
+    expect(result.blocked_count).toBe(1);
+    expect(store.loading).toBe(false);
   });
 });

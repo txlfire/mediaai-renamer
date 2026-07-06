@@ -265,6 +265,17 @@ export type AiParseResult = {
   usage?: Record<string, unknown>;
 };
 
+export type BatchAiParseResult = {
+  total_count: number;
+  success_count: number;
+  failed_count: number;
+  blocked_count: number;
+  skipped_count: number;
+  usage: Record<string, unknown>;
+  items: Array<{ id: number; result: AiParseResult }>;
+  failed_items: Array<{ id: number; message: string }>;
+};
+
 export type BatchMetadataMatchResult = {
   total_count: number;
   success_count: number;
@@ -898,6 +909,21 @@ export async function parseRenamePreviewWithAi(
   const post = requirePost(httpClient);
   try {
     const response = await post<AiParseResult>(`/rename-previews/${previewId}/ai-parse`, {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function parseRenamePreviewsWithAi(
+  previewIds: number[],
+  httpClient: ApiHttpClient = apiClient,
+): Promise<BatchAiParseResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<BatchAiParseResult>("/rename-previews/ai-parse/batch", {
+      rename_preview_ids: previewIds,
+    });
     return response.data;
   } catch (error) {
     throw new Error(apiErrorMessage(error));

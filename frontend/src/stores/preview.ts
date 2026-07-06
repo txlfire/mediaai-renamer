@@ -12,9 +12,11 @@ import {
   matchRenamePreviewMetadata,
   matchRenamePreviewsMetadata,
   parseRenamePreviewWithAi,
+  parseRenamePreviewsWithAi,
   updateRenamePreview,
   type AiParseCandidate,
   type AiParseResult,
+  type BatchAiParseResult,
   type BatchMetadataMatchResult,
   type BatchRenamePreviewExcludeResult,
   type GenerateRenamePreviewsPayload,
@@ -174,6 +176,19 @@ export const usePreviewStore = defineStore("preview", {
       this.errorMessage = "";
       try {
         return await parseRenamePreviewWithAi(previewId);
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async parseBatchWithAi(previewIds: number[]): Promise<BatchAiParseResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        return await parseRenamePreviewsWithAi(previewIds);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;

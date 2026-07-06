@@ -7,6 +7,7 @@ import { useRoute } from "vue-router";
 import type {
   AiParseCandidate,
   AiParseResult,
+  BatchAiParseResult,
   MetadataMatchResult,
   MetadataMatchSource,
   RenamePreview,
@@ -60,6 +61,7 @@ const pendingRenamePreviews = ref<RenamePreview[]>([]);
 const metadataCandidates = ref<MetadataMatchResult[]>([]);
 const aiParseResult = ref<AiParseResult | null>(null);
 const aiParsingPreviewId = ref<number | null>(null);
+const aiBatchResults = ref<Record<number, AiParseResult>>({});
 const selectedMetadataFields = ref<string[]>(["title", "english_title", "year", "tmdb_id", "imdb_id"]);
 const pendingMoveTargetDirectory = ref("");
 const activePreviewTab = ref("previews");
@@ -491,6 +493,19 @@ async function confirmResourceOperation(operation: string, count: number) {
   );
 }
 
+async function confirmAiBatchOperation(operation: string, count: number) {
+  await ElMessageBox.confirm(
+    formatMessage(messages.renamePreviews.aiParse.batchConfirm, { count, operation }),
+    messages.renamePreviews.aiParse.batchConfirmTitle,
+    {
+      type: "warning",
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+      dangerouslyUseHTMLString: false,
+    },
+  );
+}
+
 async function runRenameDryRun() {
   if (selectedPreviewIds.value.length === 0) {
     return;
@@ -578,6 +593,57 @@ function appendMetadataLogs(result: { items: RenamePreview[]; failed_items: Arra
   });
 }
 
+function shouldRunAiBatch(preview: RenamePreview) {
+  return (
+    preview.status !== "renamed" &&
+    preview.status !== "excluded" &&
+    (!preview.metadata_match_status ||
+      preview.metadata_match_status === "failed" ||
+      preview.metadata_match_status === "low_confidence")
+  );
+}
+
+function aiBatchTargetPreviews() {
+  return previewStore.previews.filter(shouldRunAiBatch);
+}
+
+function cacheAiBatchResult(result: BatchAiParseResult) {
+  const next = { ...aiBatchResults.value };
+  result.items.forEach((item) => {
+    next[item.id] = item.result;
+  });
+  aiBatchResults.value = next;
+}
+
+function appendAiBatchLogs(result: BatchAiParseResult) {
+  result.items.forEach((item) => {
+    const bestCandidate = item.result.candidates[0];
+    const title = bestCandidate?.title || messages.renamePreviews.aiParse.noCandidateTitle;
+    const confidence = bestCandidate?.confidence ?? 0;
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.aiParse.batchSuccessLog, {
+        id: item.id,
+        status: aiParseStatusLabel(item.result.status),
+        title,
+        confidence,
+      }),
+    );
+  });
+  result.failed_items.forEach((item) => {
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.aiParse.batchFailedLog, {
+        id: item.id,
+        reason: item.message,
+      }),
+    );
+  });
+  if (result.usage && Object.keys(result.usage).length > 0) {
+    operationProgressLogs.value.push(
+      `${messages.renamePreviews.aiParse.usage}：${JSON.stringify(result.usage)}`,
+    );
+  }
+}
+
 async function matchSelectedMetadata() {
   if (selectedPreviewIds.value.length === 0) {
     return;
@@ -587,6 +653,32 @@ async function matchSelectedMetadata() {
   const result = await previewStore.matchMetadataBatch(selectedPreviewIds.value, metadataMatchSource.value);
   appendMetadataLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
+}
+
+async function parseSelectedWithAi() {
+  if (selectedPreviewIds.value.length === 0) {
+    return;
+  }
+  await confirmAiBatchOperation(messages.renamePreviews.aiParse.batchSelected, selectedPreviewIds.value.length);
+  resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.aiParse.batchSelected);
+  const result = await previewStore.parseBatchWithAi(selectedPreviewIds.value);
+  cacheAiBatchResult(result);
+  appendAiBatchLogs(result);
+  finishOperationProgress(result.total_count, result.success_count, result.failed_count, result.blocked_count + result.skipped_count);
+}
+
+async function parseAllWithAi() {
+  const targets = aiBatchTargetPreviews();
+  if (targets.length === 0) {
+    ElMessage.warning(messages.renamePreviews.aiParse.noBatchTargets);
+    return;
+  }
+  await confirmAiBatchOperation(messages.renamePreviews.aiParse.batchAll, targets.length);
+  resetOperationProgress(targets.length, messages.renamePreviews.aiParse.batchAll);
+  const result = await previewStore.parseBatchWithAi(targets.map((item) => item.id));
+  cacheAiBatchResult(result);
+  appendAiBatchLogs(result);
+  finishOperationProgress(result.total_count, result.success_count, result.failed_count, result.blocked_count + result.skipped_count);
 }
 
 async function matchAllMetadata() {
@@ -654,6 +746,13 @@ async function applyMetadataCandidate(match: MetadataMatchResult) {
 }
 
 async function parseSingleWithAi(row: RenamePreview) {
+  const cachedResult = aiBatchResults.value[row.id];
+  if (cachedResult) {
+    aiParsePreviewId.value = row.id;
+    aiParseResult.value = cachedResult;
+    aiParseDialogVisible.value = true;
+    return;
+  }
   aiParsingPreviewId.value = row.id;
   aiParsePreviewId.value = row.id;
   aiParseResult.value = null;
@@ -698,6 +797,9 @@ async function applyAiCandidate(candidate: AiParseCandidate) {
     return;
   }
   await previewStore.applyAiCandidate(aiParsePreviewId.value, candidate);
+  const next = { ...aiBatchResults.value };
+  delete next[aiParsePreviewId.value];
+  aiBatchResults.value = next;
   aiParseDialogVisible.value = false;
   aiParseResult.value = null;
   ElMessage.success(messages.renamePreviews.aiParse.selectSuccess);
@@ -914,6 +1016,22 @@ onMounted(async () => {
               @click="matchAllMetadata"
             >
               {{ operationButtonLabel(messages.renamePreviews.tmdbMatchAll, messages.renamePreviews.operationResultDialog.runningMatch) }}
+            </el-button>
+            <el-button
+              :icon="MagicStick"
+              :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchSelected"
+              @click="parseSelectedWithAi"
+            >
+              {{ operationButtonLabel(messages.renamePreviews.aiParse.batchSelected, messages.renamePreviews.operationResultDialog.runningAi) }}
+            </el-button>
+            <el-button
+              :icon="MagicStick"
+              :disabled="previewStore.previews.length === 0 || previewStore.loading"
+              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchAll"
+              @click="parseAllWithAi"
+            >
+              {{ operationButtonLabel(messages.renamePreviews.aiParse.batchAll, messages.renamePreviews.operationResultDialog.runningAi) }}
             </el-button>
           </div>
           <div class="rename-action-group">

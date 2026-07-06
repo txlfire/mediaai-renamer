@@ -28,6 +28,7 @@ import {
   matchRenamePreviewMetadata,
   movePendingFiles,
   parseRenamePreviewWithAi,
+  parseRenamePreviewsWithAi,
   parsePendingFileWithAi,
   removePendingFile,
   setMediaSourceEnabled,
@@ -231,6 +232,7 @@ describe("rename preview API client", () => {
       httpClient,
     );
     await parseRenamePreviewWithAi(1, httpClient);
+    await parseRenamePreviewsWithAi([1, 2], httpClient);
     await applyAiParseCandidate(
       1,
       {
@@ -254,6 +256,7 @@ describe("rename preview API client", () => {
       "GET /rename-previews/1/metadata-candidates?metadata_match_source=parsed_title",
       'POST /rename-previews/1/metadata-candidate:{"candidate":{"provider":"TMDB","provider_id":"603","media_type":"movie","title":"黑客帝国","original_title":"The Matrix","year":1999,"season":null,"episode":null,"overview":""},"score":91}',
       "POST /rename-previews/1/ai-parse:{}",
+      'POST /rename-previews/ai-parse/batch:{"rename_preview_ids":[1,2]}',
       'POST /rename-previews/1/ai-candidate:{"candidate":{"title":"黑客帝国","media_type":"movie","year":1999,"season":null,"episode":null,"confidence":90,"reason":"AI 识别到中文标题和年份","raw_data":{"source":"ai"}}}',
     ]);
   });
