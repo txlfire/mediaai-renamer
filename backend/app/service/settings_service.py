@@ -44,6 +44,12 @@ AI_TEST_SNAPSHOT_KEYS = (
     "ai.timeout_ms",
     "ai.max_retries",
 )
+INTERNAL_SETTING_KEYS = {
+    "naming.movie_template_version",
+    "naming.movie_template_updated_at",
+    "naming.episode_template_version",
+    "naming.episode_template_updated_at",
+}
 SUPPORTED_AI_PROVIDERS = ("deepseek", "openai_compatible", "custom")
 DEFAULT_MEDIA_RISK_SENSITIVE_WORDS = [
     "情色",
@@ -337,12 +343,44 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         value_type="template",
         description="Movie naming template",
     ),
+    "naming.movie_template_version": SettingDefinition(
+        key="naming.movie_template_version",
+        category="naming",
+        default=1,
+        value_type="int",
+        description="Movie naming template version",
+        min_value=1,
+        max_value=1000000,
+    ),
+    "naming.movie_template_updated_at": SettingDefinition(
+        key="naming.movie_template_updated_at",
+        category="naming",
+        default="",
+        value_type="string",
+        description="Movie naming template updated time",
+    ),
     "naming.episode_template": SettingDefinition(
         key="naming.episode_template",
         category="naming",
         default="{title}.{year}.S{season:02d}E{episode:02d}",
         value_type="template",
         description="Episode naming template",
+    ),
+    "naming.episode_template_version": SettingDefinition(
+        key="naming.episode_template_version",
+        category="naming",
+        default=1,
+        value_type="int",
+        description="Episode naming template version",
+        min_value=1,
+        max_value=1000000,
+    ),
+    "naming.episode_template_updated_at": SettingDefinition(
+        key="naming.episode_template_updated_at",
+        category="naming",
+        default="",
+        value_type="string",
+        description="Episode naming template updated time",
     ),
     "naming.title_recognition_mode": SettingDefinition(
         key="naming.title_recognition_mode",
@@ -1325,6 +1363,24 @@ def _parse_value(value: object, definition: SettingDefinition) -> object:
     return _parse_string(value, definition)
 
 
+def validate_setting_value(
+    key: str,
+    value: object,
+    current_effective: dict[str, object] | None = None,
+) -> object:
+    """Validate one setting value without persisting it."""
+
+    definition = SETTING_DEFINITIONS.get(key)
+    if definition is None:
+        raise ValueError(f"未知配置项 {key}")
+    if key == "ai.provider_profiles":
+        existing_profiles = None
+        if current_effective is not None and isinstance(current_effective.get("ai.provider_profiles"), list):
+            existing_profiles = current_effective.get("ai.provider_profiles")
+        return _parse_ai_profiles(value, definition, existing_profiles=existing_profiles)
+    return _parse_value(value, definition)
+
+
 def _load_database_values(settings: AppSettings) -> dict[str, tuple[str, str | None]]:
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
@@ -1419,6 +1475,8 @@ def update_setting_values(
     current_effective = get_effective_settings(settings)
     parsed_values: dict[str, tuple[SettingDefinition, object]] = {}
     for key, value in values.items():
+        if key in INTERNAL_SETTING_KEYS:
+            raise ValueError(f"{key} 为系统维护字段，不允许直接修改")
         definition = SETTING_DEFINITIONS.get(key)
         if definition is None:
             raise ValueError(f"未知配置项 {key}")
@@ -1433,6 +1491,7 @@ def update_setting_values(
         parsed_values[key] = (definition, parsed_value)
 
     now = _utc_now()
+    _apply_naming_template_metadata_updates(current_effective, parsed_values, now)
     with closing(sqlite3.connect(settings.database_path)) as connection:
         for key, (definition, parsed_value) in parsed_values.items():
             connection.execute(
@@ -1472,6 +1531,40 @@ def update_setting_values(
         connection.commit()
 
     return list_setting_values(settings)
+
+
+def _apply_naming_template_metadata_updates(
+    current_effective: dict[str, object],
+    parsed_values: dict[str, tuple[SettingDefinition, object]],
+    now: str,
+) -> None:
+    template_pairs = (
+        (
+            "naming.movie_template",
+            "naming.movie_template_version",
+            "naming.movie_template_updated_at",
+        ),
+        (
+            "naming.episode_template",
+            "naming.episode_template_version",
+            "naming.episode_template_updated_at",
+        ),
+    )
+    for template_key, version_key, updated_at_key in template_pairs:
+        if template_key not in parsed_values:
+            continue
+        current_template = str(current_effective.get(template_key) or "")
+        current_version = int(current_effective.get(version_key) or 1)
+        current_updated_at = str(current_effective.get(updated_at_key) or "")
+        next_template = str(parsed_values[template_key][1] or "")
+        if next_template == current_template:
+            next_version = current_version
+            next_updated_at = current_updated_at
+        else:
+            next_version = current_version + 1
+            next_updated_at = now
+        parsed_values[version_key] = (SETTING_DEFINITIONS[version_key], next_version)
+        parsed_values[updated_at_key] = (SETTING_DEFINITIONS[updated_at_key], next_updated_at)
 
 
 def test_tmdb_connection(settings: AppSettings) -> dict[str, object]:

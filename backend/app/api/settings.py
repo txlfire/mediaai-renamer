@@ -23,6 +23,12 @@ from app.service.settings_service import (
     test_tmdb_connection,
     update_setting_values,
 )
+from app.service.naming_settings_service import (
+    build_naming_template_diff,
+    build_naming_template_preview,
+    naming_template_diff_to_dict,
+    naming_template_preview_to_dict,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -47,6 +53,27 @@ class SaveImdbTestResultRequest(BaseModel):
     message: str | None = None
     response_ms: int | None = None
     error_message: str | None = None
+
+
+class NamingTemplateSampleRequest(BaseModel):
+    """Sample media fields for naming template preview."""
+
+    title: str
+    year: int | None = None
+    season: int | None = None
+    episode: int | None = None
+    extension: str | None = None
+    extra: dict[str, object] | None = None
+
+
+class NamingTemplatePreviewRequest(BaseModel):
+    """Naming template preview or diff request."""
+
+    media_type: str
+    template: str | None = None
+    separator: str | None = None
+    keep_year: bool | None = None
+    sample: NamingTemplateSampleRequest
 
 
 def _model_payload(model: BaseModel) -> dict[str, object]:
@@ -191,3 +218,41 @@ def test_ai_settings(request: Request):
     """Validate current AI provider settings."""
 
     return test_ai_connection(request.app.state.settings)
+
+
+@router.post("/naming/test")
+def test_naming_template(payload: NamingTemplatePreviewRequest, request: Request):
+    """Generate a filename preview for a candidate naming template."""
+
+    try:
+        return naming_template_preview_to_dict(
+            build_naming_template_preview(
+                request.app.state.settings,
+                media_type=payload.media_type,
+                sample=_model_payload(payload.sample),
+                template=payload.template,
+                separator=payload.separator,
+                keep_year=payload.keep_year,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/naming/diff")
+def diff_naming_template(payload: NamingTemplatePreviewRequest, request: Request):
+    """Compare current and candidate naming template outputs."""
+
+    try:
+        return naming_template_diff_to_dict(
+            build_naming_template_diff(
+                request.app.state.settings,
+                media_type=payload.media_type,
+                sample=_model_payload(payload.sample),
+                template=payload.template,
+                separator=payload.separator,
+                keep_year=payload.keep_year,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

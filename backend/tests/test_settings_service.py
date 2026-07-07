@@ -73,6 +73,10 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(True, effective["scan.validate_path_before_scan"])
             self.assertEqual("{title}.{year}", effective["naming.movie_template"])
             self.assertEqual("{title}.{year}.S{season:02d}E{episode:02d}", effective["naming.episode_template"])
+            self.assertEqual(1, effective.get("naming.movie_template_version"))
+            self.assertEqual(1, effective.get("naming.episode_template_version"))
+            self.assertEqual("", effective.get("naming.movie_template_updated_at"))
+            self.assertEqual("", effective.get("naming.episode_template_updated_at"))
             self.assertEqual("parent_folder_fallback", effective["naming.title_recognition_mode"])
             self.assertEqual(".", effective["naming.separator"])
             self.assertEqual(True, effective["naming.keep_year"])
@@ -402,6 +406,30 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(False, effective["privacy.default_sensitive_words_enabled"])
             self.assertEqual(["剧透风险", "成人向"], effective["privacy.default_sensitive_words"])
             self.assertEqual(["家庭录像", "private"], effective["privacy.custom_sensitive_words"])
+
+    def test_naming_template_version_increments_only_when_template_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            initial = get_effective_settings(settings)
+            self.assertEqual(1, initial.get("naming.movie_template_version"))
+            self.assertEqual("", initial.get("naming.movie_template_updated_at"))
+
+            template = '[{"key":"title","label":"标题","variable":"title"}]'
+            update_setting_values(settings, {"naming.movie_template": template}, operator="admin")
+            first = get_effective_settings(settings)
+
+            self.assertEqual(template, first["naming.movie_template"])
+            self.assertEqual(2, first.get("naming.movie_template_version"))
+            self.assertTrue(str(first.get("naming.movie_template_updated_at") or "").startswith("20"))
+
+            first_updated_at = str(first.get("naming.movie_template_updated_at") or "")
+            update_setting_values(settings, {"naming.movie_template": template}, operator="admin")
+            second = get_effective_settings(settings)
+
+            self.assertEqual(2, second.get("naming.movie_template_version"))
+            self.assertEqual(first_updated_at, second.get("naming.movie_template_updated_at"))
 
     def test_sensitive_words_accept_legacy_newline_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:

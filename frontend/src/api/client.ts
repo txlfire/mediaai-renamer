@@ -446,6 +446,39 @@ export type AiConnectionTestHistory = {
   matches_current: boolean;
 };
 
+export type NamingTemplateSamplePayload = {
+  title: string;
+  year?: number | null;
+  season?: number | null;
+  episode?: number | null;
+  extension?: string | null;
+  extra?: Record<string, unknown>;
+};
+
+export type NamingTemplatePreviewPayload = {
+  media_type: "movie" | "episode";
+  template?: string;
+  separator?: string;
+  keep_year?: boolean;
+  sample: NamingTemplateSamplePayload;
+};
+
+export type NamingTemplatePreviewResult = {
+  media_type: "movie" | "episode";
+  generated_name: string;
+  template_version: number;
+  template_updated_at: string;
+};
+
+export type NamingTemplateDiffResult = {
+  media_type: "movie" | "episode";
+  current_generated_name: string;
+  candidate_generated_name: string;
+  changed: boolean;
+  template_version: number;
+  template_updated_at: string;
+};
+
 export type AiProviderProfile = {
   id: string;
   name: string;
@@ -1035,6 +1068,32 @@ export async function updateSettings(
   const put = requirePut(httpClient);
   const response = await put<SystemSetting[]>("/settings", { values });
   return response.data;
+}
+
+export async function testNamingTemplate(
+  payload: NamingTemplatePreviewPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<NamingTemplatePreviewResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<NamingTemplatePreviewResult>("/settings/naming/test", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function diffNamingTemplate(
+  payload: NamingTemplatePreviewPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<NamingTemplateDiffResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<NamingTemplateDiffResult>("/settings/naming/diff", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function fetchTmdbTestResult(

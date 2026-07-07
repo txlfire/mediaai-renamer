@@ -29,3 +29,36 @@ class PageTestResult:
     effective: str
     tested_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class NamingTemplateMetadata:
+    """One naming template metadata snapshot."""
+
+    media_type: str
+    template_key: str
+    template_value: str
+    template_version: int
+    template_updated_at: str
+
+
+@dataclass(frozen=True)
+class NamingTemplatePreviewResult:
+    """Generated filename preview for a naming template test."""
+
+    media_type: str
+    generated_name: str
+    template_version: int
+    template_updated_at: str
+
+
+@dataclass(frozen=True)
+class NamingTemplateDiffResult:
+    """Diff result between current and candidate naming templates."""
+
+    media_type: str
+    current_generated_name: str
+    candidate_generated_name: str
+    changed: bool
+    template_version: int
+    template_updated_at: str

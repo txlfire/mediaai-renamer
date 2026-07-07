@@ -224,6 +224,56 @@ class SettingsApiTest(unittest.TestCase):
             self.assertIn("current_snapshot", history.json())
             self.assertIn("matches_current", history.json())
 
+    def test_naming_template_test_returns_generated_preview(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.post(
+                "/api/settings/naming/test",
+                json={
+                    "media_type": "movie",
+                    "template": '[{"key":"title","label":"标题","variable":"title"},{"key":"year","label":"年份","variable":"year"}]',
+                    "sample": {
+                        "title": "黑客帝国",
+                        "year": 1999,
+                        "extension": ".mkv",
+                    },
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual("movie", data["media_type"])
+            self.assertEqual("黑客帝国.1999.mkv", data["generated_name"])
+            self.assertEqual(1, data["template_version"])
+
+    def test_naming_template_diff_returns_changed_flag(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.post(
+                "/api/settings/naming/diff",
+                json={
+                    "media_type": "movie",
+                    "template": '[{"key":"title","label":"标题","variable":"title"}]',
+                    "sample": {
+                        "title": "黑客帝国",
+                        "year": 1999,
+                        "extension": ".mkv",
+                    },
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual("黑客帝国.1999.mkv", data["current_generated_name"])
+            self.assertEqual("黑客帝国.mkv", data["candidate_generated_name"])
+            self.assertTrue(data["changed"])
+
 
 
 if __name__ == "__main__":
