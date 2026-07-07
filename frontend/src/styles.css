@@ -1225,6 +1225,36 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   font-size: 0.75rem;
 }
 
+.settings-page-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+  color: #8c95a8;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.settings-page-notice-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--el-color-primary);
+  font-size: 14px;
+}
+
+.settings-page-notice-text {
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .settings-actions {
   display: flex;
   justify-self: end;
@@ -1317,6 +1347,19 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   gap: 0.75rem;
 }
 
+.settings-inline-title-note {
+  display: flex;
+  align-items: flex-start;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.settings-inline-title-note .settings-config-card-title {
+  flex: 0 0 auto;
+}
+
 .settings-inline-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1358,12 +1401,27 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   overflow: auto;
 }
 
+.settings-sub-card {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
 .settings-block-record-card {
   gap: 0.875rem;
 }
 
 .settings-block-record-table {
   width: 100%;
+}
+
+.settings-ai-profile-table {
+  max-width: 100%;
+}
+
+.settings-ai-profile-table .el-table__body-wrapper,
+.settings-ai-profile-table .el-scrollbar__wrap {
+  overflow-x: auto !important;
 }
 
 .settings-block-record-actions {

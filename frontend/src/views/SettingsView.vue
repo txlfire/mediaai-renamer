@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Check, Delete, Edit, InfoFilled } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
@@ -27,6 +28,7 @@ import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useSettingsStore } from "../stores/settings";
+import { getAiProviderDefaults } from "../utils/aiProviderDefaults";
 import { formatDateTime } from "../utils/displayFormat";
 import {
   detectNamingSemanticWarnings,
@@ -797,17 +799,28 @@ function loadAiProfile(profile: AiProviderProfile) {
   form.aiBaseUrl = profile.base_url;
   form.aiTimeoutSeconds = String(Math.max(5, Math.round(profile.timeout_ms / 1000)));
   form.aiMaxRetries = String(profile.max_retries);
+  resetAiTestState();
+}
+
+function applyAiProviderDefaults(provider: string) {
+  const defaults = getAiProviderDefaults(provider);
+  form.aiModel = defaults.model;
+  form.aiBaseUrl = defaults.baseUrl;
+  resetAiTestState();
+}
+
+function handleAiProviderChange(provider: string) {
+  applyAiProviderDefaults(provider);
 }
 
 function createAiProfile() {
   form.aiProfileId = "";
   form.aiProfileName = "";
   form.aiProvider = "deepseek";
-  form.aiModel = "deepseek-chat";
   form.aiApiKey = "";
-  form.aiBaseUrl = "https://api.deepseek.com";
   form.aiTimeoutSeconds = "30";
   form.aiMaxRetries = "2";
+  applyAiProviderDefaults("deepseek");
 }
 
 async function activateAiProfile(profile: AiProviderProfile) {
@@ -908,6 +921,23 @@ async function saveAiSettings(options: { rethrow?: boolean } = {}) {
       throw error;
     }
   }
+}
+
+async function refreshAiSettings() {
+  await settingsStore.loadSettings();
+  syncForm();
+  try {
+    const history = await settingsStore.loadAiTestResult({ silent: true });
+    savedAiSnapshot.value = history.current_snapshot;
+    if (history.result && history.matches_current) {
+      aiTestResult.value = history.result;
+      aiLastTestTime.value = formatTestedAt(history.result.tested_at);
+      return;
+    }
+  } catch {
+    // Keep settings refresh usable even if historical AI test data fails to load.
+  }
+  resetAiTestState();
 }
 
 const testResult = ref<TmdbConnectionTestResult | null>(null);
@@ -1747,12 +1777,10 @@ onMounted(async () => {
       <section class="settings-panel">
         <el-form v-if="activeCategory === 'tmdb'" label-position="top" class="settings-form">
           <div class="settings-config-card">
-            <el-alert
-              :title="pageText.tmdb.priorityHint"
-              type="info"
-              :closable="false"
-              show-icon
-            />
+            <div class="settings-page-notice">
+              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+              <span class="settings-page-notice-text">{{ pageText.tmdb.priorityHint }}</span>
+            </div>
 
             <el-form-item :label="pageText.tmdb.v4Token">
               <el-input
@@ -2019,13 +2047,10 @@ onMounted(async () => {
 
         <el-form v-else-if="activeCategory === 'privacy'" label-position="top" class="settings-form">
           <div class="settings-config-card">
-            <div class="settings-config-card-title">{{ pageText.privacy.title }}</div>
-            <el-alert
-              :title="pageText.privacy.notice"
-              type="info"
-              :closable="false"
-              show-icon
-            />
+            <div class="settings-page-notice">
+              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+              <span class="settings-page-notice-text">{{ pageText.privacy.notice }}</span>
+            </div>
 
             <div class="settings-inline-row">
               <span class="settings-inline-label">{{ pageText.privacy.defaultEnabled }}</span>
@@ -2217,18 +2242,17 @@ onMounted(async () => {
 
         <el-form v-else-if="activeCategory === 'ai'" label-position="top" class="settings-form">
           <div class="settings-config-card">
-            <div class="settings-config-card-title">{{ pageText.ai.title }}</div>
-            <el-alert
-              :title="pageText.ai.notice"
-              type="info"
-              :closable="false"
-              show-icon
-            />
+            <div class="settings-page-notice">
+              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+              <span class="settings-page-notice-text">{{ pageText.ai.notice }}</span>
+            </div>
             <div class="settings-sub-card">
               <div class="settings-word-preview-heading">
-                <div>
+                <div class="settings-inline-title-note">
                   <div class="settings-config-card-title">{{ pageText.ai.profileList }}</div>
-                  <span class="setting-source">{{ pageText.ai.profileHint }}</span>
+                  <div class="settings-hint-card">
+                    <span class="setting-source">{{ pageText.ai.profileHint }}</span>
+                  </div>
                 </div>
                 <el-button size="small" @click="createAiProfile">
                   {{ pageText.ai.newProfile }}
@@ -2236,15 +2260,22 @@ onMounted(async () => {
               </div>
               <el-table
                 :data="savedAiProfiles"
+                :fit="false"
                 size="small"
-                class="settings-block-record-table"
+                class="settings-block-record-table settings-ai-profile-table"
                 :empty-text="pageText.ai.profileEmpty"
               >
-                <el-table-column prop="name" :label="pageText.ai.profileName" min-width="140" show-overflow-tooltip />
-                <el-table-column prop="provider" :label="pageText.ai.provider" width="150" />
-                <el-table-column prop="model" :label="pageText.ai.model" min-width="160" show-overflow-tooltip />
-                <el-table-column prop="base_url" :label="pageText.ai.baseUrl" min-width="180" show-overflow-tooltip />
-                <el-table-column :label="pageText.ai.currentProfile" width="90">
+                <el-table-column prop="name" :label="pageText.ai.profileName" width="180" show-overflow-tooltip />
+                <el-table-column prop="provider" :label="pageText.ai.provider" width="160" />
+                <el-table-column prop="model" :label="pageText.ai.model" width="180" show-overflow-tooltip />
+                <el-table-column prop="base_url" :label="pageText.ai.baseUrl" width="300" show-overflow-tooltip />
+                <el-table-column
+                  :label="pageText.ai.currentProfile"
+                  width="96"
+                  align="center"
+                  header-align="center"
+                  fixed="right"
+                >
                   <template #default="{ row }">
                     <el-tag v-if="row.id === settingValue('ai.active_profile_id', 'default')" type="success" effect="light">
                       {{ pageText.ai.currentProfileTag }}
@@ -2252,18 +2283,42 @@ onMounted(async () => {
                     <span v-else>-</span>
                   </template>
                 </el-table-column>
-                <el-table-column :label="pageText.ai.profileActions" width="220" fixed="right">
+                <el-table-column
+                  :label="pageText.ai.profileActions"
+                  width="132"
+                  align="center"
+                  header-align="center"
+                  fixed="right"
+                >
                   <template #default="{ row }">
-                    <div class="settings-block-record-actions">
-                      <el-button size="small" text type="primary" @click="loadAiProfile(row)">
-                        {{ pageText.ai.editProfile }}
-                      </el-button>
-                      <el-button size="small" text type="success" @click="activateAiProfile(row)">
-                        {{ pageText.ai.activateProfile }}
-                      </el-button>
-                      <el-button size="small" text type="danger" @click="deleteAiProfile(row)">
-                        {{ pageText.ai.deleteProfile }}
-                      </el-button>
+                    <div class="table-actions">
+                      <el-tooltip :content="pageText.ai.editProfile" placement="top">
+                        <el-button
+                          class="table-action-button action-edit"
+                          :icon="Edit"
+                          text
+                          circle
+                          @click="loadAiProfile(row)"
+                        />
+                      </el-tooltip>
+                      <el-tooltip :content="pageText.ai.activateProfile" placement="top">
+                        <el-button
+                          class="table-action-button action-toggle"
+                          :icon="Check"
+                          text
+                          circle
+                          @click="activateAiProfile(row)"
+                        />
+                      </el-tooltip>
+                      <el-tooltip :content="pageText.ai.deleteProfile" placement="top">
+                        <el-button
+                          class="table-action-button action-delete"
+                          :icon="Delete"
+                          text
+                          circle
+                          @click="deleteAiProfile(row)"
+                        />
+                      </el-tooltip>
                     </div>
                   </template>
                 </el-table-column>
@@ -2284,7 +2339,7 @@ onMounted(async () => {
                 />
               </el-form-item>
               <el-form-item :label="pageText.ai.provider">
-                <el-select v-model="form.aiProvider">
+                <el-select v-model="form.aiProvider" @change="handleAiProviderChange">
                   <el-option :label="pageText.ai.providerDeepSeek" value="deepseek" />
                   <el-option :label="pageText.ai.providerOpenAiCompatible" value="openai_compatible" />
                   <el-option :label="pageText.ai.providerCustom" value="custom" />
@@ -2316,7 +2371,7 @@ onMounted(async () => {
               </el-form-item>
             </div>
             <div class="settings-actions">
-              <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
+              <el-button :loading="settingsStore.loading" @click="refreshAiSettings">
                 {{ messages.common.refresh }}
               </el-button>
               <el-button :loading="settingsStore.loading || testingAi" @click="testAiConnection">
@@ -2802,5 +2857,24 @@ onMounted(async () => {
   color: var(--el-text-color-primary);
   font-weight: 600;
   word-break: break-all;
+}
+.settings-hint-card {
+  display: inline-flex;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--el-color-primary-light-5);
+  border-radius: 999px;
+  background: var(--el-color-primary-light-9);
+  line-height: 1.4;
+}
+
+.settings-hint-card :deep(.setting-source) {
+  min-width: 0;
+  margin-top: 0;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 </style>

@@ -552,7 +552,7 @@ export const zhCnMessages = {
       title: "AI 智能解析配置",
       notice: "AI 解析只在用户确认后调用，命中敏感词或外部提交保护规则时不会发送请求。",
       profileList: "Provider 配置列表",
-      profileHint: "可保存多个 Provider / 模型配置，并一键切换当前生效项。",
+      profileHint: "可保存多个 Provider 模型配置，并一键切换当前生效项。",
       profileEmpty: "暂无已保存的 Provider 配置",
       profileId: "配置 ID",
       profileIdPlaceholder: "例如：deepseek-main",
@@ -604,7 +604,7 @@ export const zhCnMessages = {
     },
     privacy: {
       title: "敏感词设置",
-      notice: "命中文件名、路径或解析标题的条目后续将不会提交到 TMDB、IMDb、AI 或其他外部刮削服务。本地解析、预览和手动编辑不受影响。",
+      notice: "命中文件名、路径或解析标题的条目将不会提交到外部服务，本地解析不受影响。",
       defaultEnabled: "启用默认敏感词库",
       effectiveCount: "当前生效词数",
       effectiveCountValue: "{count} 个",
