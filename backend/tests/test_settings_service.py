@@ -73,6 +73,7 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(True, effective["scan.validate_path_before_scan"])
             self.assertEqual("{title}.{year}", effective["naming.movie_template"])
             self.assertEqual("{title}.{year}.S{season:02d}E{episode:02d}", effective["naming.episode_template"])
+            self.assertEqual("parent_folder_fallback", effective["naming.title_recognition_mode"])
             self.assertEqual(".", effective["naming.separator"])
             self.assertEqual(True, effective["naming.keep_year"])
             self.assertEqual(True, effective["naming.clean_illegal_chars"])
@@ -152,7 +153,6 @@ class SettingsServiceTest(unittest.TestCase):
                 {"imdb.timeout_ms": "4000"},
                 {"imdb.timeout_ms": "31000"},
                 {"ai.enabled": "yes"},
-                {"ai.provider": "openai"},
                 {"ai.model": ""},
                 {"ai.base_url": "ftp://api.example.com"},
                 {"ai.timeout_ms": "4999"},
@@ -160,6 +160,9 @@ class SettingsServiceTest(unittest.TestCase):
                 {"ai.max_retries": "-1"},
                 {"ai.max_retries": "11"},
                 {"scan.minimum_file_size": "-1"},
+                {"ai.active_profile_id": ""},
+                {"ai.provider_profiles": [{"id": "", "provider": "deepseek", "model": "deepseek-chat"}]},
+                {"ai.provider_profiles": [{"id": "p1", "provider": "bad", "model": "m"}]},
             ]
 
             for payload in invalid_payloads:
@@ -213,6 +216,157 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertTrue(api_key.sensitive)
             self.assertEqual("********3456", api_key.value)
 
+    def test_ai_provider_profiles_override_active_legacy_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            update_setting_values(
+                settings,
+                {
+                    "ai.enabled": "true",
+                    "ai.provider": "deepseek",
+                    "ai.model": "legacy-model",
+                    "ai.api_key": "sk-legacy123456",
+                    "ai.base_url": "https://legacy.example.com/v1",
+                    "ai.timeout_ms": "30000",
+                    "ai.max_retries": "1",
+                    "ai.active_profile_id": "openai-main",
+                    "ai.provider_profiles": [
+                        {
+                            "id": "deepseek-main",
+                            "name": "DeepSeek Chat",
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                            "api_key": "sk-deepseek123456",
+                            "base_url": "https://api.deepseek.com/v1",
+                            "timeout_ms": 45000,
+                            "max_retries": 2,
+                            "enabled": True,
+                        },
+                        {
+                            "id": "openai-main",
+                            "name": "OpenAI Compat",
+                            "provider": "openai_compatible",
+                            "model": "gpt-4.1-mini",
+                            "api_key": "sk-openai123456",
+                            "base_url": "https://api.openai-proxy.example/v1",
+                            "timeout_ms": 60000,
+                            "max_retries": 4,
+                            "enabled": True,
+                        },
+                    ],
+                },
+                operator="admin",
+            )
+
+            effective = get_effective_settings(settings)
+
+            self.assertEqual("openai-main", effective["ai.active_profile_id"])
+            self.assertEqual("openai_compatible", effective["ai.provider"])
+            self.assertEqual("gpt-4.1-mini", effective["ai.model"])
+            self.assertEqual("sk-openai123456", effective["ai.api_key"])
+            self.assertEqual("https://api.openai-proxy.example/v1", effective["ai.base_url"])
+            self.assertEqual(60000, effective["ai.timeout_ms"])
+            self.assertEqual(4, effective["ai.max_retries"])
+
+    def test_ai_provider_profiles_are_masked_in_setting_list_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            update_setting_values(
+                settings,
+                {
+                    "ai.provider_profiles": [
+                        {
+                            "id": "deepseek-main",
+                            "name": "DeepSeek Chat",
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                            "api_key": "sk-deepseek123456",
+                            "base_url": "https://api.deepseek.com/v1",
+                            "timeout_ms": 45000,
+                            "max_retries": 2,
+                            "enabled": True,
+                        }
+                    ]
+                },
+                operator="admin",
+            )
+
+            values = list_setting_values(settings)
+            profiles = next(item for item in values if item.key == "ai.provider_profiles")
+
+            self.assertEqual(
+                [
+                    {
+                        "id": "deepseek-main",
+                        "name": "DeepSeek Chat",
+                        "provider": "deepseek",
+                        "model": "deepseek-chat",
+                        "api_key": "********3456",
+                        "base_url": "https://api.deepseek.com/v1",
+                        "timeout_ms": 45000,
+                        "max_retries": 2,
+                        "enabled": True,
+                        "has_secret": True,
+                    }
+                ],
+                profiles.value,
+            )
+
+    def test_ai_provider_profiles_keep_existing_secret_when_masked_value_is_not_resubmitted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            update_setting_values(
+                settings,
+                {
+                    "ai.active_profile_id": "deepseek-main",
+                    "ai.provider_profiles": [
+                        {
+                            "id": "deepseek-main",
+                            "name": "DeepSeek Chat",
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                            "api_key": "sk-deepseek123456",
+                            "base_url": "https://api.deepseek.com/v1",
+                            "timeout_ms": 45000,
+                            "max_retries": 2,
+                            "enabled": True,
+                        }
+                    ],
+                },
+                operator="admin",
+            )
+            update_setting_values(
+                settings,
+                {
+                    "ai.provider_profiles": [
+                        {
+                            "id": "deepseek-main",
+                            "name": "DeepSeek Chat v2",
+                            "provider": "deepseek",
+                            "model": "deepseek-reasoner",
+                            "api_key": "",
+                            "base_url": "https://api.deepseek.com/v1",
+                            "timeout_ms": 60000,
+                            "max_retries": 3,
+                            "enabled": True,
+                        }
+                    ]
+                },
+                operator="admin",
+            )
+
+            effective = get_effective_settings(settings)
+
+            self.assertEqual("sk-deepseek123456", effective["ai.api_key"])
+            self.assertEqual("deepseek-reasoner", effective["ai.model"])
+            self.assertEqual(60000, effective["ai.timeout_ms"])
+
     def test_m5_non_tmdb_settings_validate_and_persist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = self.build_settings(Path(temp_dir))
@@ -224,6 +378,7 @@ class SettingsServiceTest(unittest.TestCase):
                     "scan.batch_size": "50",
                     "scan.batch_interval_seconds": "0",
                     "naming.movie_template": '[{"key":"title","label":"标题","variable":"title"}]',
+                    "naming.title_recognition_mode": "parent_folder_first",
                     "naming.separator": "-",
                     "operations.log_retention_days": "7",
                     "shared.default_path_type": "mounted_nfs",
@@ -239,6 +394,7 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(50, effective["scan.batch_size"])
             self.assertEqual(0, effective["scan.batch_interval_seconds"])
             self.assertEqual('[{"key":"title","label":"标题","variable":"title"}]', effective["naming.movie_template"])
+            self.assertEqual("parent_folder_first", effective["naming.title_recognition_mode"])
             self.assertEqual("-", effective["naming.separator"])
             self.assertEqual(7, effective["operations.log_retention_days"])
             self.assertEqual("mounted_nfs", effective["shared.default_path_type"])
@@ -277,6 +433,7 @@ class SettingsServiceTest(unittest.TestCase):
                 {"naming.movie_template": "***"},
                 {"naming.movie_template": "[]"},
                 {"naming.movie_template": '[{"label":"标题"}]'},
+                {"naming.title_recognition_mode": "bad_mode"},
                 {"naming.separator": ""},
                 {"operations.batch_limit": "0"},
                 {"shared.default_path_type": "webdav"},

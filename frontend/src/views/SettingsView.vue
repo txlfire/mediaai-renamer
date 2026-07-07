@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import type {
   AiConnectionTestResult,
+  AiProviderProfile,
   ExternalSubmissionBlockRecord,
   ExternalSubmissionBlockStatus,
   ImdbConnectionTestResult,
@@ -50,6 +51,8 @@ const form = reactive({
   imdbPriority: "tmdb_first",
   imdbTimeoutSeconds: "10",
   aiEnabled: false,
+  aiProfileId: "",
+  aiProfileName: "",
   aiProvider: "deepseek",
   aiModel: "deepseek-chat",
   aiApiKey: "",
@@ -64,6 +67,7 @@ const form = reactive({
   scanValidatePathBeforeScan: true,
   movieTemplate: "{title}.{year}",
   episodeTemplate: "{title}.{year}.S{season:02d}E{episode:02d}",
+  titleRecognitionMode: "parent_folder_fallback",
   namingSeparator: ".",
   keepYear: true,
   cleanIllegalChars: true,
@@ -127,7 +131,29 @@ const savedAiApiKeyDisplay = computed(() => {
   const value = settingsStore.settingMap["ai.api_key"]?.value;
   return isMaskedSecret(value) ? String(value) : "";
 });
-const aiApiKeyPlaceholder = computed(() => savedAiApiKeyDisplay.value || pageText.ai.apiKeyPlaceholder);
+function isAiProviderProfile(value: unknown): value is AiProviderProfile {
+  return typeof value === "object" && value !== null && "id" in value && "provider" in value && "model" in value;
+}
+
+const savedAiProfiles = computed<AiProviderProfile[]>(() => {
+  const value = settingsStore.settingMap["ai.provider_profiles"]?.value;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isAiProviderProfile).map((profile) => ({
+    ...profile,
+    api_key: typeof profile.api_key === "string" ? profile.api_key : "",
+    has_secret: Boolean(profile.has_secret),
+  }));
+});
+
+const selectedSavedAiProfile = computed(() =>
+  savedAiProfiles.value.find((profile) => profile.id === form.aiProfileId) ?? null,
+);
+
+const aiApiKeyPlaceholder = computed(() =>
+  selectedSavedAiProfile.value?.api_key || savedAiApiKeyDisplay.value || pageText.ai.apiKeyPlaceholder,
+);
 const defaultSensitiveWordPreview = computed(() => parseSensitiveWordsInput(form.defaultSensitiveWordsText));
 const customSensitiveWordPreview = computed(() => parseSensitiveWordsInput(form.customSensitiveWordsText));
 const defaultSensitiveWordPreviewLimit = 30;
@@ -169,12 +195,16 @@ function syncForm() {
   form.imdbPriority = String(settingValue("imdb.priority", "tmdb_first"));
   form.imdbTimeoutSeconds = String(Math.max(5, Math.round(Number(settingValue("imdb.timeout_ms", 10000)) / 1000)));
   form.aiEnabled = Boolean(settingValue("ai.enabled", false));
-  form.aiProvider = String(settingValue("ai.provider", "deepseek"));
-  form.aiModel = String(settingValue("ai.model", "deepseek-chat"));
+  const activeAiProfileId = String(settingValue("ai.active_profile_id", "default"));
+  const activeAiProfile = savedAiProfiles.value.find((profile) => profile.id === activeAiProfileId) ?? savedAiProfiles.value[0] ?? null;
+  form.aiProfileId = activeAiProfile?.id || activeAiProfileId;
+  form.aiProfileName = activeAiProfile?.name || "";
+  form.aiProvider = activeAiProfile?.provider || String(settingValue("ai.provider", "deepseek"));
+  form.aiModel = activeAiProfile?.model || String(settingValue("ai.model", "deepseek-chat"));
   form.aiApiKey = "";
-  form.aiBaseUrl = String(settingValue("ai.base_url", "https://api.deepseek.com"));
-  form.aiTimeoutSeconds = String(Math.max(5, Math.round(Number(settingValue("ai.timeout_ms", 30000)) / 1000)));
-  form.aiMaxRetries = String(settingValue("ai.max_retries", 2));
+  form.aiBaseUrl = activeAiProfile?.base_url || String(settingValue("ai.base_url", "https://api.deepseek.com"));
+  form.aiTimeoutSeconds = String(Math.max(5, Math.round(Number(activeAiProfile?.timeout_ms ?? settingValue("ai.timeout_ms", 30000)) / 1000)));
+  form.aiMaxRetries = String(activeAiProfile?.max_retries ?? settingValue("ai.max_retries", 2));
   form.minimumFileSizeMb = String(Math.round(Number(settingValue("scan.minimum_file_size", 0)) / 1024 / 1024));
   form.scanBatchSize = String(settingValue("scan.batch_size", 100));
   form.scanBatchIntervalSeconds = String(settingValue("scan.batch_interval_seconds", 1));
@@ -185,6 +215,7 @@ function syncForm() {
   form.episodeTemplate = String(settingValue("naming.episode_template", "{title}.{year}.S{season:02d}E{episode:02d}"));
   movieNamingElements.value = parseNamingTemplate(form.movieTemplate, "movie", pageText.naming);
   episodeNamingElements.value = parseNamingTemplate(form.episodeTemplate, "episode", pageText.naming);
+  form.titleRecognitionMode = String(settingValue("naming.title_recognition_mode", "parent_folder_fallback"));
   form.namingSeparator = String(settingValue("naming.separator", "."));
   form.keepYear = Boolean(settingValue("naming.keep_year", true));
   form.cleanIllegalChars = Boolean(settingValue("naming.clean_illegal_chars", true));
@@ -364,6 +395,7 @@ async function saveNamingSettings() {
     await settingsStore.saveSettings({
       "naming.movie_template": movieTemplate,
       "naming.episode_template": episodeTemplate,
+      "naming.title_recognition_mode": form.titleRecognitionMode,
       "naming.separator": form.namingSeparator,
       "naming.keep_year": form.keepYear,
       "naming.clean_illegal_chars": form.cleanIllegalChars,
@@ -542,22 +574,148 @@ async function overrideExternalSubmission(record: ExternalSubmissionBlockRecord)
   }
 }
 
+function normalizeAiProfileId(raw: string) {
+  return raw.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function buildAiProfileDraft(overrides: Partial<AiProviderProfile> = {}): AiProviderProfile {
+  const timeoutMs = Math.max(5000, Number(form.aiTimeoutSeconds || 30) * 1000);
+  const maxRetries = Math.max(0, Number(form.aiMaxRetries || 0));
+  const profileId = normalizeAiProfileId(overrides.id || form.aiProfileId || form.aiProfileName || form.aiModel || form.aiProvider || "default");
+  return {
+    id: profileId || "default",
+    name: (overrides.name || form.aiProfileName || form.aiModel || pageText.ai.defaultProfileName).trim(),
+    provider: overrides.provider || form.aiProvider,
+    model: (overrides.model || form.aiModel || "deepseek-chat").trim(),
+    api_key: overrides.api_key ?? form.aiApiKey.trim() ?? "",
+    has_secret: overrides.has_secret,
+    base_url: (overrides.base_url || form.aiBaseUrl || "https://api.deepseek.com").trim(),
+    timeout_ms: overrides.timeout_ms ?? timeoutMs,
+    max_retries: overrides.max_retries ?? maxRetries,
+    enabled: overrides.enabled ?? true,
+  };
+}
+
+function mergeAiProfiles(nextProfile: AiProviderProfile) {
+  const profiles = [...savedAiProfiles.value];
+  const index = profiles.findIndex((profile) => profile.id === nextProfile.id);
+  if (index >= 0) {
+    profiles[index] = { ...profiles[index], ...nextProfile };
+  } else {
+    profiles.push(nextProfile);
+  }
+  return profiles;
+}
+
+function loadAiProfile(profile: AiProviderProfile) {
+  form.aiProfileId = profile.id;
+  form.aiProfileName = profile.name;
+  form.aiProvider = profile.provider;
+  form.aiModel = profile.model;
+  form.aiApiKey = "";
+  form.aiBaseUrl = profile.base_url;
+  form.aiTimeoutSeconds = String(Math.max(5, Math.round(profile.timeout_ms / 1000)));
+  form.aiMaxRetries = String(profile.max_retries);
+}
+
+function createAiProfile() {
+  form.aiProfileId = "";
+  form.aiProfileName = "";
+  form.aiProvider = "deepseek";
+  form.aiModel = "deepseek-chat";
+  form.aiApiKey = "";
+  form.aiBaseUrl = "https://api.deepseek.com";
+  form.aiTimeoutSeconds = "30";
+  form.aiMaxRetries = "2";
+}
+
+async function activateAiProfile(profile: AiProviderProfile) {
+  try {
+    await settingsStore.saveSettings({
+      "ai.enabled": form.aiEnabled,
+      "ai.active_profile_id": profile.id,
+      "ai.provider_profiles": savedAiProfiles.value,
+      "ai.provider": profile.provider,
+      "ai.model": profile.model,
+      "ai.base_url": profile.base_url,
+      "ai.timeout_ms": profile.timeout_ms,
+      "ai.max_retries": profile.max_retries,
+    });
+    syncForm();
+    resetAiTestState();
+    ElMessage.success(pageText.saved);
+  } catch (error) {
+    await notifySaveFailed(error);
+  }
+}
+
+async function deleteAiProfile(profile: AiProviderProfile) {
+  try {
+    await ElMessageBox.confirm(
+      formatMessage(pageText.ai.deleteConfirm, { name: profile.name }),
+      pageText.ai.deleteTitle,
+      {
+        confirmButtonText: messages.common.confirm,
+        cancelButtonText: messages.common.cancel,
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+
+  try {
+    const remaining = savedAiProfiles.value.filter((item) => item.id !== profile.id);
+    const nextActive = remaining[0];
+    const values: Record<string, unknown> = {
+      "ai.enabled": form.aiEnabled,
+      "ai.provider_profiles": remaining,
+      "ai.active_profile_id": nextActive?.id || "default",
+    };
+    if (nextActive) {
+      values["ai.provider"] = nextActive.provider;
+      values["ai.model"] = nextActive.model;
+      values["ai.base_url"] = nextActive.base_url;
+      values["ai.timeout_ms"] = nextActive.timeout_ms;
+      values["ai.max_retries"] = nextActive.max_retries;
+    }
+    await settingsStore.saveSettings(values);
+    syncForm();
+    resetAiTestState();
+    if (!nextActive) {
+      createAiProfile();
+    }
+    ElMessage.success(pageText.saved);
+  } catch (error) {
+    await notifySaveFailed(error);
+  }
+}
+
 async function saveAiSettings(options: { rethrow?: boolean } = {}) {
   try {
     const timeoutSeconds = Math.max(5, Number(form.aiTimeoutSeconds || 30));
     const maxRetries = Math.max(0, Number(form.aiMaxRetries || 0));
     form.aiTimeoutSeconds = String(timeoutSeconds);
     form.aiMaxRetries = String(maxRetries);
-    const values: Record<string, string | number | boolean> = {
+    const nextProfile = buildAiProfileDraft({
+      api_key: form.aiApiKey.trim(),
+      timeout_ms: timeoutSeconds * 1000,
+      max_retries: maxRetries,
+    });
+    form.aiProfileId = nextProfile.id;
+    form.aiProfileName = nextProfile.name;
+    const values: Record<string, unknown> = {
       "ai.enabled": form.aiEnabled,
-      "ai.provider": form.aiProvider,
-      "ai.model": form.aiModel.trim() || "deepseek-chat",
-      "ai.base_url": form.aiBaseUrl.trim() || "https://api.deepseek.com",
-      "ai.timeout_ms": timeoutSeconds * 1000,
-      "ai.max_retries": maxRetries,
+      "ai.active_profile_id": nextProfile.id,
+      "ai.provider_profiles": mergeAiProfiles(nextProfile),
+      "ai.provider": nextProfile.provider,
+      "ai.model": nextProfile.model,
+      "ai.base_url": nextProfile.base_url,
+      "ai.timeout_ms": nextProfile.timeout_ms,
+      "ai.max_retries": nextProfile.max_retries,
     };
-    if (form.aiApiKey.trim()) {
-      values["ai.api_key"] = form.aiApiKey.trim();
+    if (nextProfile.api_key) {
+      values["ai.api_key"] = nextProfile.api_key;
     }
     await settingsStore.saveSettings(values);
     syncForm();
@@ -731,14 +889,21 @@ function resetImdbTestState() {
 function buildAiFormSnapshot(): Record<string, unknown> {
   const timeoutSeconds = Math.min(120, Math.max(5, Number(form.aiTimeoutSeconds || 30)));
   const maxRetries = Math.min(10, Math.max(0, Number(form.aiMaxRetries || 0)));
+  const nextProfile = buildAiProfileDraft({
+    api_key: form.aiApiKey.trim() || selectedSavedAiProfile.value?.api_key || "",
+    timeout_ms: timeoutSeconds * 1000,
+    max_retries: maxRetries,
+  });
   return {
     "ai.enabled": form.aiEnabled,
-    "ai.provider": form.aiProvider,
-    "ai.model": form.aiModel.trim() || "deepseek-chat",
+    "ai.active_profile_id": nextProfile.id,
+    "ai.provider_profiles": mergeAiProfiles(nextProfile),
+    "ai.provider": nextProfile.provider,
+    "ai.model": nextProfile.model,
     "ai.api_key": form.aiApiKey.trim() || savedAiSnapshot.value?.["ai.api_key"] || { configured: false, fingerprint: "" },
-    "ai.base_url": form.aiBaseUrl.trim() || "https://api.deepseek.com",
-    "ai.timeout_ms": timeoutSeconds * 1000,
-    "ai.max_retries": maxRetries,
+    "ai.base_url": nextProfile.base_url,
+    "ai.timeout_ms": nextProfile.timeout_ms,
+    "ai.max_retries": nextProfile.max_retries,
   };
 }
 
@@ -1878,7 +2043,58 @@ onMounted(async () => {
               :closable="false"
               show-icon
             />
+            <div class="settings-sub-card">
+              <div class="settings-word-preview-heading">
+                <div>
+                  <div class="settings-config-card-title">{{ pageText.ai.profileList }}</div>
+                  <span class="setting-source">{{ pageText.ai.profileHint }}</span>
+                </div>
+                <el-button size="small" @click="createAiProfile">
+                  {{ pageText.ai.newProfile }}
+                </el-button>
+              </div>
+              <el-table
+                :data="savedAiProfiles"
+                size="small"
+                class="settings-block-record-table"
+                :empty-text="pageText.ai.profileEmpty"
+              >
+                <el-table-column prop="name" :label="pageText.ai.profileName" min-width="140" show-overflow-tooltip />
+                <el-table-column prop="provider" :label="pageText.ai.provider" width="150" />
+                <el-table-column prop="model" :label="pageText.ai.model" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="base_url" :label="pageText.ai.baseUrl" min-width="180" show-overflow-tooltip />
+                <el-table-column :label="pageText.ai.currentProfile" width="90">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.id === settingValue('ai.active_profile_id', 'default')" type="success" effect="light">
+                      {{ pageText.ai.currentProfileTag }}
+                    </el-tag>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column :label="pageText.ai.profileActions" width="220" fixed="right">
+                  <template #default="{ row }">
+                    <div class="settings-block-record-actions">
+                      <el-button size="small" text type="primary" @click="loadAiProfile(row)">
+                        {{ pageText.ai.editProfile }}
+                      </el-button>
+                      <el-button size="small" text type="success" @click="activateAiProfile(row)">
+                        {{ pageText.ai.activateProfile }}
+                      </el-button>
+                      <el-button size="small" text type="danger" @click="deleteAiProfile(row)">
+                        {{ pageText.ai.deleteProfile }}
+                      </el-button>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
             <div class="settings-grid">
+              <el-form-item :label="pageText.ai.profileId">
+                <el-input v-model="form.aiProfileId" :placeholder="pageText.ai.profileIdPlaceholder" />
+              </el-form-item>
+              <el-form-item :label="pageText.ai.profileName">
+                <el-input v-model="form.aiProfileName" :placeholder="pageText.ai.profileNamePlaceholder" />
+              </el-form-item>
               <el-form-item :label="pageText.ai.enabled">
                 <el-switch
                   v-model="form.aiEnabled"
@@ -1889,6 +2105,8 @@ onMounted(async () => {
               <el-form-item :label="pageText.ai.provider">
                 <el-select v-model="form.aiProvider">
                   <el-option :label="pageText.ai.providerDeepSeek" value="deepseek" />
+                  <el-option :label="pageText.ai.providerOpenAiCompatible" value="openai_compatible" />
+                  <el-option :label="pageText.ai.providerCustom" value="custom" />
                 </el-select>
               </el-form-item>
               <el-form-item :label="pageText.ai.model">
@@ -2050,6 +2268,14 @@ onMounted(async () => {
                 maxlength="4"
                 @input="onlyDigits('pathTruncateBytes')"
               />
+            </el-form-item>
+            <el-form-item :label="pageText.naming.titleRecognitionMode">
+              <el-select v-model="form.titleRecognitionMode">
+                <el-option :label="pageText.naming.recognitionModes.fileNameFirst" value="file_name_first" />
+                <el-option :label="pageText.naming.recognitionModes.parentFolderFallback" value="parent_folder_fallback" />
+                <el-option :label="pageText.naming.recognitionModes.parentFolderFirst" value="parent_folder_first" />
+                <el-option :label="pageText.naming.recognitionModes.manualOnly" value="manual_only" />
+              </el-select>
             </el-form-item>
             <el-form-item :label="pageText.naming.keepYear">
               <el-switch v-model="form.keepYear" />

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { CloseBold, Connection, Delete, Edit, MagicStick, Refresh, Search, Select } from "@element-plus/icons-vue";
+import { ArrowDown, CloseBold, Connection, Delete, Edit, MagicStick, Search, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
 import type {
+  AiConnectionTestHistory,
   AiParseCandidate,
   AiParseResult,
   BatchAiParseResult,
@@ -24,6 +25,7 @@ import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
 import { usePreviewStore } from "../stores/preview";
 import { useRenameOperationStore } from "../stores/renameOperation";
+import { useSettingsStore } from "../stores/settings";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime } from "../utils/displayFormat";
 import { formatFileSize } from "../utils/displayFormat";
@@ -38,6 +40,7 @@ const mediaStore = useMediaStore();
 const previewStore = usePreviewStore();
 const pendingFileStore = usePendingFileStore();
 const renameOperationStore = useRenameOperationStore();
+const settingsStore = useSettingsStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
 const route = useRoute();
@@ -78,6 +81,7 @@ const operationResultFailed = ref(0);
 const operationResultSkipped = ref(0);
 const operationResultLogs = ref<string[]>([]);
 const metadataMatchSource = ref<MetadataMatchSource>("parsed_title");
+const aiConnectionHistory = ref<AiConnectionTestHistory | null>(null);
 const defaultSort = { prop: "id", order: "ascending" as const };
 const pagedPreviews = computed(() =>
   paginationStore.paginate(
@@ -161,6 +165,11 @@ function mediaTypeLabel(value: string) {
 
 function titleSourceLabel(value: string | null | undefined) {
   const labels: Record<string, string> = messages.renamePreviews.titleSources;
+  return value ? (labels[value] ?? value) : "-";
+}
+
+function recognitionModeLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = messages.renamePreviews.recognitionModes;
   return value ? (labels[value] ?? value) : "-";
 }
 
@@ -306,6 +315,8 @@ const detailRows = computed(() => {
     { label: messages.renamePreviews.columns.parsedTitle, value: row.parsed_title },
     { label: messages.renamePreviews.columns.titleSource, value: titleSourceLabel(row.title_source) },
     { label: messages.renamePreviews.columns.parentFolderTitle, value: row.parent_folder_title ?? "-" },
+    { label: messages.renamePreviews.columns.recognitionMode, value: recognitionModeLabel(row.recognition_mode) },
+    { label: messages.renamePreviews.columns.titleConflict, value: row.title_conflict_message ?? "-" },
     { label: messages.renamePreviews.columns.metadataSource, value: row.metadata_source ?? "-" },
     { label: messages.renamePreviews.columns.metadataScore, value: `${row.metadata_match_score ?? 0}%` },
     { label: messages.renamePreviews.columns.metadata, value: metadataStatusLabel(row.metadata_match_status) },
@@ -474,6 +485,61 @@ function operationButtonLabel(label: string, runningLabel: string) {
   return label;
 }
 
+const aiBatchReady = computed(() =>
+  Boolean(
+    aiConnectionHistory.value?.result &&
+      aiConnectionHistory.value.matches_current &&
+      aiConnectionHistory.value.result.status === "success",
+  ),
+);
+
+const aiBatchBlockMessage = computed(() => {
+  if (!aiConnectionHistory.value?.result) {
+    return messages.renamePreviews.aiParse.guardUntested;
+  }
+  if (!aiConnectionHistory.value.matches_current) {
+    return messages.renamePreviews.aiParse.guardStale;
+  }
+  if (aiConnectionHistory.value.result.status !== "success") {
+    return aiConnectionHistory.value.result.message || messages.renamePreviews.aiParse.guardFailed;
+  }
+  return "";
+});
+
+const aiBatchStatusLabel = computed(() => {
+  if (aiBatchReady.value) {
+    return "";
+  }
+  if (!aiConnectionHistory.value?.result) {
+    return messages.renamePreviews.aiParse.statusUntested;
+  }
+  if (!aiConnectionHistory.value.matches_current) {
+    return messages.renamePreviews.aiParse.statusStale;
+  }
+  return messages.renamePreviews.aiParse.statusFailed;
+});
+
+function aiProviderSummary() {
+  const result = aiConnectionHistory.value?.result;
+  if (!result) {
+    return messages.renamePreviews.aiParse.providerUnavailable;
+  }
+  return formatMessage(messages.renamePreviews.aiParse.providerSummary, {
+    profile: result.active_profile_name || result.active_profile_id || result.provider,
+    provider: result.provider,
+    model: result.model,
+    baseUrl: result.base_url || "-",
+  });
+}
+
+function ensureAiBatchReady() {
+  if (aiBatchReady.value) {
+    return true;
+  }
+  ElMessage.warning(aiBatchBlockMessage.value);
+  return false;
+}
+
 async function handleOperationResultClosed() {
   operationResultExpanded.value = false;
   if (previewStore.filters.scan_job_id) {
@@ -495,7 +561,27 @@ async function confirmResourceOperation(operation: string, count: number) {
 
 async function confirmAiBatchOperation(operation: string, count: number) {
   await ElMessageBox.confirm(
-    formatMessage(messages.renamePreviews.aiParse.batchConfirm, { count, operation }),
+    formatMessage(messages.renamePreviews.aiParse.batchConfirm, {
+      count,
+      operation,
+      providerSummary: aiProviderSummary(),
+    }),
+    messages.renamePreviews.aiParse.batchConfirmTitle,
+    {
+      type: "warning",
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+      dangerouslyUseHTMLString: false,
+    },
+  );
+}
+
+async function confirmAiFallbackOperation(count: number) {
+  await ElMessageBox.confirm(
+    formatMessage(messages.renamePreviews.aiParse.fallbackConfirm, {
+      count,
+      providerSummary: aiProviderSummary(),
+    }),
     messages.renamePreviews.aiParse.batchConfirmTitle,
     {
       type: "warning",
@@ -644,7 +730,18 @@ function appendAiBatchLogs(result: BatchAiParseResult) {
   }
 }
 
-async function matchSelectedMetadata() {
+function appendMetadataAiFallbackLogs(result: { total_count: number; fallback_count: number; metadata: { items: RenamePreview[]; failed_items: Array<{ id: number; message: string }> }; ai: BatchAiParseResult }) {
+  operationProgressLogs.value.push(
+    formatMessage(messages.renamePreviews.aiParse.fallbackSummaryLog, {
+      metadataTotal: result.total_count,
+      fallbackCount: result.fallback_count,
+    }),
+  );
+  appendMetadataLogs(result.metadata);
+  appendAiBatchLogs(result.ai);
+}
+
+async function matchSelectedTmdbOnly() {
   if (selectedPreviewIds.value.length === 0) {
     return;
   }
@@ -655,16 +752,43 @@ async function matchSelectedMetadata() {
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
 
+async function matchSelectedTmdbWithAiFallback() {
+  if (selectedPreviewIds.value.length === 0) {
+    return;
+  }
+  if (!ensureAiBatchReady()) {
+    return;
+  }
+  await confirmAiFallbackOperation(selectedPreviewIds.value.length);
+  resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.matchModeTmdbAiFallback);
+  const result = await previewStore.matchMetadataBatchWithAiFallback(selectedPreviewIds.value, metadataMatchSource.value);
+  cacheAiBatchResult(result.ai);
+  appendMetadataAiFallbackLogs(result);
+  finishOperationProgress(
+    result.total_count,
+    result.metadata.success_count,
+    result.metadata.failed_count + result.ai.failed_count,
+    result.ai.blocked_count + result.ai.skipped_count,
+  );
+}
+
 async function parseSelectedWithAi() {
   if (selectedPreviewIds.value.length === 0) {
     return;
   }
+  if (!ensureAiBatchReady()) {
+    return;
+  }
   await confirmAiBatchOperation(messages.renamePreviews.aiParse.batchSelected, selectedPreviewIds.value.length);
   resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.aiParse.batchSelected);
-  const result = await previewStore.parseBatchWithAi(selectedPreviewIds.value);
+  const result = await previewStore.parseBatchWithAi(selectedPreviewIds.value, metadataMatchSource.value);
   cacheAiBatchResult(result);
   appendAiBatchLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count, result.blocked_count + result.skipped_count);
+}
+
+async function parseSelectedWithAiFromToolbar() {
+  await parseSelectedWithAi();
 }
 
 async function parseAllWithAi() {
@@ -673,15 +797,18 @@ async function parseAllWithAi() {
     ElMessage.warning(messages.renamePreviews.aiParse.noBatchTargets);
     return;
   }
+  if (!ensureAiBatchReady()) {
+    return;
+  }
   await confirmAiBatchOperation(messages.renamePreviews.aiParse.batchAll, targets.length);
   resetOperationProgress(targets.length, messages.renamePreviews.aiParse.batchAll);
-  const result = await previewStore.parseBatchWithAi(targets.map((item) => item.id));
+  const result = await previewStore.parseBatchWithAi(targets.map((item) => item.id), metadataMatchSource.value);
   cacheAiBatchResult(result);
   appendAiBatchLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count, result.blocked_count + result.skipped_count);
 }
 
-async function matchAllMetadata() {
+async function matchAllTmdbOnly() {
   const unmatchedCount = previewStore.previews.filter((preview) => !preview.metadata_match_status).length;
   if (unmatchedCount === 0) {
     ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
@@ -692,6 +819,54 @@ async function matchAllMetadata() {
   const result = await previewStore.matchAllUnmatched(metadataMatchSource.value);
   appendMetadataLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
+}
+
+async function matchAllTmdbWithAiFallback() {
+  const unmatchedCount = previewStore.previews.filter((preview) => !preview.metadata_match_status).length;
+  if (unmatchedCount === 0) {
+    ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
+    return;
+  }
+  if (!ensureAiBatchReady()) {
+    return;
+  }
+  await confirmAiFallbackOperation(unmatchedCount);
+  resetOperationProgress(unmatchedCount, messages.renamePreviews.matchModeTmdbAiFallback);
+  const result = await previewStore.matchAllUnmatchedWithAiFallback(metadataMatchSource.value);
+  cacheAiBatchResult(result.ai);
+  appendMetadataAiFallbackLogs(result);
+  finishOperationProgress(
+    result.total_count,
+    result.metadata.success_count,
+    result.metadata.failed_count + result.ai.failed_count,
+    result.ai.blocked_count + result.ai.skipped_count,
+  );
+}
+
+async function handleTmdbDropdownCommand(command: string) {
+  if (command === "all_tmdb") {
+    await matchAllTmdbOnly();
+    return;
+  }
+  if (command === "selected_tmdb_ai") {
+    await matchSelectedTmdbWithAiFallback();
+    return;
+  }
+  if (command === "all_tmdb_ai") {
+    await matchAllTmdbWithAiFallback();
+  }
+}
+
+async function handleAiDropdownCommand(command: string) {
+  if (command === "all_ai") {
+    await parseAllWithAi();
+  }
+}
+
+async function handleRenameDropdownCommand(command: string) {
+  if (command === "all_rename") {
+    await executeAllPreviews();
+  }
 }
 
 async function excludeSelectedPreviews() {
@@ -757,7 +932,7 @@ async function parseSingleWithAi(row: RenamePreview) {
   aiParsePreviewId.value = row.id;
   aiParseResult.value = null;
   try {
-    const result = await previewStore.parseWithAi(row.id);
+    const result = await previewStore.parseWithAi(row.id, metadataMatchSource.value);
     aiParseResult.value = result;
     aiParseDialogVisible.value = true;
     if (result.status === "success") {
@@ -912,6 +1087,11 @@ async function saveEdit() {
 }
 
 onMounted(async () => {
+  try {
+    aiConnectionHistory.value = await settingsStore.loadAiTestResult({ silent: true });
+  } catch {
+    aiConnectionHistory.value = null;
+  }
   await mediaStore.loadMediaSources();
   const routeSourceId = Number(route.query.media_source_id);
   const routeScanJobId = Number(route.query.scan_job_id);
@@ -970,17 +1150,6 @@ onMounted(async () => {
       <div v-if="activePreviewTab === 'previews'" class="rename-action-stack">
         <div class="rename-action-groups">
           <div class="rename-action-group">
-            <el-button :icon="Refresh" :disabled="previewStore.loading || renameOperationStore.loading" @click="refreshPreviews">
-              {{ messages.common.refresh }}
-            </el-button>
-            <el-button
-              :icon="CloseBold"
-              :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
-              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.excludeSelected"
-              @click="excludeSelectedPreviews"
-            >
-              {{ operationButtonLabel(messages.renamePreviews.excludeSelected, messages.renamePreviews.operationResultDialog.runningExclude) }}
-            </el-button>
             <el-button
               type="primary"
               :icon="MagicStick"
@@ -990,8 +1159,6 @@ onMounted(async () => {
             >
               {{ operationButtonLabel(messages.renamePreviews.generate, messages.renamePreviews.operationResultDialog.runningGenerate) }}
             </el-button>
-          </div>
-          <div class="rename-action-group">
             <el-select
               v-model="metadataMatchSource"
               class="metadata-source-select"
@@ -1000,60 +1167,105 @@ onMounted(async () => {
             >
               <el-option :label="messages.renamePreviews.metadataSourceParsedTitle" value="parsed_title" />
               <el-option :label="messages.renamePreviews.metadataSourceOriginalFileName" value="original_file_name" />
+              <el-option :label="messages.renamePreviews.metadataSourceParentFolderTitle" value="parent_folder_title" />
             </el-select>
+            <div class="action-split-button">
+              <el-button
+                :icon="Connection"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+                :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.tmdbMatch"
+                class="action-split-main"
+                @click="matchSelectedTmdbOnly"
+              >
+                {{ operationButtonLabel(messages.renamePreviews.tmdbMatch, messages.renamePreviews.operationResultDialog.runningMatch) }}
+              </el-button>
+              <el-dropdown
+                trigger="click"
+                :disabled="previewStore.loading"
+                @command="handleTmdbDropdownCommand"
+              >
+                <el-button class="action-split-caret">
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="all_tmdb">{{ messages.renamePreviews.tmdbMatchAll }}</el-dropdown-item>
+                    <el-dropdown-item command="selected_tmdb_ai" :disabled="!aiBatchReady">{{ messages.renamePreviews.tmdbAiFallbackSelected }}</el-dropdown-item>
+                    <el-dropdown-item command="all_tmdb_ai" :disabled="!aiBatchReady">{{ messages.renamePreviews.tmdbAiFallbackAll }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+            <div class="action-split-button">
+              <el-button
+                :icon="MagicStick"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !aiBatchReady"
+                :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchSelected"
+                class="action-split-main"
+                @click="parseSelectedWithAiFromToolbar"
+              >
+                {{ operationButtonLabel(messages.renamePreviews.aiMatch, messages.renamePreviews.operationResultDialog.runningAi) }}
+              </el-button>
+              <el-dropdown
+                trigger="click"
+                :disabled="previewStore.loading"
+                @command="handleAiDropdownCommand"
+              >
+                <el-button class="action-split-caret">
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewStore.previews.length === 0">
+                      {{ messages.renamePreviews.aiParse.batchAll }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+            <div class="action-split-button">
+              <el-button
+                type="success"
+                :icon="Select"
+                :disabled="selectedPreviewIds.length === 0"
+                :loading="renameOperationStore.loading && !operationProgressVisible"
+                class="action-split-main"
+                @click="executeSelectedPreviews"
+              >
+                {{ operationButtonLabel(messages.renamePreviews.rename, messages.renamePreviews.operationResultDialog.runningRename) }}
+              </el-button>
+              <el-dropdown
+                trigger="click"
+                :disabled="previewStore.previews.length === 0"
+                @command="handleRenameDropdownCommand"
+              >
+                <el-button class="action-split-caret">
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="all_rename">{{ messages.renamePreviews.executeAll }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
             <el-button
-              :icon="Connection"
+              :icon="CloseBold"
               :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
-              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.tmdbMatch"
-              @click="matchSelectedMetadata"
+              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.excludeSelected"
+              @click="excludeSelectedPreviews"
             >
-              {{ operationButtonLabel(messages.renamePreviews.tmdbMatch, messages.renamePreviews.operationResultDialog.runningMatch) }}
-            </el-button>
-            <el-button
-              :icon="Connection"
-              :disabled="previewStore.previews.length === 0 || previewStore.loading"
-              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.tmdbMatchAll"
-              @click="matchAllMetadata"
-            >
-              {{ operationButtonLabel(messages.renamePreviews.tmdbMatchAll, messages.renamePreviews.operationResultDialog.runningMatch) }}
-            </el-button>
-            <el-button
-              :icon="MagicStick"
-              :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
-              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchSelected"
-              @click="parseSelectedWithAi"
-            >
-              {{ operationButtonLabel(messages.renamePreviews.aiParse.batchSelected, messages.renamePreviews.operationResultDialog.runningAi) }}
-            </el-button>
-            <el-button
-              :icon="MagicStick"
-              :disabled="previewStore.previews.length === 0 || previewStore.loading"
-              :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchAll"
-              @click="parseAllWithAi"
-            >
-              {{ operationButtonLabel(messages.renamePreviews.aiParse.batchAll, messages.renamePreviews.operationResultDialog.runningAi) }}
+              {{ operationButtonLabel(messages.renamePreviews.excludeSelected, messages.renamePreviews.operationResultDialog.runningExclude) }}
             </el-button>
           </div>
-          <div class="rename-action-group">
-            <el-button
-              type="success"
-              :icon="Select"
-              :disabled="selectedPreviewIds.length === 0"
-              :loading="renameOperationStore.loading && !operationProgressVisible"
-              @click="executeSelectedPreviews"
-            >
-              {{ operationButtonLabel(messages.renamePreviews.rename, messages.renamePreviews.operationResultDialog.runningRename) }}
-            </el-button>
-            <el-button
-              type="warning"
-              :icon="Select"
-              :disabled="previewStore.previews.length === 0"
-              :loading="renameOperationStore.loading && !operationProgressVisible"
-              @click="executeAllPreviews"
-            >
-              {{ operationButtonLabel(messages.renamePreviews.executeAll, messages.renamePreviews.operationResultDialog.runningRename) }}
-            </el-button>
-          </div>
+        </div>
+        <div v-if="!aiBatchReady" class="rename-toolbar-status-row">
+          <el-tooltip :content="aiBatchBlockMessage" placement="top">
+            <div class="rename-toolbar-status-chip" role="status" aria-live="polite">
+              <span class="rename-toolbar-status-dot" aria-hidden="true"></span>
+              <span>{{ aiBatchStatusLabel }}</span>
+            </div>
+          </el-tooltip>
         </div>
         <div v-if="operationProgressVisible" class="rename-operation-compact-progress">
           <el-progress :percentage="operationProgressPercent" :show-text="false" :stroke-width="5" />

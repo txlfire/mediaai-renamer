@@ -244,7 +244,7 @@ export type MetadataMatchResult = {
   status: string;
 };
 
-export type MetadataMatchSource = "parsed_title" | "original_file_name";
+export type MetadataMatchSource = "parsed_title" | "original_file_name" | "parent_folder_title";
 
 export type AiParseCandidate = {
   title: string;
@@ -274,6 +274,13 @@ export type BatchAiParseResult = {
   usage: Record<string, unknown>;
   items: Array<{ id: number; result: AiParseResult }>;
   failed_items: Array<{ id: number; message: string }>;
+};
+
+export type MetadataAiFallbackResult = {
+  total_count: number;
+  fallback_count: number;
+  metadata: BatchMetadataMatchResult;
+  ai: BatchAiParseResult;
 };
 
 export type BatchMetadataMatchResult = {
@@ -341,7 +348,7 @@ export type RenameOperation = {
 export type SystemSetting = {
   key: string;
   category: string;
-  value: string | number | boolean | string[];
+  value: SystemSettingValue;
   description: string;
   sensitive: boolean;
   source: string;
@@ -415,6 +422,9 @@ export type AiConnectionTestResult = {
   raw_error?: string | null;
   provider: string;
   model: string;
+  base_url?: string;
+  active_profile_id?: string;
+  active_profile_name?: string;
   effective: string;
   tested_at?: string;
   updated_at?: string;
@@ -435,6 +445,26 @@ export type AiConnectionTestHistory = {
   current_snapshot: Record<string, unknown>;
   matches_current: boolean;
 };
+
+export type AiProviderProfile = {
+  id: string;
+  name: string;
+  provider: "deepseek" | "openai_compatible" | "custom" | string;
+  model: string;
+  api_key?: string;
+  has_secret?: boolean;
+  base_url: string;
+  timeout_ms: number;
+  max_retries: number;
+  enabled: boolean;
+};
+
+export type SystemSettingValue =
+  | string
+  | number
+  | boolean
+  | string[]
+  | AiProviderProfile[];
 
 export type ExternalSubmissionBlockStatus =
   | "blocked"
@@ -874,6 +904,33 @@ export async function matchAllUnmatchedMetadata(
   return response.data;
 }
 
+export async function matchRenamePreviewsMetadataWithAiFallback(
+  renamePreviewIds: number[],
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MetadataAiFallbackResult> {
+  const post = requirePost(httpClient);
+  const response = await post<MetadataAiFallbackResult>("/rename-previews/metadata-match/ai-fallback", {
+    rename_preview_ids: renamePreviewIds,
+    metadata_match_source: metadataMatchSource,
+  });
+  return response.data;
+}
+
+export async function matchAllUnmatchedMetadataWithAiFallback(
+  filters: Pick<RenamePreviewFilters, "media_source_id" | "scan_job_id"> = {},
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MetadataAiFallbackResult> {
+  const post = requirePost(httpClient);
+  const response = await post<MetadataAiFallbackResult>("/rename-previews/metadata-match/all/ai-fallback", {
+    media_source_id: filters.media_source_id,
+    scan_job_id: filters.scan_job_id,
+    metadata_match_source: metadataMatchSource,
+  });
+  return response.data;
+}
+
 export async function fetchRenamePreviewMetadataCandidates(
   previewId: number,
   metadataMatchSource: MetadataMatchSource = "parsed_title",
@@ -904,11 +961,21 @@ export async function applyRenamePreviewMetadataCandidate(
 
 export async function parseRenamePreviewWithAi(
   previewId: number,
+  metadataMatchSourceOrHttpClient: MetadataMatchSource | ApiHttpClient = "parsed_title",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<AiParseResult> {
-  const post = requirePost(httpClient);
+  const metadataMatchSource = typeof metadataMatchSourceOrHttpClient === "string"
+    ? metadataMatchSourceOrHttpClient
+    : "parsed_title";
+  const client = typeof metadataMatchSourceOrHttpClient === "string"
+    ? httpClient
+    : metadataMatchSourceOrHttpClient;
+  const post = requirePost(client);
   try {
-    const response = await post<AiParseResult>(`/rename-previews/${previewId}/ai-parse`, {});
+    const response = await post<AiParseResult>(
+      `/rename-previews/${previewId}/ai-parse?metadata_match_source=${encodeURIComponent(metadataMatchSource)}`,
+      {},
+    );
     return response.data;
   } catch (error) {
     throw new Error(apiErrorMessage(error));
@@ -917,12 +984,20 @@ export async function parseRenamePreviewWithAi(
 
 export async function parseRenamePreviewsWithAi(
   previewIds: number[],
+  metadataMatchSourceOrHttpClient: MetadataMatchSource | ApiHttpClient = "parsed_title",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<BatchAiParseResult> {
-  const post = requirePost(httpClient);
+  const metadataMatchSource = typeof metadataMatchSourceOrHttpClient === "string"
+    ? metadataMatchSourceOrHttpClient
+    : "parsed_title";
+  const client = typeof metadataMatchSourceOrHttpClient === "string"
+    ? httpClient
+    : metadataMatchSourceOrHttpClient;
+  const post = requirePost(client);
   try {
     const response = await post<BatchAiParseResult>("/rename-previews/ai-parse/batch", {
       rename_preview_ids: previewIds,
+      metadata_match_source: metadataMatchSource,
     });
     return response.data;
   } catch (error) {
@@ -954,7 +1029,7 @@ export async function fetchSettings(
 }
 
 export async function updateSettings(
-  values: Record<string, string | number | boolean | string[]>,
+  values: Record<string, unknown>,
   httpClient: ApiHttpClient = apiClient,
 ): Promise<SystemSetting[]> {
   const put = requirePut(httpClient);

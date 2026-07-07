@@ -189,6 +189,114 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
         self.assertEqual("parent_folder", preview.title_source)
         self.assertEqual("Better Show", preview.parent_folder_title)
 
+    def test_generate_preview_manual_only_mode_keeps_parent_folder_as_candidate(self):
+        show_dir = self.media_dir / "Better Show"
+        show_dir.mkdir()
+        episode = show_dir / "S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        update_setting_values(
+            self.settings,
+            {"naming.title_recognition_mode": "manual_only"},
+            operator="admin",
+        )
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    3,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+
+        generate_rename_previews(self.settings, media_file_ids=[3])
+        preview = list_rename_previews(self.settings, keyword="S01E02")[0]
+
+        self.assertEqual("manual_only", preview.recognition_mode)
+        self.assertEqual("Better Show", preview.parent_folder_title)
+        self.assertEqual("file_name", preview.title_source)
+        self.assertNotEqual("Better Show", preview.parsed_title)
+        self.assertEqual("needs_review", preview.status)
+
+    def test_generate_preview_marks_conflict_when_parent_folder_first_mode_titles_disagree(self):
+        show_dir = self.media_dir / "Folder Show"
+        show_dir.mkdir()
+        episode = show_dir / "File.Show.S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        update_setting_values(
+            self.settings,
+            {"naming.title_recognition_mode": "parent_folder_first"},
+            operator="admin",
+        )
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    3,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+
+        generate_rename_previews(self.settings, media_file_ids=[3])
+        preview = list_rename_previews(self.settings, keyword="File.Show")[0]
+
+        self.assertEqual("parent_folder_first", preview.recognition_mode)
+        self.assertEqual("File Show", preview.parsed_title)
+        self.assertEqual("Folder Show", preview.parent_folder_title)
+        self.assertEqual("needs_review", preview.status)
+        self.assertTrue(preview.title_conflict_message)
+
+    def test_generate_preview_rebuilds_using_latest_title_recognition_mode(self):
+        show_dir = self.media_dir / "Better Show"
+        show_dir.mkdir()
+        episode = show_dir / "S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    3,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+
+        update_setting_values(
+            self.settings,
+            {"naming.title_recognition_mode": "manual_only"},
+            operator="admin",
+        )
+        generate_rename_previews(self.settings, media_file_ids=[3])
+        first = list_rename_previews(self.settings, keyword="S01E02")[0]
+        self.assertEqual("manual_only", first.recognition_mode)
+        self.assertNotEqual("Better Show", first.parsed_title)
+
+        update_setting_values(
+            self.settings,
+            {"naming.title_recognition_mode": "parent_folder_fallback"},
+            operator="admin",
+        )
+        generate_rename_previews(self.settings, media_file_ids=[3], overwrite_edited=True)
+        second = list_rename_previews(self.settings, keyword="Better")[0]
+        self.assertEqual("parent_folder_fallback", second.recognition_mode)
+        self.assertEqual("Better Show", second.parsed_title)
+
     def test_preview_can_be_manually_excluded_to_pending_list(self):
         generate_rename_previews(self.settings)
         preview = list_rename_previews(self.settings)[0]
@@ -282,6 +390,8 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
                 "ai.model": "deepseek-chat",
                 "ai.api_key": "sk-secret123456",
                 "ai.base_url": "https://api.deepseek.com/v1",
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
             },
             operator="admin",
         )
@@ -324,6 +434,8 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
                 "ai.model": "deepseek-chat",
                 "ai.api_key": "sk-secret123456",
                 "ai.base_url": "https://api.deepseek.com/v1",
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
             },
             operator="admin",
         )
@@ -366,6 +478,81 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual("黑客帝国", payload["items"][0]["result"]["candidates"][0]["title"])
         self.assertNotIn("sk-secret123456", str(payload))
 
+    def test_metadata_match_ai_fallback_api_runs_ai_for_low_confidence(self):
+        update_setting_values(
+            self.settings,
+            {
+                "ai.enabled": "true",
+                "ai.provider": "deepseek",
+                "ai.model": "deepseek-chat",
+                "ai.api_key": "sk-secret123456",
+                "ai.base_url": "https://api.deepseek.com/v1",
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        preview_id = client.get("/api/rename-previews").json()[0]["id"]
+
+        class FakeTmdbClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="TMDB",
+                        provider_id="low",
+                        media_type="movie",
+                        title="The Matrix",
+                        original_title="The Matrix",
+                        year=None,
+                        season=None,
+                        episode=None,
+                        overview="",
+                    )
+                ]
+
+        class FakeDeepSeekProvider:
+            def __init__(self, config):
+                self.config = config
+
+            def complete_chat(self, messages, max_tokens: int, temperature: float):
+                return {
+                    "status": "success",
+                    "content": (
+                        '{"title":"黑客帝国","media_type":"movie","year":1999,'
+                        '"season":null,"episode":null,"confidence":92,"reason":"TMDB低置信后AI补充"}'
+                    ),
+                    "response_ms": 20,
+                    "usage": {"total_tokens": 70},
+                }
+
+        with (
+            patch("app.service.metadata_service.TmdbClient", FakeTmdbClient),
+            patch("app.service.ai_parse_service.DeepSeekProvider", FakeDeepSeekProvider),
+        ):
+            response = client.post(
+                "/api/rename-previews/metadata-match/ai-fallback",
+                json={"rename_preview_ids": [preview_id], "metadata_match_source": "parsed_title"},
+            )
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, payload["total_count"])
+        self.assertEqual(1, payload["fallback_count"])
+        self.assertEqual(1, payload["metadata"]["success_count"])
+        self.assertEqual("low_confidence", payload["metadata"]["items"][0]["metadata_match_status"])
+        self.assertEqual(1, payload["ai"]["success_count"])
+        self.assertEqual(70, payload["ai"]["usage"]["total_tokens"])
+        self.assertEqual("黑客帝国", payload["ai"]["items"][0]["result"]["candidates"][0]["title"])
+        self.assertNotIn("sk-secret123456", str(payload))
+
     def test_apply_ai_parse_candidate_api(self):
         app = create_app(self.settings)
         client = TestClient(app)
@@ -393,6 +580,69 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual("AI", response.json()["metadata_source"])
         self.assertEqual(90, response.json()["metadata_match_score"])
         self.assertEqual("黑客帝国.1999.mkv", response.json()["current_target_name"])
+
+    def test_ai_parse_preview_api_accepts_parent_folder_title_source(self):
+        show_dir = self.media_dir / "Better Show"
+        show_dir.mkdir()
+        episode = show_dir / "S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        update_setting_values(
+            self.settings,
+            {
+                "ai.enabled": "true",
+                "ai.provider": "deepseek",
+                "ai.model": "deepseek-chat",
+                "ai.api_key": "sk-secret123456",
+                "ai.base_url": "https://api.deepseek.com/v1",
+            },
+            operator="admin",
+        )
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    3,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+        generate_rename_previews(self.settings, media_file_ids=[3])
+        app = create_app(self.settings)
+        client = TestClient(app)
+        preview = client.get("/api/rename-previews", params={"keyword": "Better"}).json()[0]
+
+        captured_prompts: list[str] = []
+
+        class FakeDeepSeekProvider:
+            def __init__(self, config):
+                self.config = config
+
+            def complete_chat(self, messages, max_tokens: int, temperature: float):
+                captured_prompts.append(str(messages[0]["content"]))
+                return {
+                    "status": "success",
+                    "content": (
+                        '{"title":"Better Show","media_type":"tv","year":null,'
+                        '"season":1,"episode":2,"confidence":93,"reason":"使用上级文件夹标题"}'
+                    ),
+                    "response_ms": 16,
+                    "usage": {"total_tokens": 66},
+                }
+
+        with patch("app.service.ai_parse_service.DeepSeekProvider", FakeDeepSeekProvider):
+            response = client.post(
+                f"/api/rename-previews/{preview['id']}/ai-parse?metadata_match_source=parent_folder_title"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("success", response.json()["status"])
+        self.assertTrue(captured_prompts)
+        self.assertIn("本地解析标题: Better Show", captured_prompts[0])
 
 
 if __name__ == "__main__":

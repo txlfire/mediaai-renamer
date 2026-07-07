@@ -8,8 +8,10 @@ import {
   fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   generateRenamePreviews,
+  matchAllUnmatchedMetadataWithAiFallback,
   matchAllUnmatchedMetadata,
   matchRenamePreviewMetadata,
+  matchRenamePreviewsMetadataWithAiFallback,
   matchRenamePreviewsMetadata,
   parseRenamePreviewWithAi,
   parseRenamePreviewsWithAi,
@@ -25,6 +27,7 @@ import {
   type PreviewGenerationSummary,
   type RenamePreview,
   type RenamePreviewFilters,
+  type MetadataAiFallbackResult,
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 
@@ -158,6 +161,47 @@ export const usePreviewStore = defineStore("preview", {
       }
     },
 
+    async matchMetadataBatchWithAiFallback(
+      previewIds: number[],
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<MetadataAiFallbackResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await matchRenamePreviewsMetadataWithAiFallback(previewIds, metadataMatchSource);
+        result.metadata.items.forEach((item) => this.replacePreview(item));
+        return result;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async matchAllUnmatchedWithAiFallback(
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<MetadataAiFallbackResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await matchAllUnmatchedMetadataWithAiFallback(
+          {
+            media_source_id: this.filters.media_source_id,
+            scan_job_id: this.filters.scan_job_id,
+          },
+          metadataMatchSource,
+        );
+        result.metadata.items.forEach((item) => this.replacePreview(item));
+        return result;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
     async loadMetadataCandidates(
       previewId: number,
       metadataMatchSource: MetadataMatchSource = "parsed_title",
@@ -171,11 +215,14 @@ export const usePreviewStore = defineStore("preview", {
       return updated;
     },
 
-    async parseWithAi(previewId: number): Promise<AiParseResult> {
+    async parseWithAi(
+      previewId: number,
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<AiParseResult> {
       this.loading = true;
       this.errorMessage = "";
       try {
-        return await parseRenamePreviewWithAi(previewId);
+        return await parseRenamePreviewWithAi(previewId, metadataMatchSource);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
@@ -184,11 +231,14 @@ export const usePreviewStore = defineStore("preview", {
       }
     },
 
-    async parseBatchWithAi(previewIds: number[]): Promise<BatchAiParseResult> {
+    async parseBatchWithAi(
+      previewIds: number[],
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+    ): Promise<BatchAiParseResult> {
       this.loading = true;
       this.errorMessage = "";
       try {
-        return await parseRenamePreviewsWithAi(previewIds);
+        return await parseRenamePreviewsWithAi(previewIds, metadataMatchSource);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;

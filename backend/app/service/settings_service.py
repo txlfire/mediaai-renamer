@@ -12,7 +12,7 @@ import time
 
 from app.core.config import AppSettings
 from app.schema.settings import PageTestResult, SettingValue
-from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider
+from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider, OpenAiCompatibleProvider
 from app.service.tmdb_client import TmdbClient
 
 
@@ -35,6 +35,8 @@ IMDB_TEST_SNAPSHOT_KEYS = (
 )
 AI_TEST_SNAPSHOT_KEYS = (
     "ai.enabled",
+    "ai.active_profile_id",
+    "ai.provider_profiles",
     "ai.provider",
     "ai.model",
     "ai.api_key",
@@ -42,6 +44,7 @@ AI_TEST_SNAPSHOT_KEYS = (
     "ai.timeout_ms",
     "ai.max_retries",
 )
+SUPPORTED_AI_PROVIDERS = ("deepseek", "openai_compatible", "custom")
 DEFAULT_MEDIA_RISK_SENSITIVE_WORDS = [
     "情色",
     "色情",
@@ -210,6 +213,20 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         description="Enable AI intelligent parsing",
         env_var="AI_ENABLED",
     ),
+    "ai.active_profile_id": SettingDefinition(
+        key="ai.active_profile_id",
+        category="ai",
+        default="default",
+        value_type="required_string",
+        description="Active AI provider profile id",
+    ),
+    "ai.provider_profiles": SettingDefinition(
+        key="ai.provider_profiles",
+        category="ai",
+        default=[],
+        value_type="ai_profiles",
+        description="Saved AI provider profiles",
+    ),
     "ai.provider": SettingDefinition(
         key="ai.provider",
         category="ai",
@@ -217,7 +234,7 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         value_type="string",
         description="AI provider",
         env_var="AI_PROVIDER",
-        allowed_values=("deepseek",),
+        allowed_values=SUPPORTED_AI_PROVIDERS,
     ),
     "ai.model": SettingDefinition(
         key="ai.model",
@@ -326,6 +343,14 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         default="{title}.{year}.S{season:02d}E{episode:02d}",
         value_type="template",
         description="Episode naming template",
+    ),
+    "naming.title_recognition_mode": SettingDefinition(
+        key="naming.title_recognition_mode",
+        category="naming",
+        default="parent_folder_fallback",
+        value_type="string",
+        description="Title recognition mode for rename preview generation",
+        allowed_values=("file_name_first", "parent_folder_fallback", "parent_folder_first", "manual_only"),
     ),
     "naming.separator": SettingDefinition(
         key="naming.separator",
@@ -575,6 +600,31 @@ def _secret_fingerprint(value: object) -> dict[str, object]:
     }
 
 
+def _mask_ai_profile(profile: dict[str, object]) -> dict[str, object]:
+    masked = dict(profile)
+    secret = str(profile.get("api_key") or "").strip()
+    masked["api_key"] = _mask_secret(secret)
+    masked["has_secret"] = bool(secret)
+    return masked
+
+
+def _active_ai_profile(effective: dict[str, object]) -> dict[str, object] | None:
+    profiles = effective.get("ai.provider_profiles")
+    if not isinstance(profiles, list) or not profiles:
+        return None
+    active_profile_id = str(effective.get("ai.active_profile_id") or "").strip()
+    for profile in profiles:
+        if isinstance(profile, dict) and str(profile.get("id") or "").strip() == active_profile_id:
+            return profile
+    for profile in profiles:
+        if isinstance(profile, dict) and bool(profile.get("enabled", True)):
+            return profile
+    for profile in profiles:
+        if isinstance(profile, dict):
+            return profile
+    return None
+
+
 def _tmdb_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
     return {key: effective.get(key) for key in TMDB_TEST_SNAPSHOT_KEYS}
 
@@ -586,6 +636,16 @@ def _imdb_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
 def _ai_config_snapshot(effective: dict[str, object]) -> dict[str, object]:
     snapshot = {key: effective.get(key) for key in AI_TEST_SNAPSHOT_KEYS}
     snapshot["ai.api_key"] = _secret_fingerprint(effective.get("ai.api_key"))
+    profiles = effective.get("ai.provider_profiles")
+    if isinstance(profiles, list):
+        snapshot["ai.provider_profiles"] = [
+            {
+                **{key: value for key, value in profile.items() if key != "api_key"},
+                "api_key": _secret_fingerprint(profile.get("api_key")),
+            }
+            for profile in profiles
+            if isinstance(profile, dict)
+        ]
     return snapshot
 
 
@@ -840,6 +900,9 @@ def save_ai_connection_test_result(
         "raw_error": result.get("raw_error"),
         "provider": str(effective.get("ai.provider") or "deepseek"),
         "model": str(effective.get("ai.model") or "deepseek-chat"),
+        "base_url": str(effective.get("ai.base_url") or ""),
+        "active_profile_id": str(effective.get("ai.active_profile_id") or ""),
+        "active_profile_name": str(effective.get("ai.active_profile_name") or ""),
     }
     saved = _save_page_test_result(
         settings,
@@ -866,7 +929,7 @@ def test_ai_connection(settings: AppSettings, provider: AiProvider | None = None
     api_key = str(effective.get("ai.api_key") or "").strip()
     base_url = str(effective.get("ai.base_url") or "").strip()
 
-    if provider_name != "deepseek":
+    if provider_name not in SUPPORTED_AI_PROVIDERS:
         return save_ai_connection_test_result(
             settings,
             {
@@ -887,16 +950,15 @@ def test_ai_connection(settings: AppSettings, provider: AiProvider | None = None
             },
         )
 
-    ai_provider = provider or DeepSeekProvider(
-        AiProviderConfig(
-            provider=provider_name,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            timeout_ms=int(effective.get("ai.timeout_ms") or 30000),
-            max_retries=int(effective.get("ai.max_retries") or 0),
-        )
+    config = AiProviderConfig(
+        provider=provider_name,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        timeout_ms=int(effective.get("ai.timeout_ms") or 30000),
+        max_retries=int(effective.get("ai.max_retries") or 0),
     )
+    ai_provider = provider or (DeepSeekProvider(config) if provider_name == "deepseek" else OpenAiCompatibleProvider(config))
     return save_ai_connection_test_result(settings, ai_provider.test_connection())
 
 
@@ -1136,6 +1198,109 @@ def _parse_json_list(value: object, definition: SettingDefinition) -> list[str]:
     return normalized
 
 
+def _parse_ai_profiles(
+    value: object,
+    definition: SettingDefinition,
+    existing_profiles: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raw_profiles = []
+        else:
+            try:
+                raw_profiles = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{definition.key} 必须为 JSON 数组") from exc
+    else:
+        raw_profiles = value
+
+    if not isinstance(raw_profiles, list):
+        raise ValueError(f"{definition.key} 必须为 JSON 数组")
+
+    timeout_definition = SettingDefinition(
+        key=f"{definition.key}.timeout_ms",
+        category="ai",
+        default=30000,
+        value_type="int",
+        description="AI profile timeout",
+        min_value=5000,
+        max_value=120000,
+    )
+    retry_definition = SettingDefinition(
+        key=f"{definition.key}.max_retries",
+        category="ai",
+        default=2,
+        value_type="int",
+        description="AI profile max retries",
+        min_value=0,
+        max_value=10,
+    )
+    normalized_profiles: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+    existing_by_id = {
+        str(profile.get("id") or ""): profile
+        for profile in (existing_profiles or [])
+        if isinstance(profile, dict)
+    }
+    for item in raw_profiles:
+        if not isinstance(item, dict):
+            raise ValueError(f"{definition.key} 仅支持对象数组")
+        profile_id = _parse_required_string(item.get("id", ""), SettingDefinition(
+            key=f"{definition.key}.id",
+            category="ai",
+            default="",
+            value_type="required_string",
+            description="AI profile id",
+        ))
+        if profile_id in seen_ids:
+            raise ValueError(f"{definition.key} 存在重复 profile id")
+        provider = _parse_string(
+            item.get("provider", ""),
+            SettingDefinition(
+                key=f"{definition.key}.provider",
+                category="ai",
+                default="deepseek",
+                value_type="string",
+                description="AI provider",
+                allowed_values=SUPPORTED_AI_PROVIDERS,
+            ),
+        )
+        model = _parse_required_string(item.get("model", ""), SettingDefinition(
+            key=f"{definition.key}.model",
+            category="ai",
+            default="",
+            value_type="required_string",
+            description="AI profile model",
+        ))
+        existing_secret = str(existing_by_id.get(profile_id, {}).get("api_key") or "")
+        raw_secret = item.get("api_key", "")
+        secret_text = str(raw_secret or "").strip()
+        if not secret_text or secret_text.startswith("********"):
+            secret_text = existing_secret
+        normalized_profiles.append(
+            {
+                "id": profile_id,
+                "name": str(item.get("name") or profile_id).strip() or profile_id,
+                "provider": provider,
+                "model": model,
+                "api_key": _parse_secret(secret_text),
+                "base_url": _parse_url(item.get("base_url", ""), SettingDefinition(
+                    key=f"{definition.key}.base_url",
+                    category="ai",
+                    default="",
+                    value_type="url",
+                    description="AI profile base URL",
+                )),
+                "timeout_ms": _parse_int(item.get("timeout_ms", 30000), timeout_definition),
+                "max_retries": _parse_int(item.get("max_retries", 2), retry_definition),
+                "enabled": _parse_bool(item.get("enabled", True)),
+            }
+        )
+        seen_ids.add(profile_id)
+    return normalized_profiles
+
+
 def _parse_value(value: object, definition: SettingDefinition) -> object:
     if definition.value_type == "bool":
         return _parse_bool(value)
@@ -1151,6 +1316,8 @@ def _parse_value(value: object, definition: SettingDefinition) -> object:
         return _parse_separator(value, definition)
     if definition.value_type == "json_list":
         return _parse_json_list(value, definition)
+    if definition.value_type == "ai_profiles":
+        return _parse_ai_profiles(value, definition)
     if definition.value_type == "required_string":
         return _parse_required_string(value, definition)
     if definition.value_type == "url":
@@ -1194,6 +1361,15 @@ def get_effective_settings(settings: AppSettings) -> dict[str, object]:
         except ValueError:
             value = definition.default
         effective[definition.key] = value
+    active_profile = _active_ai_profile(effective)
+    if active_profile is not None:
+        effective["ai.active_profile_name"] = active_profile.get("name")
+        effective["ai.provider"] = active_profile.get("provider", effective.get("ai.provider"))
+        effective["ai.model"] = active_profile.get("model", effective.get("ai.model"))
+        effective["ai.api_key"] = active_profile.get("api_key", effective.get("ai.api_key"))
+        effective["ai.base_url"] = active_profile.get("base_url", effective.get("ai.base_url"))
+        effective["ai.timeout_ms"] = active_profile.get("timeout_ms", effective.get("ai.timeout_ms"))
+        effective["ai.max_retries"] = active_profile.get("max_retries", effective.get("ai.max_retries"))
     return effective
 
 
@@ -1219,7 +1395,11 @@ def list_setting_values(settings: AppSettings) -> list[SettingValue]:
             SettingValue(
                 key=definition.key,
                 category=definition.category,
-                value=_mask_secret(value) if definition.sensitive else value,
+                value=(
+                    [_mask_ai_profile(profile) for profile in value if isinstance(profile, dict)]
+                    if definition.key == "ai.provider_profiles" and isinstance(value, list)
+                    else (_mask_secret(value) if definition.sensitive else value)
+                ),
                 description=definition.description,
                 sensitive=definition.sensitive,
                 source=source,
@@ -1236,12 +1416,21 @@ def update_setting_values(
 ) -> list[SettingValue]:
     """Validate and persist hot settings."""
 
+    current_effective = get_effective_settings(settings)
     parsed_values: dict[str, tuple[SettingDefinition, object]] = {}
     for key, value in values.items():
         definition = SETTING_DEFINITIONS.get(key)
         if definition is None:
             raise ValueError(f"未知配置项 {key}")
-        parsed_values[key] = (definition, _parse_value(value, definition))
+        if key == "ai.provider_profiles":
+            parsed_value = _parse_ai_profiles(
+                value,
+                definition,
+                existing_profiles=current_effective.get("ai.provider_profiles") if isinstance(current_effective.get("ai.provider_profiles"), list) else None,
+            )
+        else:
+            parsed_value = _parse_value(value, definition)
+        parsed_values[key] = (definition, parsed_value)
 
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:

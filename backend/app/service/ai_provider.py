@@ -1,4 +1,4 @@
-"""AI provider abstraction and DeepSeek implementation."""
+"""AI provider abstraction and OpenAI-compatible implementations."""
 
 from dataclasses import dataclass
 import json
@@ -66,7 +66,7 @@ def ai_error_message(error_type: str, http_status: int | None, reason: str) -> s
     return f"AI 连接失败：{reason}"
 
 
-class DeepSeekProvider:
+class OpenAiCompatibleProvider:
     def __init__(self, config: AiProviderConfig):
         self.config = config
 
@@ -162,3 +162,7 @@ class DeepSeekProvider:
                 "http_status": http_status,
                 "raw_error": reason,
             }
+
+
+class DeepSeekProvider(OpenAiCompatibleProvider):
+    """DeepSeek uses the same OpenAI-compatible chat completions protocol."""

@@ -12,6 +12,7 @@ from app.core.config import AppSettings
 from app.schema.ai_parse import AiParseCandidate, AiParseResult
 from app.schema.media import ParsedMediaName, PreviewGenerationSummary, RenamePreview
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult
+from app.service.ai_provider import AiProvider
 from app.service.ai_parse_service import parse_media_with_ai
 from app.service.external_submission_guard import check_external_submission
 from app.service.metadata_matcher import MATCH_STATUS_HIGH
@@ -23,9 +24,21 @@ from app.utils.naming_template import build_preview_name_with_settings, template
 
 METADATA_MATCH_SOURCE_PARSED_TITLE = "parsed_title"
 METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME = "original_file_name"
+METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE = "parent_folder_title"
 METADATA_MATCH_SOURCES = {
     METADATA_MATCH_SOURCE_PARSED_TITLE,
     METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME,
+    METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE,
+}
+TITLE_RECOGNITION_MODE_FILE_NAME_FIRST = "file_name_first"
+TITLE_RECOGNITION_MODE_PARENT_FOLDER_FALLBACK = "parent_folder_fallback"
+TITLE_RECOGNITION_MODE_PARENT_FOLDER_FIRST = "parent_folder_first"
+TITLE_RECOGNITION_MODE_MANUAL_ONLY = "manual_only"
+TITLE_RECOGNITION_MODES = {
+    TITLE_RECOGNITION_MODE_FILE_NAME_FIRST,
+    TITLE_RECOGNITION_MODE_PARENT_FOLDER_FALLBACK,
+    TITLE_RECOGNITION_MODE_PARENT_FOLDER_FIRST,
+    TITLE_RECOGNITION_MODE_MANUAL_ONLY,
 }
 
 
@@ -102,6 +115,8 @@ def _deserialize_metadata_matches(value: str | None) -> list[MetadataMatchResult
 def _status_for_target(file_path: str, original_name: str, target_name: str, fallback_status: str) -> str:
     if original_name != target_name:
         return fallback_status
+    if fallback_status == "needs_review":
+        return fallback_status
     path = Path(file_path)
     if path.exists() and os.access(path, os.R_OK | os.W_OK):
         return "no_rename"
@@ -118,10 +133,62 @@ def _message_without_title_warning(message: str | None) -> str | None:
     return message
 
 
-def _merge_parent_folder_title(row: sqlite3.Row, parsed: ParsedMediaName) -> tuple[ParsedMediaName, str, str | None, str | None]:
-    """用上级文件夹名称补全弱文件名解析结果，保留文件名中的季集信息。"""
+def _title_recognition_mode(effective_settings: dict[str, object]) -> str:
+    value = str(
+        effective_settings.get("naming.title_recognition_mode")
+        or TITLE_RECOGNITION_MODE_PARENT_FOLDER_FALLBACK
+    ).strip()
+    if value not in TITLE_RECOGNITION_MODES:
+        return TITLE_RECOGNITION_MODE_PARENT_FOLDER_FALLBACK
+    return value
 
-    parent_name = Path(str(row["file_path"])).parent.name
+
+def _normalized_title_key(title: str) -> str:
+    return "".join(char for char in title.casefold() if char.isalnum())
+
+
+def _is_title_conflict(file_title: str, parent_title: str) -> bool:
+    if not file_title.strip() or not parent_title.strip():
+        return False
+    return _normalized_title_key(file_title) != _normalized_title_key(parent_title)
+
+
+def _parsed_with_parent_title(parsed: ParsedMediaName, parent_parsed: ParsedMediaName, parent_title: str) -> ParsedMediaName:
+    media_type = parsed.media_type if parsed.media_type != "unknown" else parent_parsed.media_type
+    if parsed.season is not None or parsed.episode is not None:
+        media_type = "episode"
+    return ParsedMediaName(
+        media_type=media_type,
+        title=parent_title,
+        year=parsed.year if parsed.year is not None else parent_parsed.year,
+        season=parsed.season,
+        episode=parsed.episode,
+        message=_message_without_title_warning(parsed.message),
+        extra=parsed.extra,
+    )
+
+
+def _parent_title_conflict_message(file_title: str, parent_title: str) -> str:
+    return f"文件名标题“{file_title}”与上级文件夹标题“{parent_title}”不一致，请人工确认。"
+
+
+def _manual_only_candidate_message(parent_title: str) -> str:
+    return f"当前识别模式为手动确认，可参考上级文件夹标题“{parent_title}”。"
+
+
+def _merge_parent_folder_title(
+    row: sqlite3.Row,
+    parsed: ParsedMediaName,
+    recognition_mode: str,
+) -> tuple[ParsedMediaName, str, str | None, str | None]:
+    """根据当前识别模式决定是否使用上级文件夹标题。"""
+
+    file_parent = Path(str(row["file_path"])).parent
+    media_source_path = Path(str(row["media_source_path"])) if row["media_source_path"] else None
+    if media_source_path is not None and file_parent == media_source_path:
+        return parsed, "file_name", None, None
+
+    parent_name = file_parent.name
     if not parent_name:
         return parsed, "file_name", None, None
 
@@ -130,24 +197,22 @@ def _merge_parent_folder_title(row: sqlite3.Row, parsed: ParsedMediaName) -> tup
     if not parent_title:
         return parsed, "file_name", None, None
 
-    if not _has_usable_title(parsed):
-        media_type = parsed.media_type if parsed.media_type != "unknown" else parent_parsed.media_type
-        if parsed.season is not None or parsed.episode is not None:
-            media_type = "episode"
-        return (
-            ParsedMediaName(
-                media_type=media_type,
-                title=parent_title,
-                year=parsed.year if parsed.year is not None else parent_parsed.year,
-                season=parsed.season,
-                episode=parsed.episode,
-                message=_message_without_title_warning(parsed.message),
-                extra=parsed.extra,
-            ),
-            "parent_folder",
-            parent_title,
-            None,
-        )
+    has_file_title = _has_usable_title(parsed)
+    if has_file_title and _is_title_conflict(parsed.title, parent_title):
+        return parsed, "file_name", parent_title, _parent_title_conflict_message(parsed.title, parent_title)
+
+    if recognition_mode == TITLE_RECOGNITION_MODE_MANUAL_ONLY:
+        message = _manual_only_candidate_message(parent_title) if not has_file_title else None
+        return parsed, "file_name", parent_title, message
+
+    if recognition_mode == TITLE_RECOGNITION_MODE_FILE_NAME_FIRST:
+        return parsed, "file_name", parent_title, None
+
+    if recognition_mode == TITLE_RECOGNITION_MODE_PARENT_FOLDER_FIRST and parent_title:
+        return _parsed_with_parent_title(parsed, parent_parsed, parent_title), "parent_folder", parent_title, None
+
+    if recognition_mode == TITLE_RECOGNITION_MODE_PARENT_FOLDER_FALLBACK and not has_file_title:
+        return _parsed_with_parent_title(parsed, parent_parsed, parent_title), "parent_folder", parent_title, None
 
     return parsed, "file_name", parent_title, None
 
@@ -161,20 +226,23 @@ def _query_media_files(
     conditions: list[str] = []
     params: list[object] = []
     if media_source_id is not None:
-        conditions.append("media_source_id = ?")
+        conditions.append("mf.media_source_id = ?")
         params.append(media_source_id)
     if scan_job_id is not None:
-        conditions.append("scan_job_id = ?")
+        conditions.append("mf.scan_job_id = ?")
         params.append(scan_job_id)
     if media_file_ids:
         placeholders = ", ".join("?" for _ in media_file_ids)
-        conditions.append(f"id IN ({placeholders})")
+        conditions.append(f"mf.id IN ({placeholders})")
         params.extend(media_file_ids)
 
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
     return connection.execute(
-        "SELECT id, media_source_id, scan_job_id, file_path, file_name, extension "
-        f"FROM media_files{where_clause} ORDER BY id",
+        "SELECT mf.id, mf.media_source_id, mf.scan_job_id, mf.file_path, mf.file_name, mf.extension, "
+        "ms.path AS media_source_path "
+        "FROM media_files mf "
+        "JOIN media_sources ms ON ms.id = mf.media_source_id"
+        f"{where_clause} ORDER BY mf.id",
         params,
     ).fetchall()
 
@@ -193,13 +261,18 @@ def generate_rename_previews(
     edited_kept_count = 0
     now = _utc_now()
     effective_settings = get_effective_settings(settings)
+    recognition_mode = _title_recognition_mode(effective_settings)
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = _query_media_files(connection, media_source_id, scan_job_id, media_file_ids)
         for row in rows:
             parsed = parse_media_filename(str(row["file_name"]))
-            parsed, title_source, parent_folder_title, title_conflict_message = _merge_parent_folder_title(row, parsed)
+            parsed, title_source, parent_folder_title, title_conflict_message = _merge_parent_folder_title(
+                row,
+                parsed,
+                recognition_mode,
+            )
             suggested_name = build_preview_name_with_settings(parsed, str(row["extension"]), effective_settings)
             status = "needs_review" if parsed.media_type == "unknown" or parsed.message else "generated"
             message = title_conflict_message or parsed.message
@@ -256,7 +329,7 @@ def generate_rename_previews(
                     edited_name,
                     title_source,
                     parent_folder_title,
-                    "parent_folder_fallback",
+                    recognition_mode,
                     title_conflict_message,
                     status,
                     message,
@@ -448,6 +521,15 @@ def _parsed_from_preview(
         raise ValueError("不支持的 TMDB 匹配来源")
     if metadata_match_source == METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME:
         return parse_media_filename(str(row["file_name"]))
+    if metadata_match_source == METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE:
+        return ParsedMediaName(
+            media_type=str(row["media_type"]),
+            title=str(row["parent_folder_title"] or "").strip(),
+            year=row["parsed_year"],
+            season=row["season"],
+            episode=row["episode"],
+            message=row["title_conflict_message"] or row["message"],
+        )
     return ParsedMediaName(
         media_type=str(row["media_type"]),
         title=str(row["parsed_title"]),
@@ -659,7 +741,12 @@ def list_metadata_candidates(
     return result.matches
 
 
-def parse_rename_preview_with_ai(settings: AppSettings, preview_id: int) -> AiParseResult:
+def parse_rename_preview_with_ai(
+    settings: AppSettings,
+    preview_id: int,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+    provider: AiProvider | None = None,
+) -> AiParseResult:
     """Run AI structured parsing for one rename preview without mutating the preview."""
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -671,7 +758,8 @@ def parse_rename_preview_with_ai(settings: AppSettings, preview_id: int) -> AiPa
         source_record_id=int(row["id"]),
         file_name=str(row["file_name"]),
         file_path=str(row["file_path"]),
-        parsed=_parsed_from_preview(row),
+        parsed=_parsed_from_preview(row, metadata_match_source),
+        provider=provider,
     )
 
 
@@ -687,7 +775,11 @@ def _merge_ai_usage(total_usage: dict[str, object], usage: dict[str, object]) ->
     return total_usage
 
 
-def parse_rename_previews_with_ai(settings: AppSettings, preview_ids: list[int]) -> dict[str, object]:
+def parse_rename_previews_with_ai(
+    settings: AppSettings,
+    preview_ids: list[int],
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
     """Batch AI parse selected previews without mutating preview records."""
 
     unique_ids = list(dict.fromkeys(preview_ids))
@@ -701,7 +793,7 @@ def parse_rename_previews_with_ai(settings: AppSettings, preview_ids: list[int])
 
     for preview_id in unique_ids:
         try:
-            result = parse_rename_preview_with_ai(settings, preview_id)
+            result = parse_rename_preview_with_ai(settings, preview_id, metadata_match_source=metadata_match_source)
         except ValueError as exc:
             failed_count += 1
             failed_items.append({"id": preview_id, "message": str(exc)})
@@ -878,6 +970,53 @@ def match_rename_previews_metadata(
     }
 
 
+def _should_run_ai_fallback(preview: RenamePreview) -> bool:
+    """判断 TMDB 结果是否需要进入 AI 后备匹配。"""
+
+    return preview.metadata_match_status in {"failed", "low_confidence", "blocked"}
+
+
+def match_rename_previews_metadata_with_ai_fallback(
+    settings: AppSettings,
+    preview_ids: list[int],
+    provider: MetadataProvider | None = None,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
+    """先执行 TMDB 匹配，再对失败或低置信条目执行 AI 解析。"""
+
+    metadata_result = match_rename_previews_metadata(
+        settings,
+        preview_ids,
+        provider=provider,
+        metadata_match_source=metadata_match_source,
+    )
+    fallback_ids = [
+        int(preview.id)
+        for preview in metadata_result["items"]
+        if isinstance(preview, RenamePreview) and _should_run_ai_fallback(preview)
+    ]
+    ai_result = parse_rename_previews_with_ai(
+        settings,
+        fallback_ids,
+        metadata_match_source=metadata_match_source,
+    ) if fallback_ids else {
+        "total_count": 0,
+        "success_count": 0,
+        "failed_count": 0,
+        "blocked_count": 0,
+        "skipped_count": 0,
+        "usage": {},
+        "items": [],
+        "failed_items": [],
+    }
+    return {
+        "total_count": metadata_result["total_count"],
+        "metadata": metadata_result,
+        "ai": ai_result,
+        "fallback_count": len(fallback_ids),
+    }
+
+
 def match_all_unmatched_metadata(
     settings: AppSettings,
     media_source_id: int | None = None,
@@ -904,6 +1043,39 @@ def match_all_unmatched_metadata(
             params,
         ).fetchall()
     return match_rename_previews_metadata(
+        settings,
+        [int(row[0]) for row in rows],
+        provider=provider,
+        metadata_match_source=metadata_match_source,
+    )
+
+
+def match_all_unmatched_metadata_with_ai_fallback(
+    settings: AppSettings,
+    media_source_id: int | None = None,
+    scan_job_id: int | None = None,
+    provider: MetadataProvider | None = None,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
+    """对当前范围未匹配条目执行 TMDB，并对未匹配或低置信条目追加 AI 后备解析。"""
+
+    conditions = ["(rp.metadata_match_status IS NULL OR rp.metadata_match_status = '')"]
+    params: list[object] = []
+    if media_source_id is not None:
+        conditions.append("mf.media_source_id = ?")
+        params.append(media_source_id)
+    if scan_job_id is not None:
+        conditions.append("mf.scan_job_id = ?")
+        params.append(scan_job_id)
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        rows = connection.execute(
+            "SELECT rp.id FROM rename_previews rp "
+            "JOIN media_files mf ON mf.id = rp.media_file_id "
+            f"WHERE {' AND '.join(conditions)} ORDER BY rp.id",
+            params,
+        ).fetchall()
+    return match_rename_previews_metadata_with_ai_fallback(
         settings,
         [int(row[0]) for row in rows],
         provider=provider,

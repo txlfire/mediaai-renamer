@@ -7,27 +7,28 @@ from typing import Any
 from app.core.config import AppSettings
 from app.schema.ai_parse import AiParseCandidate, AiParseResult
 from app.schema.media import ParsedMediaName
-from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider
+from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider, OpenAiCompatibleProvider
 from app.service.external_submission_guard import check_external_submission
 from app.service.settings_service import get_effective_settings
 
 
-SUPPORTED_AI_PROVIDERS = {"deepseek"}
+SUPPORTED_AI_PROVIDERS = {"deepseek", "openai_compatible", "custom"}
 SUPPORTED_MEDIA_TYPES = {"movie", "tv", "unknown"}
 
 
 def _build_provider(effective: dict[str, object]) -> AiProvider:
     provider_name = str(effective.get("ai.provider") or "deepseek")
-    return DeepSeekProvider(
-        AiProviderConfig(
-            provider=provider_name,
-            model=str(effective.get("ai.model") or "deepseek-chat").strip(),
-            api_key=str(effective.get("ai.api_key") or "").strip(),
-            base_url=str(effective.get("ai.base_url") or "").strip(),
-            timeout_ms=int(effective.get("ai.timeout_ms") or 30000),
-            max_retries=int(effective.get("ai.max_retries") or 0),
-        )
+    config = AiProviderConfig(
+        provider=provider_name,
+        model=str(effective.get("ai.model") or "deepseek-chat").strip(),
+        api_key=str(effective.get("ai.api_key") or "").strip(),
+        base_url=str(effective.get("ai.base_url") or "").strip(),
+        timeout_ms=int(effective.get("ai.timeout_ms") or 30000),
+        max_retries=int(effective.get("ai.max_retries") or 0),
     )
+    if provider_name == "deepseek":
+        return DeepSeekProvider(config)
+    return OpenAiCompatibleProvider(config)
 
 
 def _build_prompt(file_name: str, file_path: str, parsed: ParsedMediaName) -> list[dict[str, str]]:
@@ -90,7 +91,7 @@ def _candidate_from_payload(payload: dict[str, Any]) -> AiParseCandidate:
         episode=_optional_int(payload.get("episode"), "episode"),
         confidence=confidence,
         reason=str(payload.get("reason") or "").strip(),
-        raw_data=payload,
+        raw_data=dict(payload),
     )
 
 
@@ -150,6 +151,9 @@ def parse_media_with_ai(
     try:
         payload = _extract_json_object(str(response.get("content") or ""))
         candidate = _candidate_from_payload(payload)
+        candidate.raw_data.setdefault("provider_id", str(effective.get("ai.active_profile_id") or provider_name))
+        candidate.raw_data.setdefault("provider_name", provider_name)
+        candidate.raw_data.setdefault("model_name", str(effective.get("ai.model") or ""))
     except ValueError as exc:
         return AiParseResult(
             status="failed",

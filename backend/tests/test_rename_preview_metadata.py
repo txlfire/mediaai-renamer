@@ -14,6 +14,7 @@ from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult, MetadataMatchSummary
 from app.service.preview_service import (
     METADATA_MATCH_SOURCE_ORIGINAL_FILE_NAME,
+    METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE,
     METADATA_MATCH_SOURCE_PARSED_TITLE,
     apply_ai_parse_candidate,
     apply_metadata_candidate,
@@ -22,6 +23,7 @@ from app.service.preview_service import (
     list_rename_previews,
     match_rename_preview_metadata,
     match_rename_previews_metadata,
+    parse_rename_preview_with_ai,
 )
 from app.service.external_submission_guard import list_external_submission_blocks
 from app.service.settings_service import update_setting_values
@@ -371,6 +373,101 @@ class RenamePreviewMetadataTest(unittest.TestCase):
 
         self.assertEqual("The Matrix", provider.searched[0].title)
         self.assertEqual(1999, provider.searched[0].year)
+
+    def test_metadata_match_can_use_parent_folder_title(self):
+        show_dir = self.media_dir / "Better Show"
+        show_dir.mkdir()
+        episode = show_dir / "S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    2,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+        generate_rename_previews(self.settings, media_file_ids=[2])
+        preview = list_rename_previews(self.settings, keyword="Better")[0]
+        provider = FakeMetadataProvider(
+            [
+                MetadataCandidate("TMDB", "603", "episode", "Better Show", "Better Show", None, 1, 2, ""),
+            ]
+        )
+
+        match_rename_preview_metadata(
+            self.settings,
+            preview.id,
+            provider=provider,
+            metadata_match_source=METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE,
+        )
+
+        self.assertEqual("Better Show", provider.searched[0].title)
+
+    def test_parent_folder_title_sensitive_word_blocks_requested_external_match(self):
+        show_dir = self.media_dir / "成人向"
+        show_dir.mkdir()
+        episode = show_dir / "S01E02.mp4"
+        episode.write_text("episode", encoding="utf-8")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (?, 1, 1, ?, ?, ?, ?, 'now', 'now')",
+                (
+                    2,
+                    str(episode),
+                    episode.name,
+                    ".mp4",
+                    episode.stat().st_size,
+                ),
+            )
+            connection.commit()
+        update_setting_values(
+            self.settings,
+            {
+                "ai.enabled": "true",
+                "ai.api_key": "sk-secret123456",
+                "ai.base_url": "https://api.deepseek.com/v1",
+            },
+            operator="admin",
+        )
+        generate_rename_previews(self.settings, media_file_ids=[2])
+        preview = list_rename_previews(self.settings, keyword="S01E02")[0]
+        provider = FakeMetadataProvider([])
+
+        updated = match_rename_preview_metadata(
+            self.settings,
+            preview.id,
+            provider=provider,
+            metadata_match_source=METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE,
+        )
+        ai_result = parse_rename_preview_with_ai(
+            self.settings,
+            preview.id,
+            metadata_match_source=METADATA_MATCH_SOURCE_PARENT_FOLDER_TITLE,
+            provider=type(
+                "FakeAiProvider",
+                (),
+                {
+                    "complete_chat": lambda self, messages, max_tokens, temperature: {
+                        "status": "success",
+                        "content": '{"title":"成人向","media_type":"tv","year":null,"season":1,"episode":2,"confidence":90,"reason":"blocked"}',
+                    }
+                },
+            )(),
+        )
+        blocks = list_external_submission_blocks(self.settings, status="blocked")
+
+        self.assertEqual("blocked", updated.metadata_match_status)
+        self.assertEqual("blocked", ai_result.status)
+        self.assertEqual(2, blocks.total)
 
     def test_metadata_match_rejects_unknown_source(self):
         provider = FakeMetadataProvider([])

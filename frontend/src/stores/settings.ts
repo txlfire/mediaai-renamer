@@ -48,7 +48,7 @@ export const useSettingsStore = defineStore("settings", {
       }
     },
 
-    async saveSettings(values: Record<string, string | number | boolean | string[]>) {
+    async saveSettings(values: Record<string, unknown>) {
       this.loading = true;
       this.errorMessage = "";
       try {

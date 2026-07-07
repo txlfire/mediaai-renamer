@@ -188,7 +188,8 @@ def _scan_error_message(exc: Exception) -> str:
         return "共享目录连接中断：文件系统操作超时，请检查网络或 NAS 状态"
     if error_number == errno.EACCES:
         return "权限不足：服务运行用户无法访问该文件或目录"
-    return str(exc)
+    detail = str(exc).strip() or exc.__class__.__name__
+    return f"扫描任务失败：{detail}"
 
 
 def _stat_with_nfs_retry(file_path: Path, retry_count: int, timeout_seconds: int) -> object:
@@ -366,7 +367,9 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
         indexed_count = 0
         seen_index_paths: set[str] = set()
         warning_details: list[str] = []
+        scan_savepoint = "scan_job_processing"
         try:
+            connection.execute(f"SAVEPOINT {scan_savepoint}")
             path_iterator = source_path.rglob("*") if recursive else source_path.iterdir()
             for file_path in sorted(path_iterator):
                 if skip_hidden_files and _is_hidden_path(file_path, source_path):
@@ -519,10 +522,13 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                     job_id,
                 ),
             )
+            connection.execute(f"RELEASE SAVEPOINT {scan_savepoint}")
             connection.commit()
         except Exception as exc:
             ended_at = _utc_now()
             failure_status = _scan_failure_status(exc)
+            connection.execute(f"ROLLBACK TO SAVEPOINT {scan_savepoint}")
+            connection.execute(f"RELEASE SAVEPOINT {scan_savepoint}")
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
                 "video_count = ?, warning_count = ?, new_count = ?, changed_count = ?, "

@@ -16,8 +16,10 @@ from app.service.preview_service import (
     list_metadata_candidates,
     list_rename_previews,
     match_all_unmatched_metadata,
+    match_all_unmatched_metadata_with_ai_fallback,
     match_rename_preview_metadata,
     match_rename_previews_metadata,
+    match_rename_previews_metadata_with_ai_fallback,
     parse_rename_preview_with_ai,
     parse_rename_previews_with_ai,
     update_rename_preview,
@@ -72,6 +74,7 @@ class BatchAiParseRequest(BaseModel):
     """Batch AI structured parse request."""
 
     rename_preview_ids: list[int]
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
 
 
 class BatchExcludeRenamePreviewRequest(BaseModel):
@@ -197,11 +200,34 @@ def match_previews_metadata(payload: BatchMetadataMatchRequest, request: Request
     )
 
 
+@router.post("/metadata-match/ai-fallback")
+def match_previews_metadata_with_ai_fallback(payload: BatchMetadataMatchRequest, request: Request):
+    """Run TMDB first, then AI for unmatched or low-confidence previews."""
+
+    return match_rename_previews_metadata_with_ai_fallback(
+        request.app.state.settings,
+        payload.rename_preview_ids,
+        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+    )
+
+
 @router.post("/metadata-match/all")
 def match_all_metadata(payload: AllMetadataMatchRequest, request: Request):
     """Run TMDB metadata matching for all unmatched previews in current scope."""
 
     return match_all_unmatched_metadata(
+        request.app.state.settings,
+        media_source_id=payload.media_source_id,
+        scan_job_id=payload.scan_job_id,
+        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+    )
+
+
+@router.post("/metadata-match/all/ai-fallback")
+def match_all_metadata_with_ai_fallback(payload: AllMetadataMatchRequest, request: Request):
+    """Run TMDB first for scoped unmatched previews, then AI fallback."""
+
+    return match_all_unmatched_metadata_with_ai_fallback(
         request.app.state.settings,
         media_source_id=payload.media_source_id,
         scan_job_id=payload.scan_job_id,
@@ -232,7 +258,14 @@ def parse_preview_with_ai(preview_id: int, request: Request):
     """Run AI structured parsing for one preview."""
 
     try:
-        return parse_rename_preview_with_ai(request.app.state.settings, preview_id)
+        metadata_match_source = _validate_metadata_match_source(
+            request.query_params.get("metadata_match_source", METADATA_MATCH_SOURCE_PARSED_TITLE)
+        )
+        return parse_rename_preview_with_ai(
+            request.app.state.settings,
+            preview_id,
+            metadata_match_source=metadata_match_source,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -244,6 +277,7 @@ def parse_previews_with_ai(payload: BatchAiParseRequest, request: Request):
     return parse_rename_previews_with_ai(
         request.app.state.settings,
         payload.rename_preview_ids,
+        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
     )
 
 

@@ -137,6 +137,50 @@ class AiParseServiceTest(unittest.TestCase):
             self.assertEqual(1, blocks.total)
             self.assertEqual("ai", blocks.items[0].target_service)
 
+    def test_openai_compatible_profile_can_drive_ai_parse(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_setting_values(
+                settings,
+                {
+                    "ai.enabled": "true",
+                    "ai.active_profile_id": "openai-main",
+                    "ai.provider_profiles": [
+                        {
+                            "id": "openai-main",
+                            "name": "OpenAI Compat",
+                            "provider": "openai_compatible",
+                            "model": "gpt-4.1-mini",
+                            "api_key": "sk-openai123456",
+                            "base_url": "https://api.openai-proxy.example/v1",
+                            "timeout_ms": 30000,
+                            "max_retries": 1,
+                            "enabled": True,
+                        }
+                    ],
+                },
+                operator="admin",
+            )
+            provider = FakeAiParseProvider(
+                '{"title":"黑客帝国","media_type":"movie","year":1999,'
+                '"season":null,"episode":null,"confidence":92,"reason":"命中电影标题和年份"}'
+            )
+
+            result = parse_media_with_ai(
+                settings,
+                source_module="rename_preview",
+                source_record_id=20,
+                file_name="The.Matrix.1999.1080p.mkv",
+                file_path="/media/The.Matrix.1999.1080p.mkv",
+                parsed=ParsedMediaName("movie", "The Matrix", 1999, None, None),
+                provider=provider,
+            )
+
+            self.assertEqual("success", result.status)
+            self.assertEqual("黑客帝国", result.candidates[0].title)
+            self.assertEqual(1, len(provider.calls))
+
 
 if __name__ == "__main__":
     unittest.main()

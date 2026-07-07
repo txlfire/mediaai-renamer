@@ -26,6 +26,8 @@ import {
   generateRenamePreviews,
   getHealth,
   matchRenamePreviewMetadata,
+  matchRenamePreviewsMetadataWithAiFallback,
+  matchAllUnmatchedMetadataWithAiFallback,
   movePendingFiles,
   parseRenamePreviewWithAi,
   parseRenamePreviewsWithAi,
@@ -210,8 +212,10 @@ describe("rename preview API client", () => {
     await generateRenamePreviews({ scan_job_id: 1 }, httpClient);
     await fetchRenamePreviews({ status: "generated", keyword: "Matrix" }, httpClient);
     await updateRenamePreview(1, "Matrix.Custom", httpClient);
-    await matchRenamePreviewMetadata(1, "parsed_title", httpClient);
-    await fetchRenamePreviewMetadataCandidates(1, "parsed_title", httpClient);
+    await matchRenamePreviewMetadata(1, "parent_folder_title", httpClient);
+    await matchRenamePreviewsMetadataWithAiFallback([1, 2], "parsed_title", httpClient);
+    await matchAllUnmatchedMetadataWithAiFallback({ media_source_id: 1, scan_job_id: 2 }, "parsed_title", httpClient);
+    await fetchRenamePreviewMetadataCandidates(1, "parent_folder_title", httpClient);
     await applyRenamePreviewMetadataCandidate(
       1,
       {
@@ -231,8 +235,8 @@ describe("rename preview API client", () => {
       },
       httpClient,
     );
-    await parseRenamePreviewWithAi(1, httpClient);
-    await parseRenamePreviewsWithAi([1, 2], httpClient);
+    await parseRenamePreviewWithAi(1, "parent_folder_title", httpClient);
+    await parseRenamePreviewsWithAi([1, 2], "parent_folder_title", httpClient);
     await applyAiParseCandidate(
       1,
       {
@@ -252,11 +256,13 @@ describe("rename preview API client", () => {
       'POST /rename-previews/generate:{"scan_job_id":1}',
       "GET /rename-previews?status=generated&keyword=Matrix",
       'PUT /rename-previews/1:{"target_name":"Matrix.Custom"}',
-      "POST /rename-previews/1/metadata-match?metadata_match_source=parsed_title:{}",
-      "GET /rename-previews/1/metadata-candidates?metadata_match_source=parsed_title",
+      "POST /rename-previews/1/metadata-match?metadata_match_source=parent_folder_title:{}",
+      'POST /rename-previews/metadata-match/ai-fallback:{"rename_preview_ids":[1,2],"metadata_match_source":"parsed_title"}',
+      'POST /rename-previews/metadata-match/all/ai-fallback:{"media_source_id":1,"scan_job_id":2,"metadata_match_source":"parsed_title"}',
+      "GET /rename-previews/1/metadata-candidates?metadata_match_source=parent_folder_title",
       'POST /rename-previews/1/metadata-candidate:{"candidate":{"provider":"TMDB","provider_id":"603","media_type":"movie","title":"黑客帝国","original_title":"The Matrix","year":1999,"season":null,"episode":null,"overview":""},"score":91}',
-      "POST /rename-previews/1/ai-parse:{}",
-      'POST /rename-previews/ai-parse/batch:{"rename_preview_ids":[1,2]}',
+      "POST /rename-previews/1/ai-parse?metadata_match_source=parent_folder_title:{}",
+      'POST /rename-previews/ai-parse/batch:{"rename_preview_ids":[1,2],"metadata_match_source":"parent_folder_title"}',
       'POST /rename-previews/1/ai-candidate:{"candidate":{"title":"黑客帝国","media_type":"movie","year":1999,"season":null,"episode":null,"confidence":90,"reason":"AI 识别到中文标题和年份","raw_data":{"source":"ai"}}}',
     ]);
   });

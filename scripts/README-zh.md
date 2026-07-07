@@ -57,7 +57,7 @@
   - 调用 `stop-dev-lan.ps1` 清理旧进程和端口占用。
   - 创建 `.codex/run-logs` 日志目录。
   - 后台启动 `uvicorn app.main:app`。
-  - 后台启动 `serve-frontend.py`，托管 `frontend/dist` 并代理 `/api` 到后端。
+  - 后台直接启动本地 `node_modules/vite/bin/vite.js`，使用 `frontend/vite.config.ts` 提供前端开发服务。
   - 写入 `backend.pid` 和 `frontend.pid`，供停止脚本使用。
 
 ### `stop-dev-lan.ps1`
@@ -109,7 +109,7 @@
 ### `serve-frontend.py`
 
 - 适用环境：Windows / Linux / macOS。
-- 推荐调用：由 `start-dev-lan.ps1` 自动调用。
+- 推荐调用：按需手动调用，本地静态托管 `frontend/dist` 时使用。
 - 作用：托管 `frontend/dist` 静态文件，并把 `/api/*` 反向代理到后端服务。
 - 关键步骤：
   - 检查 `frontend/dist/index.html` 是否存在。
