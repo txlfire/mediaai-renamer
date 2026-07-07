@@ -9,10 +9,18 @@ import type {
   ExternalSubmissionBlockStatus,
   ImdbConnectionTestResult,
   ImdbStoredConnectionTestResult,
+  NamingTemplateDiffResult,
+  NamingTemplatePreviewResult,
   TmdbChannelTestResult,
   TmdbConnectionTestResult,
 } from "../api/client";
-import { cleanupLogs, fetchExternalSubmissionBlocks, updateExternalSubmissionBlock } from "../api/client";
+import {
+  cleanupLogs,
+  diffNamingTemplate,
+  fetchExternalSubmissionBlocks,
+  testNamingTemplate,
+  updateExternalSubmissionBlock,
+} from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
@@ -25,6 +33,7 @@ import {
   type NamingTemplateElement,
   validateNamingSeparator,
 } from "../utils/namingBuilder";
+import { exportNamingTemplateBundle, importNamingTemplateBundle } from "../utils/namingTemplateWorkbench";
 import { formatSensitiveWordsInput, parseSensitiveWordsInput } from "../utils/sensitiveWords";
 
 const settingsStore = useSettingsStore();
@@ -38,6 +47,12 @@ const defaultSensitiveWordsDialogVisible = ref(false);
 const externalSubmissionBlocks = ref<ExternalSubmissionBlockRecord[]>([]);
 const externalSubmissionBlockTotal = ref(0);
 const externalSubmissionBlocksLoading = ref(false);
+const namingWorkbenchDialogVisible = ref(false);
+const namingWorkbenchMode = ref<"test" | "diff">("test");
+const namingWorkbenchLoading = ref(false);
+const namingWorkbenchResult = ref<NamingTemplatePreviewResult | null>(null);
+const namingWorkbenchDiffResult = ref<NamingTemplateDiffResult | null>(null);
+const namingImportInput = ref<HTMLInputElement | null>(null);
 
 const form = reactive({
   v4Token: "",
@@ -94,6 +109,19 @@ const form = reactive({
   defaultSensitiveWordsEnabled: true,
   defaultSensitiveWordsText: "",
   customSensitiveWordsText: "",
+});
+const namingWorkbenchForm = reactive({
+  mediaType: "movie" as "movie" | "episode",
+  title: pageText.naming.sample.title,
+  chineseTitle: pageText.naming.sample.chineseTitle,
+  englishTitle: pageText.naming.sample.englishTitle,
+  originalTitle: pageText.naming.sample.originalTitle,
+  year: pageText.naming.sample.year,
+  season: pageText.naming.sample.season,
+  episode: pageText.naming.sample.episode,
+  extension: pageText.naming.sample.extension,
+  resolution: pageText.naming.sample.resolution,
+  source: pageText.naming.sample.source,
 });
 
 const categories = computed(() => [
@@ -167,6 +195,23 @@ const sensitiveWordTotal = computed(() =>
     ...customSensitiveWordPreview.value,
   ].map((word) => word.toLocaleLowerCase())).size,
 );
+const namingTemplateMetaList = computed(() => [
+  {
+    key: "movie",
+    label: pageText.naming.movieTemplateVersion,
+    version: Number(settingValue("naming.movie_template_version", 1)),
+    updatedAt: String(settingValue("naming.movie_template_updated_at", "")),
+  },
+  {
+    key: "episode",
+    label: pageText.naming.episodeTemplateVersion,
+    version: Number(settingValue("naming.episode_template_version", 1)),
+    updatedAt: String(settingValue("naming.episode_template_updated_at", "")),
+  },
+]);
+const namingWorkbenchDialogTitle = computed(() =>
+  namingWorkbenchMode.value === "diff" ? pageText.naming.dialogTitleDiff : pageText.naming.dialogTitleTest,
+);
 
 watch(customSensitiveWordsCollapsed, (collapsed) => {
   localStorage.setItem("settings.privacy.customWordsCollapsed", String(collapsed));
@@ -177,6 +222,14 @@ watch(activeCategory, (category) => {
     void loadExternalSubmissionBlocks();
   }
 });
+
+watch(
+  () => namingWorkbenchForm.mediaType,
+  () => {
+    namingWorkbenchResult.value = null;
+    namingWorkbenchDiffResult.value = null;
+  },
+);
 
 function resetDefaultSensitiveWords() {
   form.defaultSensitiveWordsText = formatSensitiveWordsInput(pageText.privacy.defaultWordsInitial);
@@ -417,6 +470,126 @@ async function saveNamingSettings() {
 async function refreshNamingSettings() {
   await settingsStore.loadSettings();
   syncForm();
+}
+
+function currentNamingTemplateValue(mediaType: "movie" | "episode") {
+  return mediaType === "episode"
+    ? serializeNamingElements(episodeNamingElements.value)
+    : serializeNamingElements(movieNamingElements.value);
+}
+
+function namingTemplateUpdatedText(updatedAt: string) {
+  return updatedAt ? formatDateTime(updatedAt) : pageText.naming.notSavedYet;
+}
+
+function openNamingWorkbench(mode: "test" | "diff") {
+  namingWorkbenchMode.value = mode;
+  namingWorkbenchResult.value = null;
+  namingWorkbenchDiffResult.value = null;
+  namingWorkbenchDialogVisible.value = true;
+}
+
+function buildNamingWorkbenchSample() {
+  const extra: Record<string, string> = {};
+  if (namingWorkbenchForm.chineseTitle.trim()) {
+    extra.chinese_title = namingWorkbenchForm.chineseTitle.trim();
+  }
+  if (namingWorkbenchForm.englishTitle.trim()) {
+    extra.english_title = namingWorkbenchForm.englishTitle.trim();
+  }
+  if (namingWorkbenchForm.originalTitle.trim()) {
+    extra.original_title = namingWorkbenchForm.originalTitle.trim();
+  }
+  if (namingWorkbenchForm.resolution.trim()) {
+    extra.resolution = namingWorkbenchForm.resolution.trim();
+  }
+  if (namingWorkbenchForm.source.trim()) {
+    extra.source = namingWorkbenchForm.source.trim();
+  }
+  return {
+    title: namingWorkbenchForm.title.trim(),
+    year: toOptionalNumber(namingWorkbenchForm.year),
+    season: namingWorkbenchForm.mediaType === "episode" ? toOptionalNumber(namingWorkbenchForm.season) : null,
+    episode: namingWorkbenchForm.mediaType === "episode" ? toOptionalNumber(namingWorkbenchForm.episode) : null,
+    extension: namingWorkbenchForm.extension.trim() || ".mkv",
+    extra,
+  };
+}
+
+function toOptionalNumber(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function runNamingWorkbench() {
+  namingWorkbenchLoading.value = true;
+  namingWorkbenchResult.value = null;
+  namingWorkbenchDiffResult.value = null;
+  try {
+    const payload = {
+      media_type: namingWorkbenchForm.mediaType,
+      template: currentNamingTemplateValue(namingWorkbenchForm.mediaType),
+      separator: form.namingSeparator,
+      keep_year: form.keepYear,
+      sample: buildNamingWorkbenchSample(),
+    };
+    if (namingWorkbenchMode.value === "diff") {
+      namingWorkbenchDiffResult.value = await diffNamingTemplate(payload);
+    } else {
+      namingWorkbenchResult.value = await testNamingTemplate(payload);
+    }
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    namingWorkbenchLoading.value = false;
+  }
+}
+
+function exportCurrentNamingTemplateBundle() {
+  const content = exportNamingTemplateBundle({
+    movieTemplate: currentNamingTemplateValue("movie"),
+    episodeTemplate: currentNamingTemplateValue("episode"),
+    separator: form.namingSeparator,
+    keepYear: form.keepYear,
+  });
+  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `mediaai-naming-template-v1-${Date.now()}.json`;
+  link.click();
+  window.URL.revokeObjectURL(objectUrl);
+  ElMessage.success(pageText.naming.exportSuccess);
+}
+
+function triggerNamingTemplateImport() {
+  namingImportInput.value?.click();
+}
+
+async function importNamingTemplateFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+  try {
+    const imported = importNamingTemplateBundle(await file.text());
+    form.namingSeparator = imported.separator;
+    form.keepYear = imported.keepYear;
+    form.movieTemplate = imported.movieTemplate;
+    form.episodeTemplate = imported.episodeTemplate;
+    movieNamingElements.value = parseNamingTemplate(imported.movieTemplate, "movie", pageText.naming);
+    episodeNamingElements.value = parseNamingTemplate(imported.episodeTemplate, "episode", pageText.naming);
+    ElMessage.success(pageText.naming.importSuccess);
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    input.value = "";
+  }
 }
 
 async function saveOperationSettings() {
@@ -2252,6 +2425,38 @@ onMounted(async () => {
             @refresh="refreshNamingSettings"
             @save="saveNamingSettings"
           />
+          <input
+            ref="namingImportInput"
+            class="naming-import-input"
+            type="file"
+            accept="application/json,.json"
+            @change="importNamingTemplateFile"
+          />
+          <div class="naming-workbench-panel">
+            <div class="naming-workbench-header">
+              <div class="naming-version-list">
+                <div v-for="item in namingTemplateMetaList" :key="item.key" class="naming-version-item">
+                  <span class="naming-version-label">{{ item.label }}</span>
+                  <el-tag size="small" effect="plain">v{{ item.version }}</el-tag>
+                  <span class="naming-version-time">{{ namingTemplateUpdatedText(item.updatedAt) }}</span>
+                </div>
+              </div>
+              <div class="settings-actions naming-workbench-actions">
+                <el-button :loading="settingsStore.loading" @click="openNamingWorkbench('test')">
+                  {{ pageText.naming.testRules }}
+                </el-button>
+                <el-button :loading="settingsStore.loading" @click="openNamingWorkbench('diff')">
+                  {{ pageText.naming.diffPreview }}
+                </el-button>
+                <el-button :loading="settingsStore.loading" @click="triggerNamingTemplateImport">
+                  {{ pageText.naming.importTemplate }}
+                </el-button>
+                <el-button :loading="settingsStore.loading" @click="exportCurrentNamingTemplateBundle">
+                  {{ pageText.naming.exportTemplate }}
+                </el-button>
+              </div>
+            </div>
+          </div>
           <div class="settings-grid naming-settings-grid">
             <el-form-item :label="pageText.naming.textTruncateBytes">
               <el-input
@@ -2284,6 +2489,103 @@ onMounted(async () => {
               <el-switch v-model="form.cleanIllegalChars" disabled />
             </el-form-item>
           </div>
+          <el-dialog
+            v-model="namingWorkbenchDialogVisible"
+            :title="namingWorkbenchDialogTitle"
+            width="min(760px, calc(100vw - 2rem))"
+            align-center
+          >
+            <div class="naming-workbench-dialog">
+              <div class="naming-workbench-type-row">
+                <span class="naming-workbench-type-label">{{ pageText.naming.applicableType }}</span>
+                <el-segmented
+                  v-model="namingWorkbenchForm.mediaType"
+                  :options="[
+                    { label: pageText.naming.movie, value: 'movie' },
+                    { label: pageText.naming.episode, value: 'episode' },
+                  ]"
+                />
+              </div>
+              <div class="settings-grid naming-workbench-grid">
+                <el-form-item :label="pageText.naming.elements.title">
+                  <el-input v-model="namingWorkbenchForm.title" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.elements.chineseTitle">
+                  <el-input v-model="namingWorkbenchForm.chineseTitle" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.elements.englishTitle">
+                  <el-input v-model="namingWorkbenchForm.englishTitle" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.elements.originalTitle">
+                  <el-input v-model="namingWorkbenchForm.originalTitle" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.elements.year">
+                  <el-input v-model="namingWorkbenchForm.year" maxlength="4" />
+                </el-form-item>
+                <el-form-item v-if="namingWorkbenchForm.mediaType === 'episode'" :label="pageText.naming.elements.season">
+                  <el-input v-model="namingWorkbenchForm.season" maxlength="2" />
+                </el-form-item>
+                <el-form-item v-if="namingWorkbenchForm.mediaType === 'episode'" :label="pageText.naming.elements.episode">
+                  <el-input v-model="namingWorkbenchForm.episode" maxlength="3" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.extension">
+                  <el-input v-model="namingWorkbenchForm.extension" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.elements.resolution">
+                  <el-input v-model="namingWorkbenchForm.resolution" />
+                </el-form-item>
+                <el-form-item :label="pageText.naming.elements.source">
+                  <el-input v-model="namingWorkbenchForm.source" />
+                </el-form-item>
+              </div>
+              <div
+                v-if="namingWorkbenchResult || namingWorkbenchDiffResult"
+                class="naming-workbench-result"
+              >
+                <template v-if="namingWorkbenchMode === 'diff' && namingWorkbenchDiffResult">
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.currentGeneratedName }}</span>
+                    <strong>{{ namingWorkbenchDiffResult.current_generated_name }}</strong>
+                  </div>
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.candidateGeneratedName }}</span>
+                    <strong>{{ namingWorkbenchDiffResult.candidate_generated_name }}</strong>
+                  </div>
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.changed }}</span>
+                    <strong>{{ namingWorkbenchDiffResult.changed ? pageText.naming.changed : pageText.naming.unchanged }}</strong>
+                  </div>
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.templateVersion }}</span>
+                    <strong>v{{ namingWorkbenchDiffResult.template_version }}</strong>
+                  </div>
+                </template>
+                <template v-else-if="namingWorkbenchResult">
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.generatedName }}</span>
+                    <strong>{{ namingWorkbenchResult.generated_name }}</strong>
+                  </div>
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.templateVersion }}</span>
+                    <strong>v{{ namingWorkbenchResult.template_version }}</strong>
+                  </div>
+                  <div class="naming-result-row">
+                    <span>{{ pageText.naming.templateUpdatedAt }}</span>
+                    <strong>{{ namingTemplateUpdatedText(namingWorkbenchResult.template_updated_at) }}</strong>
+                  </div>
+                </template>
+              </div>
+              <div v-else class="naming-workbench-empty">
+                {{ pageText.naming.noPreviewYet }}
+              </div>
+            </div>
+            <template #footer>
+              <el-button @click="namingWorkbenchDialogVisible = false">{{ messages.common.close }}</el-button>
+              <el-button type="primary" :loading="namingWorkbenchLoading" @click="runNamingWorkbench">
+                {{ namingWorkbenchMode === 'diff' ? pageText.naming.runDiff : pageText.naming.runTest }}
+              </el-button>
+            </template>
+          </el-dialog>
         </el-form>
 
         <el-form v-else-if="activeCategory === 'operations'" label-position="top" class="settings-form">
@@ -2387,3 +2689,110 @@ onMounted(async () => {
     </div>
   </ListPageLayout>
 </template>
+
+<style scoped>
+.naming-import-input {
+  display: none;
+}
+
+.naming-workbench-panel {
+  margin-top: 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--el-fill-color-blank);
+}
+
+.naming-workbench-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.naming-version-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.naming-version-item {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.naming-version-label {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+
+.naming-version-time {
+  color: var(--el-text-color-secondary);
+}
+
+.naming-workbench-actions {
+  margin-left: auto;
+}
+
+.naming-workbench-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.naming-workbench-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.naming-workbench-type-label {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.naming-workbench-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.naming-workbench-result,
+.naming-workbench-empty {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--el-fill-color-light);
+}
+
+.naming-workbench-empty {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.naming-result-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.naming-result-row + .naming-result-row {
+  margin-top: 8px;
+}
+
+.naming-result-row span {
+  color: var(--el-text-color-regular);
+  min-width: 112px;
+}
+
+.naming-result-row strong {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+  word-break: break-all;
+}
+</style>

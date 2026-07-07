@@ -34,7 +34,9 @@ import {
   parsePendingFileWithAi,
   removePendingFile,
   setMediaSourceEnabled,
+  diffNamingTemplate,
   testMediaSourceConnection,
+  testNamingTemplate,
   testMediaSourceConnectionPayload,
   testTmdbSettings,
   updateSettings,
@@ -77,6 +79,71 @@ describe("getHealth", () => {
     };
 
     await expect(getHealth(httpClient)).rejects.toThrow("network down");
+  });
+});
+
+describe("settings naming API client", () => {
+  it("uses naming preview and diff endpoints", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(): Promise<{ data: T }> => ({ data: {} as T }),
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        return {
+          data: (
+            url.includes("/diff")
+              ? {
+                  media_type: "movie",
+                  current_generated_name: "黑客帝国.1999.mkv",
+                  candidate_generated_name: "黑客帝国.mkv",
+                  changed: true,
+                  template_version: 2,
+                  template_updated_at: "2026-07-07T12:00:00+00:00",
+                }
+              : {
+                  media_type: "movie",
+                  generated_name: "黑客帝国.1999.mkv",
+                  template_version: 2,
+                  template_updated_at: "2026-07-07T12:00:00+00:00",
+                }
+          ) as T,
+        };
+      },
+    };
+
+    await testNamingTemplate(
+      {
+        media_type: "movie",
+        template: '[{"key":"title","label":"标题","variable":"title"}]',
+        separator: ".",
+        keep_year: true,
+        sample: {
+          title: "黑客帝国",
+          year: 1999,
+          extension: ".mkv",
+        },
+      },
+      httpClient,
+    );
+    await diffNamingTemplate(
+      {
+        media_type: "movie",
+        template: '[{"key":"title","label":"标题","variable":"title"}]',
+        separator: ".",
+        keep_year: true,
+        sample: {
+          title: "黑客帝国",
+          year: 1999,
+          extension: ".mkv",
+        },
+      },
+      httpClient,
+    );
+
+    expect(calls).toEqual([
+      'POST /settings/naming/test:{"media_type":"movie","template":"[{\\"key\\":\\"title\\",\\"label\\":\\"标题\\",\\"variable\\":\\"title\\"}]","separator":".","keep_year":true,"sample":{"title":"黑客帝国","year":1999,"extension":".mkv"}}',
+      'POST /settings/naming/diff:{"media_type":"movie","template":"[{\\"key\\":\\"title\\",\\"label\\":\\"标题\\",\\"variable\\":\\"title\\"}]","separator":".","keep_year":true,"sample":{"title":"黑客帝国","year":1999,"extension":".mkv"}}',
+    ]);
   });
 });
 
