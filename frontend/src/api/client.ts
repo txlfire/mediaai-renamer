@@ -479,6 +479,14 @@ export type NamingTemplateDiffResult = {
   template_updated_at: string;
 };
 
+export type NamingTemplateBundle = {
+  schema_version: number;
+  movie_template: string;
+  episode_template: string;
+  separator: string;
+  keep_year: boolean;
+};
+
 export type AiProviderProfile = {
   id: string;
   name: string;
@@ -1090,6 +1098,26 @@ export async function diffNamingTemplate(
   const post = requirePost(httpClient);
   try {
     const response = await post<NamingTemplateDiffResult>("/settings/naming/diff", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function fetchNamingTemplateBundle(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<NamingTemplateBundle> {
+  const response = await httpClient.get<NamingTemplateBundle>("/settings/naming/export");
+  return response.data;
+}
+
+export async function importNamingTemplateBundle(
+  rawText: string,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<NamingTemplateBundle> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<NamingTemplateBundle>("/settings/naming/import", { raw_text: rawText });
     return response.data;
   } catch (error) {
     throw new Error(apiErrorMessage(error));

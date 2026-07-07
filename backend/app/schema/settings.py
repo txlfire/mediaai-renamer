@@ -62,3 +62,14 @@ class NamingTemplateDiffResult:
     changed: bool
     template_version: int
     template_updated_at: str
+
+
+@dataclass(frozen=True)
+class NamingTemplateBundle:
+    """Naming template import/export bundle."""
+
+    schema_version: int
+    movie_template: str
+    episode_template: str
+    separator: str
+    keep_year: bool

@@ -26,8 +26,11 @@ from app.service.settings_service import (
 from app.service.naming_settings_service import (
     build_naming_template_diff,
     build_naming_template_preview,
+    export_naming_template_bundle,
+    naming_template_bundle_to_dict,
     naming_template_diff_to_dict,
     naming_template_preview_to_dict,
+    validate_naming_template_bundle_text,
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -74,6 +77,12 @@ class NamingTemplatePreviewRequest(BaseModel):
     separator: str | None = None
     keep_year: bool | None = None
     sample: NamingTemplateSampleRequest
+
+
+class NamingTemplateImportRequest(BaseModel):
+    """Naming template import payload."""
+
+    raw_text: str
 
 
 def _model_payload(model: BaseModel) -> dict[str, object]:
@@ -218,6 +227,25 @@ def test_ai_settings(request: Request):
     """Validate current AI provider settings."""
 
     return test_ai_connection(request.app.state.settings)
+
+
+@router.get("/naming/export")
+def export_naming_settings_bundle(request: Request):
+    """Return the current naming template bundle for export."""
+
+    return naming_template_bundle_to_dict(export_naming_template_bundle(request.app.state.settings))
+
+
+@router.post("/naming/import")
+def import_naming_settings_bundle(payload: NamingTemplateImportRequest, request: Request):
+    """Validate one imported naming template bundle."""
+
+    try:
+        return naming_template_bundle_to_dict(
+            validate_naming_template_bundle_text(request.app.state.settings, payload.raw_text)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/naming/test")

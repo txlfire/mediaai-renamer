@@ -18,6 +18,8 @@ import {
   cleanupLogs,
   diffNamingTemplate,
   fetchExternalSubmissionBlocks,
+  fetchNamingTemplateBundle,
+  importNamingTemplateBundle,
   testNamingTemplate,
   updateExternalSubmissionBlock,
 } from "../api/client";
@@ -33,7 +35,6 @@ import {
   type NamingTemplateElement,
   validateNamingSeparator,
 } from "../utils/namingBuilder";
-import { exportNamingTemplateBundle, importNamingTemplateBundle } from "../utils/namingTemplateWorkbench";
 import { formatSensitiveWordsInput, parseSensitiveWordsInput } from "../utils/sensitiveWords";
 
 const settingsStore = useSettingsStore();
@@ -53,6 +54,7 @@ const namingWorkbenchLoading = ref(false);
 const namingWorkbenchResult = ref<NamingTemplatePreviewResult | null>(null);
 const namingWorkbenchDiffResult = ref<NamingTemplateDiffResult | null>(null);
 const namingImportInput = ref<HTMLInputElement | null>(null);
+const namingBundleLoading = ref(false);
 
 const form = reactive({
   v4Token: "",
@@ -550,20 +552,24 @@ async function runNamingWorkbench() {
 }
 
 function exportCurrentNamingTemplateBundle() {
-  const content = exportNamingTemplateBundle({
-    movieTemplate: currentNamingTemplateValue("movie"),
-    episodeTemplate: currentNamingTemplateValue("episode"),
-    separator: form.namingSeparator,
-    keepYear: form.keepYear,
-  });
-  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
-  const objectUrl = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = `mediaai-naming-template-v1-${Date.now()}.json`;
-  link.click();
-  window.URL.revokeObjectURL(objectUrl);
-  ElMessage.success(pageText.naming.exportSuccess);
+  namingBundleLoading.value = true;
+  void fetchNamingTemplateBundle()
+    .then((bundle) => {
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json;charset=utf-8" });
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `mediaai-naming-template-v${bundle.schema_version}-${Date.now()}.json`;
+      link.click();
+      window.URL.revokeObjectURL(objectUrl);
+      ElMessage.success(pageText.naming.exportSuccess);
+    })
+    .catch((error) => {
+      ElMessage.error(errorText(error));
+    })
+    .finally(() => {
+      namingBundleLoading.value = false;
+    });
 }
 
 function triggerNamingTemplateImport() {
@@ -576,18 +582,20 @@ async function importNamingTemplateFile(event: Event) {
   if (!file) {
     return;
   }
+  namingBundleLoading.value = true;
   try {
-    const imported = importNamingTemplateBundle(await file.text());
+    const imported = await importNamingTemplateBundle(await file.text());
     form.namingSeparator = imported.separator;
-    form.keepYear = imported.keepYear;
-    form.movieTemplate = imported.movieTemplate;
-    form.episodeTemplate = imported.episodeTemplate;
-    movieNamingElements.value = parseNamingTemplate(imported.movieTemplate, "movie", pageText.naming);
-    episodeNamingElements.value = parseNamingTemplate(imported.episodeTemplate, "episode", pageText.naming);
+    form.keepYear = imported.keep_year;
+    form.movieTemplate = imported.movie_template;
+    form.episodeTemplate = imported.episode_template;
+    movieNamingElements.value = parseNamingTemplate(imported.movie_template, "movie", pageText.naming);
+    episodeNamingElements.value = parseNamingTemplate(imported.episode_template, "episode", pageText.naming);
     ElMessage.success(pageText.naming.importSuccess);
   } catch (error) {
     ElMessage.error(errorText(error));
   } finally {
+    namingBundleLoading.value = false;
     input.value = "";
   }
 }
@@ -2448,12 +2456,12 @@ onMounted(async () => {
                 <el-button :loading="settingsStore.loading" @click="openNamingWorkbench('diff')">
                   {{ pageText.naming.diffPreview }}
                 </el-button>
-                <el-button :loading="settingsStore.loading" @click="triggerNamingTemplateImport">
-                  {{ pageText.naming.importTemplate }}
-                </el-button>
-                <el-button :loading="settingsStore.loading" @click="exportCurrentNamingTemplateBundle">
-                  {{ pageText.naming.exportTemplate }}
-                </el-button>
+                  <el-button :loading="settingsStore.loading || namingBundleLoading" @click="triggerNamingTemplateImport">
+                    {{ pageText.naming.importTemplate }}
+                  </el-button>
+                  <el-button :loading="settingsStore.loading || namingBundleLoading" @click="exportCurrentNamingTemplateBundle">
+                    {{ pageText.naming.exportTemplate }}
+                  </el-button>
               </div>
             </div>
           </div>

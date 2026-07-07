@@ -224,6 +224,74 @@ class SettingsApiTest(unittest.TestCase):
             self.assertIn("current_snapshot", history.json())
             self.assertIn("matches_current", history.json())
 
+    def test_naming_template_export_returns_effective_bundle(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            client.put(
+                "/api/settings",
+                json={
+                    "values": {
+                        "naming.movie_template": '[{"key":"title","label":"标题","variable":"title"}]',
+                        "naming.episode_template": '[{"key":"title","label":"标题","variable":"title"},{"key":"episode","label":"集","variable":"episode"}]',
+                        "naming.separator": "-",
+                        "naming.keep_year": False,
+                    }
+                },
+            )
+
+            response = client.get("/api/settings/naming/export")
+
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual(1, data["schema_version"])
+            self.assertEqual("-", data["separator"])
+            self.assertEqual(False, data["keep_year"])
+            self.assertIn('"variable":"title"', data["movie_template"])
+
+    def test_naming_template_import_returns_normalized_bundle(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.post(
+                "/api/settings/naming/import",
+                json={
+                    "raw_text": """
+                    {
+                      "schema_version": 1,
+                      "movie_template": "[{\\"key\\":\\"title\\",\\"label\\":\\"标题\\",\\"variable\\":\\"title\\"}]",
+                      "episode_template": "[{\\"key\\":\\"title\\",\\"label\\":\\"标题\\",\\"variable\\":\\"title\\"}]",
+                      "separator": ".",
+                      "keep_year": true
+                    }
+                    """
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual(1, data["schema_version"])
+            self.assertEqual(".", data["separator"])
+            self.assertEqual(True, data["keep_year"])
+
+    def test_naming_template_import_rejects_invalid_json(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.post(
+                "/api/settings/naming/import",
+                json={"raw_text": "{bad json"},
+            )
+
+            self.assertEqual(400, response.status_code)
+            self.assertIn("有效的 JSON", response.json()["detail"])
+
     def test_naming_template_test_returns_generated_preview(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             settings = self.build_settings(Path(temp_dir))
@@ -273,7 +341,6 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual("黑客帝国.1999.mkv", data["current_generated_name"])
             self.assertEqual("黑客帝国.mkv", data["candidate_generated_name"])
             self.assertTrue(data["changed"])
-
 
 
 if __name__ == "__main__":

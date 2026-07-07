@@ -35,6 +35,8 @@ import {
   removePendingFile,
   setMediaSourceEnabled,
   diffNamingTemplate,
+  fetchNamingTemplateBundle,
+  importNamingTemplateBundle,
   testMediaSourceConnection,
   testNamingTemplate,
   testMediaSourceConnectionPayload,
@@ -143,6 +145,44 @@ describe("settings naming API client", () => {
     expect(calls).toEqual([
       'POST /settings/naming/test:{"media_type":"movie","template":"[{\\"key\\":\\"title\\",\\"label\\":\\"标题\\",\\"variable\\":\\"title\\"}]","separator":".","keep_year":true,"sample":{"title":"黑客帝国","year":1999,"extension":".mkv"}}',
       'POST /settings/naming/diff:{"media_type":"movie","template":"[{\\"key\\":\\"title\\",\\"label\\":\\"标题\\",\\"variable\\":\\"title\\"}]","separator":".","keep_year":true,"sample":{"title":"黑客帝国","year":1999,"extension":".mkv"}}',
+    ]);
+  });
+
+  it("uses naming import and export endpoints", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return {
+          data: {
+            schema_version: 1,
+            movie_template: '[{"key":"title","label":"标题","variable":"title"}]',
+            episode_template: '[{"key":"title","label":"标题","variable":"title"}]',
+            separator: ".",
+            keep_year: true,
+          } as T,
+        };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        return {
+          data: {
+            schema_version: 1,
+            movie_template: '[{"key":"title","label":"标题","variable":"title"}]',
+            episode_template: '[{"key":"title","label":"标题","variable":"title"}]',
+            separator: ".",
+            keep_year: true,
+          } as T,
+        };
+      },
+    };
+
+    await fetchNamingTemplateBundle(httpClient);
+    await importNamingTemplateBundle('{"schema_version":1}', httpClient);
+
+    expect(calls).toEqual([
+      "GET /settings/naming/export",
+      'POST /settings/naming/import:{"raw_text":"{\\"schema_version\\":1}"}',
     ]);
   });
 });

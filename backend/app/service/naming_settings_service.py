@@ -1,12 +1,15 @@
-"""Naming settings preview and diff helpers."""
+"""Naming settings preview, import, export, and diff helpers."""
 
 from dataclasses import asdict
+import json
 
 from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName
-from app.schema.settings import NamingTemplateDiffResult, NamingTemplateMetadata, NamingTemplatePreviewResult
+from app.schema.settings import NamingTemplateBundle, NamingTemplateDiffResult, NamingTemplateMetadata, NamingTemplatePreviewResult
 from app.service.settings_service import get_effective_settings, validate_setting_value
 from app.utils.naming_template import build_preview_name_with_settings
+
+NAMING_TEMPLATE_SCHEMA_VERSION = 1
 
 
 def get_naming_template_metadata(settings: AppSettings, media_type: str) -> NamingTemplateMetadata:
@@ -20,6 +23,80 @@ def get_naming_template_metadata(settings: AppSettings, media_type: str) -> Nami
         template_value=str(effective.get(template_key) or ""),
         template_version=int(effective.get(version_key) or 1),
         template_updated_at=str(effective.get(updated_at_key) or ""),
+    )
+
+
+def export_naming_template_bundle(settings: AppSettings) -> NamingTemplateBundle:
+    """Return the current effective naming template bundle."""
+
+    effective = get_effective_settings(settings)
+    return NamingTemplateBundle(
+        schema_version=NAMING_TEMPLATE_SCHEMA_VERSION,
+        movie_template=str(effective.get("naming.movie_template") or ""),
+        episode_template=str(effective.get("naming.episode_template") or ""),
+        separator=str(effective.get("naming.separator") or "."),
+        keep_year=bool(effective.get("naming.keep_year")),
+    )
+
+
+def validate_naming_template_bundle_text(settings: AppSettings, raw_text: str) -> NamingTemplateBundle:
+    """Parse and validate one naming template import bundle."""
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("导入文件不是有效的 JSON") from exc
+    return validate_naming_template_bundle_payload(settings, payload)
+
+
+def validate_naming_template_bundle_payload(
+    settings: AppSettings,
+    payload: object,
+) -> NamingTemplateBundle:
+    """Validate the naming template bundle structure and template values."""
+
+    if isinstance(payload, (list, str)):
+        raise ValueError("导入文件缺少模板类型信息")
+    if not isinstance(payload, dict):
+        raise ValueError("导入文件格式不正确")
+
+    schema_version = _parse_schema_version(payload.get("schema_version", NAMING_TEMPLATE_SCHEMA_VERSION))
+    movie_template = str(payload.get("movie_template") or "").strip()
+    episode_template = str(payload.get("episode_template") or "").strip()
+    if not movie_template or not episode_template:
+        raise ValueError("导入文件缺少电影或剧集模板")
+
+    effective = get_effective_settings(settings)
+    return NamingTemplateBundle(
+        schema_version=schema_version,
+        movie_template=str(
+            validate_setting_value(
+                "naming.movie_template",
+                movie_template,
+                current_effective=effective,
+            )
+        ),
+        episode_template=str(
+            validate_setting_value(
+                "naming.episode_template",
+                episode_template,
+                current_effective=effective,
+            )
+        ),
+        separator=str(
+            validate_setting_value(
+                "naming.separator",
+                payload.get("separator", "."),
+                current_effective=effective,
+            )
+        ),
+        keep_year=bool(
+            validate_setting_value(
+                "naming.keep_year",
+                payload.get("keep_year", True),
+                current_effective=effective,
+            )
+        ),
     )
 
 
@@ -84,6 +161,12 @@ def naming_template_diff_to_dict(result: NamingTemplateDiffResult) -> dict[str, 
     return asdict(result)
 
 
+def naming_template_bundle_to_dict(bundle: NamingTemplateBundle) -> dict[str, object]:
+    """Convert naming bundle to API payload."""
+
+    return asdict(bundle)
+
+
 def _template_keys(media_type: str) -> tuple[str, str, str]:
     if media_type == "episode":
         return (
@@ -131,6 +214,16 @@ def _parsed_media_from_sample(media_type: str, sample: dict[str, object]) -> tup
     if isinstance(extra_raw, dict):
         extra = {str(key): "" if value is None else str(value) for key, value in extra_raw.items()}
     return ParsedMediaName(media_type=media_type, title=title, year=year, season=season, episode=episode, extra=extra), extension
+
+
+def _parse_schema_version(value: object) -> int:
+    try:
+        schema_version = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("导入文件的模板版本不受支持") from exc
+    if schema_version < 1:
+        raise ValueError("导入文件的模板版本不受支持")
+    return schema_version
 
 
 def _optional_int(value: object) -> int | None:

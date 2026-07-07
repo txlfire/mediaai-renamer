@@ -392,6 +392,7 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
                 "ai.base_url": "https://api.deepseek.com/v1",
                 "tmdb.enabled": "true",
                 "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
             },
             operator="admin",
         )
@@ -436,6 +437,7 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
                 "ai.base_url": "https://api.deepseek.com/v1",
                 "tmdb.enabled": "true",
                 "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
             },
             operator="admin",
         )
@@ -489,6 +491,7 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
                 "ai.base_url": "https://api.deepseek.com/v1",
                 "tmdb.enabled": "true",
                 "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
             },
             operator="admin",
         )
