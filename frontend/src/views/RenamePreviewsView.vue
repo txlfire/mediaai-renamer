@@ -30,6 +30,11 @@ import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime } from "../utils/displayFormat";
 import { formatFileSize } from "../utils/displayFormat";
 import {
+  namingTemplateStatusLabel,
+  namingTemplateStatusTagType,
+  namingTemplateStatusTooltip,
+} from "../utils/renamePreviewTemplateStatus";
+import {
   canPrepareRename,
   findEmptyTargetNamePreviews,
   getRenameablePreviewIds,
@@ -276,6 +281,23 @@ function metadataReason(row: RenamePreview) {
   return row.metadata_message || metadataStatusLabel(row.metadata_match_status);
 }
 
+function shouldShowNamingTemplateStatus(row: RenamePreview) {
+  return row.naming_template_status === "outdated" || row.naming_template_status === "unknown";
+}
+
+function namingTemplateStatusText(row: RenamePreview) {
+  return namingTemplateStatusLabel(row.naming_template_status, messages.renamePreviews.namingTemplateStatuses);
+}
+
+function namingTemplateStatusReason(row: RenamePreview) {
+  return namingTemplateStatusTooltip(
+    row.naming_template_status,
+    row.naming_template_version,
+    row.current_naming_template_version,
+    messages.renamePreviews.namingTemplateStatuses,
+  );
+}
+
 function joinCandidateValues(values?: string[]) {
   return values?.length ? values.join(" / ") : "-";
 }
@@ -317,6 +339,7 @@ const detailRows = computed(() => {
     { label: messages.renamePreviews.columns.parentFolderTitle, value: row.parent_folder_title ?? "-" },
     { label: messages.renamePreviews.columns.recognitionMode, value: recognitionModeLabel(row.recognition_mode) },
     { label: messages.renamePreviews.columns.titleConflict, value: row.title_conflict_message ?? "-" },
+    { label: messages.renamePreviews.columns.namingTemplate, value: namingTemplateStatusReason(row) },
     { label: messages.renamePreviews.columns.metadataSource, value: row.metadata_source ?? "-" },
     { label: messages.renamePreviews.columns.metadataScore, value: `${row.metadata_match_score ?? 0}%` },
     { label: messages.renamePreviews.columns.metadata, value: metadataStatusLabel(row.metadata_match_status) },
@@ -1350,7 +1373,22 @@ onMounted(async () => {
           sortable="custom"
           >
           <template #default="{ row }">
-          <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          <div class="target-name-cell">
+            <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
+            <el-tooltip
+              v-if="shouldShowNamingTemplateStatus(row)"
+              :content="namingTemplateStatusReason(row)"
+              placement="top"
+            >
+              <el-tag
+                class="naming-template-status-tag"
+                :type="namingTemplateStatusTagType(row.naming_template_status)"
+                effect="light"
+              >
+                {{ namingTemplateStatusText(row) }}
+              </el-tag>
+            </el-tooltip>
+          </div>
           </template>
           </el-table-column>
           <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="132" align="left" header-align="left">

@@ -50,6 +50,8 @@ class NamingTemplatePreviewResult:
     generated_name: str
     template_version: int
     template_updated_at: str
+    field_hits: dict[str, bool]
+    warnings: list[str]
 
 
 @dataclass(frozen=True)

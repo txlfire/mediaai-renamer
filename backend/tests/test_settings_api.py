@@ -317,6 +317,31 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual("黑客帝国.1999.mkv", data["generated_name"])
             self.assertEqual(1, data["template_version"])
 
+    def test_naming_template_test_returns_field_hits_and_warnings(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.post(
+                "/api/settings/naming/test",
+                json={
+                    "media_type": "movie",
+                    "template": '[{"key":"title","label":"标题","variable":"title"},{"key":"english_title","label":"英文标题","variable":"english_title"}]',
+                    "sample": {
+                        "title": "黑客/帝国",
+                        "year": 1999,
+                        "extension": ".mkv",
+                    },
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual({"title": True, "english_title": False}, data["field_hits"])
+            self.assertTrue(any("english_title" in item for item in data["warnings"]))
+            self.assertTrue(any("非法字符" in item for item in data["warnings"]))
+
     def test_naming_template_diff_returns_changed_flag(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             settings = self.build_settings(Path(temp_dir))

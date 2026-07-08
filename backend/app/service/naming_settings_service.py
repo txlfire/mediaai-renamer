@@ -7,7 +7,7 @@ from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName
 from app.schema.settings import NamingTemplateBundle, NamingTemplateDiffResult, NamingTemplateMetadata, NamingTemplatePreviewResult
 from app.service.settings_service import get_effective_settings, validate_setting_value
-from app.utils.naming_template import build_preview_name_with_settings
+from app.utils.naming_template import build_preview_name_with_settings, template_variables_for_media_type
 
 NAMING_TEMPLATE_SCHEMA_VERSION = 1
 
@@ -115,11 +115,14 @@ def build_naming_template_preview(
     parsed, extension = _parsed_media_from_sample(media_type, sample)
     generated_name = build_preview_name_with_settings(parsed, extension, preview_settings)
     metadata = get_naming_template_metadata(settings, media_type)
+    field_hits = _field_hits(media_type, preview_settings, sample)
     return NamingTemplatePreviewResult(
         media_type=media_type,
         generated_name=generated_name,
         template_version=metadata.template_version,
         template_updated_at=metadata.template_updated_at,
+        field_hits=field_hits,
+        warnings=_template_warnings(sample, field_hits, generated_name),
     )
 
 
@@ -214,6 +217,46 @@ def _parsed_media_from_sample(media_type: str, sample: dict[str, object]) -> tup
     if isinstance(extra_raw, dict):
         extra = {str(key): "" if value is None else str(value) for key, value in extra_raw.items()}
     return ParsedMediaName(media_type=media_type, title=title, year=year, season=season, episode=episode, extra=extra), extension
+
+
+def _sample_value(sample: dict[str, object], variable: str) -> object:
+    if variable in {"season_episode", "seasonEpisode"}:
+        return f"{sample.get('season') or ''}{sample.get('episode') or ''}" if sample.get("season") and sample.get("episode") else ""
+    if variable in sample:
+        return sample.get(variable)
+    extra = sample.get("extra")
+    if isinstance(extra, dict):
+        return extra.get(variable)
+    return None
+
+
+def _field_hits(
+    media_type: str,
+    preview_settings: dict[str, object],
+    sample: dict[str, object],
+) -> dict[str, bool]:
+    variables = sorted(template_variables_for_media_type(media_type, preview_settings))
+    return {
+        variable: _sample_value(sample, variable) not in (None, "")
+        for variable in variables
+    }
+
+
+def _template_warnings(
+    sample: dict[str, object],
+    field_hits: dict[str, bool],
+    generated_name: str,
+) -> list[str]:
+    warnings: list[str] = []
+    for variable, hit in field_hits.items():
+        if not hit:
+            warnings.append(f"字段 {variable} 未命中，生成时已跳过空值。")
+    title = str(sample.get("title") or "")
+    if any(char in title for char in '<>:"/\\|?*'):
+        warnings.append("样例标题包含文件名非法字符，生成结果已按规则清理。")
+    if not generated_name.strip("."):
+        warnings.append("生成结果为空，请至少保留一个可用字段。")
+    return warnings
 
 
 def _parse_schema_version(value: object) -> int:

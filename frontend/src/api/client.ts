@@ -209,6 +209,12 @@ export type RenamePreview = {
   parent_folder_title?: string | null;
   recognition_mode?: string;
   title_conflict_message?: string | null;
+  naming_template_type?: "movie" | "episode" | string | null;
+  naming_template_version?: number | null;
+  naming_template_updated_at?: string | null;
+  current_naming_template_version?: number | null;
+  is_naming_template_outdated?: boolean;
+  naming_template_status?: "current" | "outdated" | "unknown" | string;
   message: string | null;
   updated_at: string;
 };
@@ -468,6 +474,8 @@ export type NamingTemplatePreviewResult = {
   generated_name: string;
   template_version: number;
   template_updated_at: string;
+  field_hits: Record<string, boolean>;
+  warnings: string[];
 };
 
 export type NamingTemplateDiffResult = {

@@ -112,6 +112,57 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
 
         self.assertIn("The.Matrix.mkv", {preview.suggested_name for preview in previews})
 
+    def test_generate_preview_records_naming_template_snapshot(self):
+        update_setting_values(
+            self.settings,
+            {"naming.movie_template": "{title}.{year}.movie"},
+            operator="admin",
+        )
+
+        generate_rename_previews(self.settings, media_file_ids=[1])
+        preview = list_rename_previews(self.settings, keyword="Matrix")[0]
+
+        self.assertEqual("movie", preview.naming_template_type)
+        self.assertEqual(2, preview.naming_template_version)
+        self.assertEqual(2, preview.current_naming_template_version)
+        self.assertEqual("current", preview.naming_template_status)
+        self.assertFalse(preview.is_naming_template_outdated)
+        self.assertTrue(preview.naming_template_updated_at)
+
+    def test_list_preview_marks_old_and_unknown_naming_template_status(self):
+        update_setting_values(
+            self.settings,
+            {"naming.movie_template": "{title}.{year}.movie"},
+            operator="admin",
+        )
+        generate_rename_previews(self.settings, media_file_ids=[1])
+
+        update_setting_values(
+            self.settings,
+            {"naming.movie_template": "{title}.{year}.new"},
+            operator="admin",
+        )
+        outdated = list_rename_previews(self.settings, keyword="Matrix")[0]
+        self.assertEqual(2, outdated.naming_template_version)
+        self.assertEqual(3, outdated.current_naming_template_version)
+        self.assertEqual("outdated", outdated.naming_template_status)
+        self.assertTrue(outdated.is_naming_template_outdated)
+
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE rename_previews SET naming_template_type = NULL, "
+                "naming_template_version = NULL, naming_template_updated_at = NULL "
+                "WHERE id = ?",
+                (outdated.id,),
+            )
+            connection.commit()
+
+        unknown = list_rename_previews(self.settings, keyword="Matrix")[0]
+        self.assertIsNone(unknown.naming_template_version)
+        self.assertEqual(3, unknown.current_naming_template_version)
+        self.assertEqual("unknown", unknown.naming_template_status)
+        self.assertFalse(unknown.is_naming_template_outdated)
+
     def test_generate_preview_marks_same_target_name_as_no_rename(self):
         same_name_file = self.media_dir / "Plain.Movie.2024.mkv"
         same_name_file.write_text("same", encoding="utf-8")

@@ -40,16 +40,62 @@ TITLE_RECOGNITION_MODES = {
     TITLE_RECOGNITION_MODE_PARENT_FOLDER_FIRST,
     TITLE_RECOGNITION_MODE_MANUAL_ONLY,
 }
+TEMPLATE_STATUS_CURRENT = "current"
+TEMPLATE_STATUS_OUTDATED = "outdated"
+TEMPLATE_STATUS_UNKNOWN = "unknown"
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _row_to_preview(row: sqlite3.Row) -> RenamePreview:
+def _template_type_for_media_type(media_type: str | None) -> str:
+    return "episode" if media_type == "episode" else "movie"
+
+
+def _template_metadata(
+    effective_settings: dict[str, object],
+    media_type: str | None,
+) -> tuple[str, int, str]:
+    template_type = _template_type_for_media_type(media_type)
+    prefix = f"naming.{template_type}_template"
+    version = int(effective_settings.get(f"{prefix}_version") or 1)
+    updated_at = str(effective_settings.get(f"{prefix}_updated_at") or "")
+    return template_type, version, updated_at
+
+
+def _current_template_version(
+    effective_settings: dict[str, object],
+    template_type: str | None,
+    media_type: str | None,
+) -> int:
+    normalized_type = template_type if template_type in {"movie", "episode"} else _template_type_for_media_type(media_type)
+    return int(effective_settings.get(f"naming.{normalized_type}_template_version") or 1)
+
+
+def _template_status(snapshot_version: int | None, current_version: int | None) -> tuple[str, bool]:
+    if snapshot_version is None or current_version is None:
+        return TEMPLATE_STATUS_UNKNOWN, False
+    if snapshot_version < current_version:
+        return TEMPLATE_STATUS_OUTDATED, True
+    return TEMPLATE_STATUS_CURRENT, False
+
+
+def _row_to_preview(row: sqlite3.Row, effective_settings: dict[str, object]) -> RenamePreview:
     edited_name = row["edited_name"]
     suggested_name = str(row["suggested_name"])
     metadata_candidates_json = row["metadata_candidates_json"] if "metadata_candidates_json" in row.keys() else None
+    naming_template_type = row["naming_template_type"] if "naming_template_type" in row.keys() else None
+    naming_template_version = row["naming_template_version"] if "naming_template_version" in row.keys() else None
+    current_naming_template_version = _current_template_version(
+        effective_settings,
+        naming_template_type,
+        str(row["media_type"]),
+    )
+    naming_template_status, is_naming_template_outdated = _template_status(
+        int(naming_template_version) if naming_template_version is not None else None,
+        current_naming_template_version,
+    )
     return RenamePreview(
         id=int(row["id"]),
         media_file_id=int(row["media_file_id"]),
@@ -77,6 +123,12 @@ def _row_to_preview(row: sqlite3.Row) -> RenamePreview:
         parent_folder_title=row["parent_folder_title"] if "parent_folder_title" in row.keys() else None,
         recognition_mode=str(row["recognition_mode"]) if "recognition_mode" in row.keys() else "parent_folder_fallback",
         title_conflict_message=row["title_conflict_message"] if "title_conflict_message" in row.keys() else None,
+        naming_template_type=naming_template_type,
+        naming_template_version=int(naming_template_version) if naming_template_version is not None else None,
+        naming_template_updated_at=row["naming_template_updated_at"] if "naming_template_updated_at" in row.keys() else None,
+        current_naming_template_version=current_naming_template_version,
+        is_naming_template_outdated=is_naming_template_outdated,
+        naming_template_status=naming_template_status,
     )
 
 
@@ -273,6 +325,10 @@ def generate_rename_previews(
                 parsed,
                 recognition_mode,
             )
+            template_type, template_version, template_updated_at = _template_metadata(
+                effective_settings,
+                parsed.media_type,
+            )
             suggested_name = build_preview_name_with_settings(parsed, str(row["extension"]), effective_settings)
             status = "needs_review" if parsed.media_type == "unknown" or parsed.message else "generated"
             message = title_conflict_message or parsed.message
@@ -298,8 +354,9 @@ def generate_rename_previews(
                 "INSERT INTO rename_previews "
                 "(media_file_id, media_type, parsed_title, parsed_year, season, episode, "
                 "original_extension, suggested_name, edited_name, title_source, parent_folder_title, "
-                "recognition_mode, title_conflict_message, status, message, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "recognition_mode, title_conflict_message, naming_template_type, naming_template_version, "
+                "naming_template_updated_at, status, message, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(media_file_id) DO UPDATE SET "
                 "media_type = excluded.media_type, "
                 "parsed_title = excluded.parsed_title, "
@@ -313,6 +370,9 @@ def generate_rename_previews(
                 "parent_folder_title = excluded.parent_folder_title, "
                 "recognition_mode = excluded.recognition_mode, "
                 "title_conflict_message = excluded.title_conflict_message, "
+                "naming_template_type = excluded.naming_template_type, "
+                "naming_template_version = excluded.naming_template_version, "
+                "naming_template_updated_at = excluded.naming_template_updated_at, "
                 "metadata_candidates_json = NULL, "
                 "status = excluded.status, "
                 "message = excluded.message, "
@@ -331,6 +391,9 @@ def generate_rename_previews(
                     parent_folder_title,
                     recognition_mode,
                     title_conflict_message,
+                    template_type,
+                    template_version,
+                    template_updated_at,
                     status,
                     message,
                     now,
@@ -386,13 +449,15 @@ def list_rename_previews(
             "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
             "rp.metadata_match_score, rp.metadata_message, rp.metadata_candidates_json, rp.status, rp.message, "
             "rp.title_source, rp.parent_folder_title, rp.recognition_mode, rp.title_conflict_message, "
+            "rp.naming_template_type, rp.naming_template_version, rp.naming_template_updated_at, "
             "rp.created_at, rp.updated_at "
             "FROM rename_previews rp "
             "JOIN media_files mf ON mf.id = rp.media_file_id"
             f"{where_clause} ORDER BY rp.id",
             params,
         ).fetchall()
-    return [_row_to_preview(row) for row in rows]
+    effective_settings = get_effective_settings(settings)
+    return [_row_to_preview(row, effective_settings) for row in rows]
 
 
 def update_rename_preview(
@@ -502,6 +567,7 @@ def _get_preview_row(connection: sqlite3.Connection, preview_id: int) -> sqlite3
         "rp.suggested_name, rp.edited_name, rp.metadata_source, rp.metadata_match_status, "
         "rp.metadata_match_score, rp.metadata_message, rp.metadata_candidates_json, rp.status, rp.message, "
         "rp.title_source, rp.parent_folder_title, rp.recognition_mode, rp.title_conflict_message, "
+        "rp.naming_template_type, rp.naming_template_version, rp.naming_template_updated_at, "
         "rp.created_at, rp.updated_at "
         "FROM rename_previews rp "
         "JOIN media_files mf ON mf.id = rp.media_file_id "
@@ -543,7 +609,7 @@ def _parsed_from_preview(
 def _preview_by_id(settings: AppSettings, preview_id: int) -> RenamePreview:
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
-        return _row_to_preview(_get_preview_row(connection, preview_id))
+        return _row_to_preview(_get_preview_row(connection, preview_id), get_effective_settings(settings))
 
 
 def _candidate_title(candidate: MetadataCandidate, fallback: str) -> str:
@@ -658,6 +724,9 @@ def _update_preview_metadata(
         season = row["season"]
         episode = row["episode"]
         final_status = str(row["status"])
+        naming_template_type = row["naming_template_type"]
+        naming_template_version = row["naming_template_version"]
+        naming_template_updated_at = row["naming_template_updated_at"]
         if candidate is not None and auto_backfill:
             effective_settings = get_effective_settings(settings)
             candidate_parsed = _merged_candidate_parsed(row, candidate, effective_settings, selected_fields)
@@ -668,6 +737,10 @@ def _update_preview_metadata(
             parsed_year = candidate_parsed.year
             season = candidate_parsed.season
             episode = candidate_parsed.episode
+            naming_template_type, naming_template_version, naming_template_updated_at = _template_metadata(
+                effective_settings,
+                media_type,
+            )
             final_status = _status_for_target(str(row["file_path"]), str(row["file_name"]), suggested_name, "generated")
         elif candidate is None and preview_status:
             final_status = preview_status
@@ -688,6 +761,9 @@ def _update_preview_metadata(
             "metadata_match_score = ?, "
             "metadata_message = ?, "
             "metadata_candidates_json = ?, "
+            "naming_template_type = ?, "
+            "naming_template_version = ?, "
+            "naming_template_updated_at = ?, "
             "status = ?, "
             "message = ?, "
             "updated_at = ? "
@@ -705,6 +781,9 @@ def _update_preview_metadata(
                 score,
                 final_message,
                 serialized_matches,
+                naming_template_type,
+                naming_template_version,
+                naming_template_updated_at,
                 final_status,
                 final_message,
                 now,

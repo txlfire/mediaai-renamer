@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -190,6 +190,14 @@ def _ensure_rename_preview_title_source_columns(connection: sqlite3.Connection) 
     _ensure_column(connection, "rename_previews", "title_conflict_message", "TEXT")
 
 
+def _ensure_rename_preview_naming_template_columns(connection: sqlite3.Connection) -> None:
+    if "rename_previews" not in _table_names(connection):
+        return
+    _ensure_column(connection, "rename_previews", "naming_template_type", "TEXT")
+    _ensure_column(connection, "rename_previews", "naming_template_version", "INTEGER")
+    _ensure_column(connection, "rename_previews", "naming_template_updated_at", "TEXT")
+
+
 def _ensure_pending_files_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS pending_files "
@@ -276,6 +284,10 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
     if version < 12:
         _ensure_rename_preview_title_source_columns(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 13:
+        _ensure_rename_preview_naming_template_columns(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 
@@ -381,6 +393,9 @@ def ensure_database(settings: AppSettings) -> Path:
             "parent_folder_title TEXT, "
             "recognition_mode TEXT NOT NULL DEFAULT 'parent_folder_fallback', "
             "title_conflict_message TEXT, "
+            "naming_template_type TEXT, "
+            "naming_template_version INTEGER, "
+            "naming_template_updated_at TEXT, "
             "status TEXT NOT NULL, "
             "message TEXT, "
             "created_at TEXT NOT NULL, "
@@ -417,6 +432,7 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_pending_files_table(connection)
         _ensure_scan_job_incremental_columns(connection)
         _ensure_rename_preview_title_source_columns(connection)
+        _ensure_rename_preview_naming_template_columns(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)

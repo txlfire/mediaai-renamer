@@ -148,6 +148,48 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("title_conflict_message", preview_columns)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
+    def test_existing_m12_database_is_migrated_to_naming_template_snapshot_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '12')")
+                connection.execute(
+                    "CREATE TABLE rename_previews "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, media_file_id INTEGER NOT NULL UNIQUE, "
+                    "media_type TEXT NOT NULL, parsed_title TEXT NOT NULL, parsed_year INTEGER, "
+                    "season INTEGER, episode INTEGER, original_extension TEXT NOT NULL, "
+                    "suggested_name TEXT NOT NULL, edited_name TEXT, metadata_source TEXT, "
+                    "metadata_match_status TEXT, metadata_match_score INTEGER NOT NULL DEFAULT 0, "
+                    "metadata_message TEXT, metadata_candidates_json TEXT, "
+                    "title_source TEXT NOT NULL DEFAULT 'file_name', parent_folder_title TEXT, "
+                    "recognition_mode TEXT NOT NULL DEFAULT 'parent_folder_fallback', "
+                    "title_conflict_message TEXT, status TEXT NOT NULL, message TEXT, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                preview_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(rename_previews)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("naming_template_type", preview_columns)
+            self.assertIn("naming_template_version", preview_columns)
+            self.assertIn("naming_template_updated_at", preview_columns)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
     def test_existing_media_sources_are_migrated_to_m5_shared_path_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

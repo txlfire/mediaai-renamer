@@ -2636,6 +2636,40 @@ onMounted(async () => {
                     <span>{{ pageText.naming.templateUpdatedAt }}</span>
                     <strong>{{ namingTemplateUpdatedText(namingWorkbenchResult.template_updated_at) }}</strong>
                   </div>
+                  <div class="naming-result-row naming-result-row-wide">
+                    <span>{{ pageText.naming.fieldHits }}</span>
+                    <div class="naming-field-hit-list">
+                      <el-tag
+                        v-for="(hit, field) in namingWorkbenchResult.field_hits"
+                        :key="field"
+                        :type="hit ? 'success' : 'warning'"
+                        effect="light"
+                      >
+                        {{ field }} · {{ hit ? pageText.naming.fieldHit : pageText.naming.fieldMiss }}
+                      </el-tag>
+                    </div>
+                  </div>
+                  <div class="naming-result-row naming-result-row-wide">
+                    <span>{{ pageText.naming.resultWarnings }}</span>
+                    <div class="naming-warning-list">
+                      <el-tag
+                        v-if="namingWorkbenchResult.warnings.length === 0"
+                        type="success"
+                        effect="light"
+                      >
+                        {{ pageText.naming.noWarnings }}
+                      </el-tag>
+                      <el-tag
+                        v-for="warning in namingWorkbenchResult.warnings"
+                        v-else
+                        :key="warning"
+                        type="warning"
+                        effect="light"
+                      >
+                        {{ warning }}
+                      </el-tag>
+                    </div>
+                  </div>
                 </template>
               </div>
               <div v-else class="naming-workbench-empty">
@@ -2857,6 +2891,28 @@ onMounted(async () => {
   color: var(--el-text-color-primary);
   font-weight: 600;
   word-break: break-all;
+}
+
+.naming-result-row-wide {
+  align-items: flex-start;
+}
+
+.naming-field-hit-list,
+.naming-warning-list {
+  display: flex;
+  flex: 1 1 220px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.naming-warning-list .el-tag {
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  line-height: 1.4;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 .settings-hint-card {
   display: inline-flex;

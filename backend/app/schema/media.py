@@ -144,6 +144,12 @@ class RenamePreview:
     parent_folder_title: str | None = None
     recognition_mode: str = "parent_folder_fallback"
     title_conflict_message: str | None = None
+    naming_template_type: str | None = None
+    naming_template_version: int | None = None
+    naming_template_updated_at: str | None = None
+    current_naming_template_version: int | None = None
+    is_naming_template_outdated: bool = False
+    naming_template_status: str = "unknown"
 
 
 @dataclass(frozen=True)
