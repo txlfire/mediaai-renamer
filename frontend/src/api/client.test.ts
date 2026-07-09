@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   apiClient,
+  archiveTask,
   bootstrapAdmin,
   changePassword,
   fetchCurrentUser,
@@ -409,6 +410,10 @@ describe("media source API client", () => {
         calls.push(`POST ${url}:${JSON.stringify(body)}`);
         return { data: { id: 1, status: "completed" } as T };
       },
+      patch: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`PATCH ${url}:${JSON.stringify(body)}`);
+        return { data: { id: "scan_job:1", archived: true } as T };
+      },
     };
 
     await createScanJob(1, httpClient);
@@ -424,10 +429,12 @@ describe("media source API client", () => {
         media_source_id: 1,
         start_at: "2026-07-09T00:00:00+08:00",
         end_at: "2026-07-09T23:59:59+08:00",
+        include_archived: true,
         limit: 50,
       },
       httpClient,
     );
+    await archiveTask("scan_job", 1, { archived: true, reason: "已处理" }, httpClient);
 
     expect(calls).toEqual([
       'POST /scan-jobs:{"media_source_id":1,"scan_mode":"full"}',
@@ -436,7 +443,8 @@ describe("media source API client", () => {
       "GET /logs",
       "GET /operation-logs?task_type=scan_job&task_id=2&after_id=5&limit=100",
       "POST /operation-logs/cleanup:{}",
-      "GET /tasks?task_type=scan_job&status=completed&media_source_id=1&start_at=2026-07-09T00%3A00%3A00%2B08%3A00&end_at=2026-07-09T23%3A59%3A59%2B08%3A00&limit=50",
+      "GET /tasks?task_type=scan_job&status=completed&media_source_id=1&start_at=2026-07-09T00%3A00%3A00%2B08%3A00&end_at=2026-07-09T23%3A59%3A59%2B08%3A00&include_archived=true&limit=50",
+      'PATCH /tasks/scan_job/1/archive:{"archived":true,"reason":"已处理"}',
     ]);
   });
 });

@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -262,6 +262,27 @@ def _ensure_operation_logs_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_task_archives_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS task_archives "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "task_type TEXT NOT NULL, "
+        "task_id INTEGER NOT NULL, "
+        "archived_at TEXT NOT NULL, "
+        "archived_by TEXT, "
+        "reason TEXT, "
+        "UNIQUE(task_type, task_id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_archives_task "
+        "ON task_archives(task_type, task_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_archives_archived_at "
+        "ON task_archives(archived_at)"
+    )
+
+
 def _ensure_rename_rollback_tables(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS rename_rollback_plans "
@@ -450,6 +471,10 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         _ensure_operation_logs_table(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 17:
+        _ensure_task_archives_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -595,6 +620,7 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_rename_preview_naming_template_columns(connection)
         _ensure_m9_governance_tables(connection)
         _ensure_operation_logs_table(connection)
+        _ensure_task_archives_table(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)

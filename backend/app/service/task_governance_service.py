@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import sqlite3
 from typing import Any
 
@@ -39,6 +40,10 @@ class TaskGovernanceItem:
     log_task_id: int
     target_route: str | None
     target_query: dict[str, str]
+    archived: bool
+    archived_at: str | None
+    archived_by: str | None
+    archive_reason: str | None
 
 
 def task_governance_item_to_dict(item: TaskGovernanceItem) -> dict[str, Any]:
@@ -63,6 +68,10 @@ def task_governance_item_to_dict(item: TaskGovernanceItem) -> dict[str, Any]:
         "log_task_id": item.log_task_id,
         "target_route": item.target_route,
         "target_query": item.target_query,
+        "archived": item.archived,
+        "archived_at": item.archived_at,
+        "archived_by": item.archived_by,
+        "archive_reason": item.archive_reason,
     }
 
 
@@ -70,6 +79,45 @@ def _connect(settings: AppSettings) -> sqlite3.Connection:
     connection = sqlite3.connect(settings.database_path)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -> bool:
+    if task_type == TASK_TYPE_SCAN_JOB:
+        table = "scan_jobs"
+    elif task_type == TASK_TYPE_RENAME_OPERATION:
+        table = "rename_operations"
+    elif task_type == TASK_TYPE_ROLLBACK_PLAN:
+        table = "rename_rollback_plans"
+    else:
+        return False
+    row = connection.execute(f"SELECT 1 FROM {table} WHERE id = ?", (task_id,)).fetchone()
+    return row is not None
+
+
+def _archive_map(connection: sqlite3.Connection) -> dict[tuple[str, int], sqlite3.Row]:
+    rows = connection.execute("SELECT * FROM task_archives").fetchall()
+    return {(str(row["task_type"]), int(row["task_id"])): row for row in rows}
+
+
+def _with_archive_state(
+    item: TaskGovernanceItem,
+    archive_row: sqlite3.Row | None,
+) -> TaskGovernanceItem:
+    if archive_row is None:
+        return item
+    return TaskGovernanceItem(
+        **{
+            **item.__dict__,
+            "archived": True,
+            "archived_at": str(archive_row["archived_at"]),
+            "archived_by": archive_row["archived_by"],
+            "archive_reason": archive_row["reason"],
+        }
+    )
 
 
 def _matches_filters(
@@ -80,6 +128,7 @@ def _matches_filters(
     media_source_id: int | None,
     start_at: str | None,
     end_at: str | None,
+    include_archived: bool,
 ) -> bool:
     if task_type and item.task_type != task_type:
         return False
@@ -90,6 +139,8 @@ def _matches_filters(
     if start_at and item.created_at < start_at:
         return False
     if end_at and item.created_at > end_at:
+        return False
+    if item.archived and not include_archived:
         return False
     return True
 
@@ -136,6 +187,10 @@ def _scan_job_items(connection: sqlite3.Connection) -> list[TaskGovernanceItem]:
                     "media_source_id": str(media_source_id) if media_source_id is not None else "",
                     "scan_job_id": str(task_id),
                 },
+                archived=False,
+                archived_at=None,
+                archived_by=None,
+                archive_reason=None,
             )
         )
     return items
@@ -203,6 +258,10 @@ def _rename_operation_items(connection: sqlite3.Connection) -> list[TaskGovernan
                 log_task_id=task_id,
                 target_route="rename-previews",
                 target_query=target_query,
+                archived=False,
+                archived_at=None,
+                archived_by=None,
+                archive_reason=None,
             )
         )
     return items
@@ -248,6 +307,10 @@ def _rollback_plan_items(connection: sqlite3.Connection) -> list[TaskGovernanceI
                 log_task_id=plan_id,
                 target_route="rename-previews",
                 target_query={},
+                archived=False,
+                archived_at=None,
+                archived_by=None,
+                archive_reason=None,
             )
         )
     return items
@@ -261,6 +324,7 @@ def list_task_governance_items(
     media_source_id: int | None = None,
     start_at: str | None = None,
     end_at: str | None = None,
+    include_archived: bool = False,
     limit: int = 200,
 ) -> list[TaskGovernanceItem]:
     """聚合扫描、重命名和回滚任务。"""
@@ -269,11 +333,13 @@ def list_task_governance_items(
         raise ValueError("任务类型不受支持")
     safe_limit = max(1, min(int(limit), 500))
     with closing(_connect(settings)) as connection:
+        archives = _archive_map(connection)
         items = [
             *_scan_job_items(connection),
             *_rename_operation_items(connection),
             *_rollback_plan_items(connection),
         ]
+    items = [_with_archive_state(item, archives.get((item.task_type, item.task_id))) for item in items]
     filtered = [
         item
         for item in items
@@ -284,7 +350,59 @@ def list_task_governance_items(
             media_source_id=media_source_id,
             start_at=start_at,
             end_at=end_at,
+            include_archived=include_archived,
         )
     ]
     filtered.sort(key=lambda item: (item.updated_at, item.task_type, item.task_id), reverse=True)
     return filtered[:safe_limit]
+
+
+def set_task_archived(
+    settings: AppSettings,
+    *,
+    task_type: str,
+    task_id: int,
+    archived: bool,
+    archived_by: str | None = None,
+    reason: str | None = None,
+) -> TaskGovernanceItem:
+    """归档或恢复任务治理展示；不删除任何任务和真实文件。"""
+
+    if task_type not in TASK_TYPES:
+        raise ValueError("任务类型不受支持")
+    with closing(_connect(settings)) as connection:
+        if not _task_exists(connection, task_type, task_id):
+            raise ValueError("任务不存在")
+        if archived:
+            connection.execute(
+                "INSERT INTO task_archives (task_type, task_id, archived_at, archived_by, reason) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(task_type, task_id) DO UPDATE SET "
+                "archived_at = excluded.archived_at, "
+                "archived_by = excluded.archived_by, "
+                "reason = excluded.reason",
+                (task_type, task_id, _utc_now_text(), archived_by, reason),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM task_archives WHERE task_type = ? AND task_id = ?",
+                (task_type, task_id),
+            )
+        connection.commit()
+
+    item = next(
+        (
+            row
+            for row in list_task_governance_items(
+                settings,
+                task_type=task_type,
+                include_archived=True,
+                limit=500,
+            )
+            if row.task_id == task_id
+        ),
+        None,
+    )
+    if item is None:
+        raise ValueError("任务不存在")
+    return item

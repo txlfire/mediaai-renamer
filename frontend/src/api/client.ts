@@ -338,6 +338,10 @@ export type TaskGovernanceItem = {
   log_task_id: number;
   target_route: string | null;
   target_query: Record<string, string>;
+  archived: boolean;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 };
 
 export type TaskGovernanceFilters = {
@@ -346,7 +350,13 @@ export type TaskGovernanceFilters = {
   media_source_id?: number;
   start_at?: string;
   end_at?: string;
+  include_archived?: boolean;
   limit?: number;
+};
+
+export type TaskArchivePayload = {
+  archived: boolean;
+  reason?: string;
 };
 
 export type RenamePreview = {
@@ -1185,6 +1195,17 @@ export async function fetchTasks(
   const query = buildQueryString(filters);
   const response = await httpClient.get<{ items: TaskGovernanceItem[] }>(query ? `/tasks?${query}` : "/tasks");
   return response.data.items;
+}
+
+export async function archiveTask(
+  taskType: string,
+  taskId: number,
+  payload: TaskArchivePayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TaskGovernanceItem> {
+  const patch = requirePatch(httpClient);
+  const response = await patch<TaskGovernanceItem>(`/tasks/${taskType}/${taskId}/archive`, payload);
+  return response.data;
 }
 
 export async function generateRenamePreviews(
