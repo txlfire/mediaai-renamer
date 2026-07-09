@@ -16,10 +16,12 @@ import type {
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
+import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "../stores/auth";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
@@ -42,6 +44,7 @@ import {
 } from "../utils/renameSelection";
 
 const mediaStore = useMediaStore();
+const authStore = useAuthStore();
 const previewStore = usePreviewStore();
 const pendingFileStore = usePendingFileStore();
 const renameOperationStore = useRenameOperationStore();
@@ -49,9 +52,20 @@ const settingsStore = useSettingsStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
 const route = useRoute();
+const canSubmitMetadata = computed(() => authStore.hasPermission("metadata:submit"));
+const canExecuteRename = computed(() => authStore.hasPermission("rename:execute"));
+const canExecuteRollback = computed(() => authStore.hasPermission("rollback:execute"));
+const metadataPermissionTitle = computed(() => (canSubmitMetadata.value ? "" : messages.auth.permissionDenied));
+const renamePermissionTitle = computed(() => (canExecuteRename.value ? "" : messages.auth.permissionDenied));
+const rollbackPermissionTitle = computed(() =>
+  canExecuteRollback.value ? "" : messages.renamePreviews.operationDialog.rollbackPermissionDenied,
+);
 
 const editDialogVisible = ref(false);
 const operationDialogVisible = ref(false);
+const operationLogVisible = ref(false);
+const selectedOperationLogTaskId = ref<number | null>(null);
+const selectedOperationLogTaskType = ref<"rename_operation" | "rollback_plan">("rename_operation");
 const emptyTargetDialogVisible = ref(false);
 const detailDialogVisible = ref(false);
 const metadataDialogVisible = ref(false);
@@ -215,16 +229,34 @@ function operationStatusLabel(value: string) {
     ready: messages.status.ready,
     conflict: messages.status.conflict,
     renamed: messages.status.renamed,
+    rolled_back: messages.status.rolledBack,
     failed: messages.status.failed,
   };
   return labels[value] ?? value;
 }
 
 function operationStatusTagType(value: string) {
-  if (value === "ready" || value === "renamed") {
+  if (value === "ready" || value === "renamed" || value === "rolled_back") {
     return "success";
   }
   if (value === "conflict") {
+    return "warning";
+  }
+  if (value === "failed") {
+    return "danger";
+  }
+  return "info";
+}
+
+function rollbackStatusLabel(value: string) {
+  return messages.renamePreviews.operationDialog.rollbackStatuses[value] ?? value;
+}
+
+function rollbackStatusTagType(value: string) {
+  if (value === "ready" || value === "executed" || value === "rolled_back") {
+    return "success";
+  }
+  if (value === "checked" || value === "conflict" || value === "partial_failed") {
     return "warning";
   }
   if (value === "failed") {
@@ -398,6 +430,20 @@ const operationResultAlert = computed(() => {
     description: summary,
   };
 });
+const rollbackPlan = computed(() => renameOperationStore.currentRollbackPlan);
+const canCreateRollbackPlan = computed(() =>
+  Boolean(operationHasExecuted.value && renameOperationStore.currentOperation?.renamed_count && !rollbackPlan.value),
+);
+const canDryRunRollbackPlan = computed(() =>
+  Boolean(
+    rollbackPlan.value &&
+      !["executed", "partial_failed", "failed"].includes(rollbackPlan.value.status) &&
+      canExecuteRollback.value,
+  ),
+);
+const canExecuteRollbackPlan = computed(() =>
+  Boolean(rollbackPlan.value?.status === "checked" && rollbackPlan.value.executable_count > 0 && canExecuteRollback.value),
+);
 
 async function refreshPreviews() {
   if (!previewStore.filters.scan_job_id) {
@@ -620,6 +666,7 @@ async function runRenameDryRun() {
     return;
   }
   await renameOperationStore.runDryRun(selectedPreviewIds.value);
+  selectedOperationLogTaskId.value = renameOperationStore.currentOperation?.id ?? null;
   operationDialogVisible.value = true;
 }
 
@@ -1095,6 +1142,63 @@ async function executeRenameOperation() {
   await refreshPreviews();
 }
 
+function openRenameOperationLog() {
+  const operationId = renameOperationStore.currentOperation?.id;
+  if (!operationId) {
+    return;
+  }
+  selectedOperationLogTaskId.value = operationId;
+  selectedOperationLogTaskType.value = "rename_operation";
+  operationLogVisible.value = true;
+}
+
+function openRollbackOperationLog() {
+  const planId = renameOperationStore.currentRollbackPlan?.id;
+  if (!planId) {
+    return;
+  }
+  selectedOperationLogTaskId.value = planId;
+  selectedOperationLogTaskType.value = "rollback_plan";
+  operationLogVisible.value = true;
+}
+
+async function createRollbackPlan() {
+  await renameOperationStore.createRollbackPlan();
+  if (renameOperationStore.rollbackErrorMessage) {
+    ElMessage.error(renameOperationStore.rollbackErrorMessage);
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.operationDialog.rollbackCreateSuccess);
+}
+
+async function dryRunRollbackPlan() {
+  await renameOperationStore.dryRunRollbackPlan();
+  if (renameOperationStore.rollbackErrorMessage) {
+    ElMessage.error(renameOperationStore.rollbackErrorMessage);
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.operationDialog.rollbackDryRunSuccess);
+}
+
+async function executeRollbackPlan() {
+  await ElMessageBox.confirm(
+    messages.renamePreviews.operationDialog.rollbackExecuteConfirm,
+    messages.renamePreviews.operationDialog.rollbackTitle,
+    {
+      type: "warning",
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+    },
+  );
+  await renameOperationStore.executeRollbackPlan();
+  if (renameOperationStore.rollbackErrorMessage) {
+    ElMessage.error(renameOperationStore.rollbackErrorMessage);
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.operationDialog.rollbackExecuteSuccess);
+  await refreshPreviews();
+}
+
 function openEditDialog(row: { id: number; current_target_name: string }) {
   editingPreviewId.value = row.id;
   editingTargetName.value = row.current_target_name;
@@ -1195,7 +1299,8 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="Connection"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !canSubmitMetadata"
+                :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.tmdbMatch"
                 class="action-split-main"
                 @click="matchSelectedTmdbOnly"
@@ -1204,7 +1309,7 @@ onMounted(async () => {
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading"
+                :disabled="previewStore.loading || !canSubmitMetadata"
                 @command="handleTmdbDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1212,9 +1317,9 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_tmdb">{{ messages.renamePreviews.tmdbMatchAll }}</el-dropdown-item>
-                    <el-dropdown-item command="selected_tmdb_ai" :disabled="!aiBatchReady">{{ messages.renamePreviews.tmdbAiFallbackSelected }}</el-dropdown-item>
-                    <el-dropdown-item command="all_tmdb_ai" :disabled="!aiBatchReady">{{ messages.renamePreviews.tmdbAiFallbackAll }}</el-dropdown-item>
+                    <el-dropdown-item command="all_tmdb" :disabled="!canSubmitMetadata">{{ messages.renamePreviews.tmdbMatchAll }}</el-dropdown-item>
+                    <el-dropdown-item command="selected_tmdb_ai" :disabled="!aiBatchReady || !canSubmitMetadata">{{ messages.renamePreviews.tmdbAiFallbackSelected }}</el-dropdown-item>
+                    <el-dropdown-item command="all_tmdb_ai" :disabled="!aiBatchReady || !canSubmitMetadata">{{ messages.renamePreviews.tmdbAiFallbackAll }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1222,7 +1327,8 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="MagicStick"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !aiBatchReady"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !aiBatchReady || !canSubmitMetadata"
+                :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchSelected"
                 class="action-split-main"
                 @click="parseSelectedWithAiFromToolbar"
@@ -1231,7 +1337,7 @@ onMounted(async () => {
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading"
+                :disabled="previewStore.loading || !canSubmitMetadata"
                 @command="handleAiDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1239,7 +1345,7 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewStore.previews.length === 0">
+                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewStore.previews.length === 0 || !canSubmitMetadata">
                       {{ messages.renamePreviews.aiParse.batchAll }}
                     </el-dropdown-item>
                   </el-dropdown-menu>
@@ -1250,7 +1356,8 @@ onMounted(async () => {
               <el-button
                 type="success"
                 :icon="Select"
-                :disabled="selectedPreviewIds.length === 0"
+                :disabled="selectedPreviewIds.length === 0 || !canExecuteRename"
+                :title="renamePermissionTitle"
                 :loading="renameOperationStore.loading && !operationProgressVisible"
                 class="action-split-main"
                 @click="executeSelectedPreviews"
@@ -1259,7 +1366,7 @@ onMounted(async () => {
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.previews.length === 0"
+                :disabled="previewStore.previews.length === 0 || !canExecuteRename"
                 @command="handleRenameDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1267,7 +1374,7 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_rename">{{ messages.renamePreviews.executeAll }}</el-dropdown-item>
+                    <el-dropdown-item command="all_rename" :disabled="!canExecuteRename">{{ messages.renamePreviews.executeAll }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1483,6 +1590,7 @@ onMounted(async () => {
           :icon="Connection"
           text
           circle
+          :disabled="!canSubmitMetadata"
           @click.stop="matchMetadata(row)"
           />
           </el-tooltip>
@@ -1493,7 +1601,7 @@ onMounted(async () => {
           text
           circle
           :loading="aiParsingPreviewId === row.id"
-          :disabled="previewStore.loading && aiParsingPreviewId !== row.id"
+          :disabled="!canSubmitMetadata || (previewStore.loading && aiParsingPreviewId !== row.id)"
           @click.stop="parseSingleWithAi(row)"
           />
           </el-tooltip>
@@ -1503,6 +1611,7 @@ onMounted(async () => {
           :icon="MagicStick"
           text
           circle
+          :disabled="!canSubmitMetadata"
           @click.stop="openMetadataBackfill(row)"
           />
           </el-tooltip>
@@ -1524,6 +1633,7 @@ onMounted(async () => {
           :icon="Select"
           text
           circle
+          :disabled="!canExecuteRename"
           @click.stop="executeSinglePreview(row)"
           />
           </el-tooltip>
@@ -1956,13 +2066,114 @@ onMounted(async () => {
             </template>
           </el-table-column>
         </el-table>
+        <el-divider v-if="operationHasExecuted && renameOperationStore.currentOperation?.renamed_count" />
+        <div v-if="operationHasExecuted && renameOperationStore.currentOperation?.renamed_count" class="rename-operation-dialog">
+          <div class="settings-config-card-title">{{ messages.renamePreviews.operationDialog.rollbackTitle }}</div>
+          <el-alert
+            v-if="renameOperationStore.rollbackErrorMessage"
+            :title="renameOperationStore.rollbackErrorMessage"
+            type="error"
+            show-icon
+          />
+          <div v-if="rollbackPlan" class="preview-stats operation-stats">
+            <div>
+              <span>{{ messages.common.status }}</span>
+              <strong>{{ rollbackStatusLabel(rollbackPlan.status) }}</strong>
+            </div>
+            <div>
+              <span>{{ messages.common.total }}</span>
+              <strong>{{ rollbackPlan.item_count }}</strong>
+            </div>
+            <div class="stat-generated">
+              <span>{{ messages.status.ready }}</span>
+              <strong>{{ rollbackPlan.executable_count }}</strong>
+            </div>
+            <div class="stat-review">
+              <span>{{ messages.status.conflict }}</span>
+              <strong>{{ rollbackPlan.conflict_count }}</strong>
+            </div>
+          </div>
+          <el-empty
+            v-else
+            :description="messages.renamePreviews.operationDialog.rollbackEmpty"
+          />
+          <el-table
+            v-if="rollbackPlan"
+            :data="rollbackPlan.items"
+            class="data-table"
+            table-layout="auto"
+          >
+            <el-table-column :label="messages.common.status" width="110" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-tag :type="rollbackStatusTagType(row.status)" effect="light">
+                  {{ rollbackStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="messages.renamePreviews.columns.sourcePath" min-width="220" align="left" header-align="left">
+              <template #default="{ row }">
+                <TextCell :value="row.current_path" :max-length="tableDisplayConfig.pathMaxLength" />
+              </template>
+            </el-table-column>
+            <el-table-column :label="messages.renamePreviews.columns.targetPath" min-width="220" align="left" header-align="left">
+              <template #default="{ row }">
+                <TextCell :value="row.rollback_path" :max-length="tableDisplayConfig.pathMaxLength" />
+              </template>
+            </el-table-column>
+            <el-table-column :label="messages.renamePreviews.columns.reason" min-width="160" align="left" header-align="left">
+              <template #default="{ row }">
+                <TextCell :value="row.message || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="settings-actions">
+            <el-button
+              v-if="canCreateRollbackPlan"
+              :loading="renameOperationStore.rollbackLoading"
+              :disabled="!canExecuteRollback"
+              :title="rollbackPermissionTitle"
+              @click="createRollbackPlan"
+            >
+              {{ messages.renamePreviews.operationDialog.rollbackCreate }}
+            </el-button>
+            <el-button
+              v-if="rollbackPlan"
+              :loading="renameOperationStore.rollbackLoading"
+              :disabled="!canDryRunRollbackPlan"
+              :title="rollbackPermissionTitle"
+              @click="dryRunRollbackPlan"
+            >
+              {{ messages.renamePreviews.operationDialog.rollbackDryRun }}
+            </el-button>
+            <el-button
+              v-if="rollbackPlan"
+              type="danger"
+              :loading="renameOperationStore.rollbackLoading"
+              :disabled="!canExecuteRollbackPlan"
+              :title="rollbackPermissionTitle"
+              @click="executeRollbackPlan"
+            >
+              {{ messages.renamePreviews.operationDialog.rollbackExecute }}
+            </el-button>
+            <el-button v-if="rollbackPlan" @click="openRollbackOperationLog">
+              {{ messages.renamePreviews.operationDialog.rollbackLog }}
+            </el-button>
+          </div>
+        </div>
       </div>
       <template #footer>
+        <el-button
+          v-if="renameOperationStore.currentOperation"
+          @click="openRenameOperationLog"
+        >
+          {{ messages.scanJobs.viewLogs }}
+        </el-button>
         <el-button @click="operationDialogVisible = false">{{ messages.common.close }}</el-button>
         <el-button
           v-if="!operationHasExecuted"
           type="danger"
-          :disabled="!renameOperationStore.canExecute"
+          :disabled="!renameOperationStore.canExecute || !canExecuteRename"
+          :title="renamePermissionTitle"
           :loading="renameOperationStore.loading"
           @click="executeRenameOperation"
         >
@@ -1970,5 +2181,11 @@ onMounted(async () => {
         </el-button>
       </template>
     </el-dialog>
+    <OperationLogDrawer
+      v-model:visible="operationLogVisible"
+      :task-type="selectedOperationLogTaskType"
+      :task-id="selectedOperationLogTaskId"
+      :title="selectedOperationLogTaskType === 'rollback_plan' ? messages.operationLogs.rollbackTitle : messages.operationLogs.renameTitle"
+    />
   </ListPageLayout>
 </template>

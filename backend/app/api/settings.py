@@ -1,8 +1,10 @@
 """System settings API."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
+from app.service.audit_service import record_audit_event, sanitize_audit_detail
 from app.service.settings_service import (
     AI_TEST_PAGE_KEY,
     TMDB_TEST_PAGE_KEY,
@@ -91,6 +93,13 @@ def _model_payload(model: BaseModel) -> dict[str, object]:
     return model.dict(exclude_none=True)
 
 
+def _audit_request_context(request: Request) -> dict[str, str | None]:
+    return {
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+    }
+
+
 @router.get("")
 def get_settings(request: Request):
     """List effective system settings for the settings page."""
@@ -99,17 +108,52 @@ def get_settings(request: Request):
 
 
 @router.put("")
-def update_settings(payload: UpdateSettingsRequest, request: Request):
+def update_settings(
+    payload: UpdateSettingsRequest,
+    request: Request,
+    current_user=Depends(require_permission("settings:write")),
+):
     """Update hot system settings."""
 
+    operator = current_user.username if current_user is not None else "system"
     try:
-        return update_setting_values(
+        result = update_setting_values(
             request.app.state.settings,
             payload.values,
-            operator="admin",
+            operator=operator,
         )
     except ValueError as exc:
+        record_audit_event(
+            request.app.state.settings,
+            event_type="settings.update",
+            action="update_settings",
+            result="failed",
+            summary=f"系统设置保存失败：{exc}",
+            target_type="settings",
+            actor=current_user,
+            detail={
+                "keys": sorted(payload.values.keys()),
+                "values": sanitize_audit_detail(payload.values),
+                "reason": str(exc),
+            },
+            **_audit_request_context(request),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        request.app.state.settings,
+        event_type="settings.update",
+        action="update_settings",
+        result="success",
+        summary=f"保存系统设置：{len(payload.values)} 项",
+        target_type="settings",
+        actor=current_user,
+        detail={
+            "keys": sorted(payload.values.keys()),
+            "values": sanitize_audit_detail(payload.values),
+        },
+        **_audit_request_context(request),
+    )
+    return result
 
 
 @router.get("/tmdb/test-result")

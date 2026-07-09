@@ -9,6 +9,15 @@ import sqlite3
 from app.core.config import AppSettings
 from app.schema.media import RenameOperation, RenameOperationItem
 from app.service.media_source_service import get_media_source_protocol_context
+from app.service.operation_log_service import (
+    LEVEL_ERROR,
+    LEVEL_INFO,
+    LEVEL_SUCCESS,
+    LEVEL_WARNING,
+    TASK_TYPE_RENAME_OPERATION,
+    cleanup_operation_logs,
+    record_operation_log,
+)
 from app.service.scan_service import _file_modified_at, _normalized_index_path, _upsert_scan_file_index
 from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
@@ -222,7 +231,29 @@ def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int]) 
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (operation_id, preview_id, source_path, target_path, status, message, now, now),
             )
+        conflict_examples = [
+            {"preview_id": preview_id, "target_path": target_path, "message": message}
+            for preview_id, _source_path, target_path, status, message in item_plans
+            if status == "conflict"
+        ][:10]
+        record_operation_log(
+            settings,
+            task_type=TASK_TYPE_RENAME_OPERATION,
+            task_id=operation_id,
+            level=LEVEL_SUCCESS if conflict_count == 0 else LEVEL_WARNING,
+            stage="dry_run_completed",
+            message=f"重命名干跑完成：共 {len(item_plans)} 项，可执行 {ready_count} 项，冲突 {conflict_count} 项",
+            progress_current=len(item_plans),
+            progress_total=len(item_plans),
+            detail={
+                "ready_count": ready_count,
+                "conflict_count": conflict_count,
+                "conflict_examples": conflict_examples,
+            },
+            connection=connection,
+        )
         connection.commit()
+    cleanup_operation_logs(settings)
 
     return get_rename_operation(settings, operation_id)
 
@@ -263,6 +294,18 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        record_operation_log(
+            settings,
+            task_type=TASK_TYPE_RENAME_OPERATION,
+            task_id=operation_id,
+            level=LEVEL_INFO,
+            stage="rename_started",
+            message=f"开始执行重命名：待处理 {operation.ready_count} 项",
+            progress_current=0,
+            progress_total=operation.ready_count,
+            detail={"operation_status": operation.status},
+            connection=connection,
+        )
         for item in operation.items:
             if item.status != "ready":
                 continue
@@ -313,6 +356,23 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                     ("failed", str(exc), now, item.id),
                 )
                 failed_count += 1
+                if failed_count <= 20:
+                    record_operation_log(
+                        settings,
+                        task_type=TASK_TYPE_RENAME_OPERATION,
+                        task_id=operation_id,
+                        level=LEVEL_ERROR,
+                        stage="rename_item_failed",
+                        message=f"重命名失败：{Path(item.source_path).name}，原因：{exc}",
+                        progress_current=renamed_count + failed_count,
+                        progress_total=operation.ready_count,
+                        detail={
+                            "rename_preview_id": item.rename_preview_id,
+                            "source_path": item.source_path,
+                            "target_path": item.target_path,
+                        },
+                        connection=connection,
+                    )
 
         item_counts = {
             "ready": 0,
@@ -347,7 +407,28 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                 operation_id,
             ),
         )
+        record_operation_log(
+            settings,
+            task_type=TASK_TYPE_RENAME_OPERATION,
+            task_id=operation_id,
+            level=LEVEL_SUCCESS if final_status == "completed" else LEVEL_WARNING,
+            stage="rename_completed",
+            message=(
+                f"重命名执行完成：成功 {item_counts['renamed']} 项，"
+                f"失败 {item_counts['failed']} 项，冲突 {item_counts['conflict']} 项"
+            ),
+            progress_current=item_counts["renamed"] + item_counts["failed"],
+            progress_total=operation.ready_count,
+            detail={
+                "status": final_status,
+                "renamed_count": item_counts["renamed"],
+                "failed_count": item_counts["failed"],
+                "conflict_count": item_counts["conflict"],
+            },
+            connection=connection,
+        )
         connection.commit()
+    cleanup_operation_logs(settings)
 
     updated = get_rename_operation(settings, operation_id)
     return updated

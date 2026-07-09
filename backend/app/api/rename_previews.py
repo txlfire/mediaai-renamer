@@ -1,8 +1,9 @@
 """Rename preview API."""
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
 from app.schema.ai_parse import AiParseCandidate
 from app.schema.metadata import MetadataCandidate
 from app.service.preview_service import (
@@ -176,6 +177,7 @@ def match_preview_metadata(
     preview_id: int,
     request: Request,
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+    _current_user=Depends(require_permission("metadata:submit")),
 ):
     """Run TMDB metadata matching for one preview."""
 
@@ -190,7 +192,11 @@ def match_preview_metadata(
 
 
 @router.post("/metadata-match")
-def match_previews_metadata(payload: BatchMetadataMatchRequest, request: Request):
+def match_previews_metadata(
+    payload: BatchMetadataMatchRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
     """Run TMDB metadata matching for selected previews."""
 
     return match_rename_previews_metadata(
@@ -201,7 +207,11 @@ def match_previews_metadata(payload: BatchMetadataMatchRequest, request: Request
 
 
 @router.post("/metadata-match/ai-fallback")
-def match_previews_metadata_with_ai_fallback(payload: BatchMetadataMatchRequest, request: Request):
+def match_previews_metadata_with_ai_fallback(
+    payload: BatchMetadataMatchRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
     """Run TMDB first, then AI for unmatched or low-confidence previews."""
 
     return match_rename_previews_metadata_with_ai_fallback(
@@ -212,7 +222,11 @@ def match_previews_metadata_with_ai_fallback(payload: BatchMetadataMatchRequest,
 
 
 @router.post("/metadata-match/all")
-def match_all_metadata(payload: AllMetadataMatchRequest, request: Request):
+def match_all_metadata(
+    payload: AllMetadataMatchRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
     """Run TMDB metadata matching for all unmatched previews in current scope."""
 
     return match_all_unmatched_metadata(
@@ -224,7 +238,11 @@ def match_all_metadata(payload: AllMetadataMatchRequest, request: Request):
 
 
 @router.post("/metadata-match/all/ai-fallback")
-def match_all_metadata_with_ai_fallback(payload: AllMetadataMatchRequest, request: Request):
+def match_all_metadata_with_ai_fallback(
+    payload: AllMetadataMatchRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
     """Run TMDB first for scoped unmatched previews, then AI fallback."""
 
     return match_all_unmatched_metadata_with_ai_fallback(
@@ -254,7 +272,11 @@ def get_preview_metadata_candidates(
 
 
 @router.post("/{preview_id}/ai-parse")
-def parse_preview_with_ai(preview_id: int, request: Request):
+def parse_preview_with_ai(
+    preview_id: int,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
     """Run AI structured parsing for one preview."""
 
     try:
@@ -271,7 +293,11 @@ def parse_preview_with_ai(preview_id: int, request: Request):
 
 
 @router.post("/ai-parse/batch")
-def parse_previews_with_ai(payload: BatchAiParseRequest, request: Request):
+def parse_previews_with_ai(
+    payload: BatchAiParseRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
     """Run AI structured parsing for selected previews without mutating records."""
 
     return parse_rename_previews_with_ai(

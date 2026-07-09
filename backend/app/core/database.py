@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 16
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -160,6 +160,154 @@ def _ensure_scan_file_index_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_users_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS users "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "username TEXT NOT NULL UNIQUE, "
+        "display_name TEXT NOT NULL, "
+        "password_hash TEXT NOT NULL, "
+        "permissions_json TEXT NOT NULL, "
+        "must_change_password INTEGER NOT NULL DEFAULT 0, "
+        "password_changed_at TEXT, "
+        "enabled INTEGER NOT NULL DEFAULT 1, "
+        "last_login_at TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_users_enabled "
+        "ON users(enabled)"
+    )
+    columns = _column_names(connection, "users")
+    if "permissions_json" not in columns:
+        connection.execute(
+            "ALTER TABLE users ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "must_change_password" not in columns:
+        connection.execute(
+            "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+        )
+    if "password_changed_at" not in columns:
+        connection.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
+
+
+def _ensure_user_sessions_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS user_sessions "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "user_id INTEGER NOT NULL, "
+        "token_hash TEXT NOT NULL UNIQUE, "
+        "expires_at TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "revoked_at TEXT, "
+        "FOREIGN KEY(user_id) REFERENCES users(id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_user_expires "
+        "ON user_sessions(user_id, expires_at, revoked_at)"
+    )
+
+
+def _ensure_audit_events_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS audit_events "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "event_type TEXT NOT NULL, "
+        "actor_id INTEGER, "
+        "actor_name TEXT, "
+        "target_type TEXT NOT NULL, "
+        "target_id TEXT, "
+        "action TEXT NOT NULL, "
+        "result TEXT NOT NULL, "
+        "summary TEXT NOT NULL, "
+        "detail_json TEXT, "
+        "ip_address TEXT, "
+        "user_agent TEXT, "
+        "created_at TEXT NOT NULL, "
+        "FOREIGN KEY(actor_id) REFERENCES users(id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_query "
+        "ON audit_events(event_type, result, actor_name, created_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_target "
+        "ON audit_events(target_type, target_id, created_at)"
+    )
+
+
+def _ensure_operation_logs_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS operation_logs "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "task_type TEXT NOT NULL, "
+        "task_id INTEGER NOT NULL, "
+        "level TEXT NOT NULL, "
+        "stage TEXT NOT NULL, "
+        "message TEXT NOT NULL, "
+        "progress_current INTEGER, "
+        "progress_total INTEGER, "
+        "detail_json TEXT, "
+        "approx_bytes INTEGER NOT NULL DEFAULT 0, "
+        "created_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operation_logs_task "
+        "ON operation_logs(task_type, task_id, id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operation_logs_created "
+        "ON operation_logs(created_at)"
+    )
+
+
+def _ensure_rename_rollback_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS rename_rollback_plans "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "operation_id INTEGER NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'draft', "
+        "item_count INTEGER NOT NULL DEFAULT 0, "
+        "executable_count INTEGER NOT NULL DEFAULT 0, "
+        "conflict_count INTEGER NOT NULL DEFAULT 0, "
+        "created_by TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY(operation_id) REFERENCES rename_operations(id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rename_rollback_plans_operation "
+        "ON rename_rollback_plans(operation_id, status, created_at)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS rename_rollback_items "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "plan_id INTEGER NOT NULL, "
+        "operation_item_id INTEGER NOT NULL, "
+        "current_path TEXT NOT NULL, "
+        "rollback_path TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "message TEXT, "
+        "executed_at TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY(plan_id) REFERENCES rename_rollback_plans(id), "
+        "FOREIGN KEY(operation_item_id) REFERENCES rename_operation_items(id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rename_rollback_items_plan "
+        "ON rename_rollback_items(plan_id, status)"
+    )
+
+
+def _ensure_m9_governance_tables(connection: sqlite3.Connection) -> None:
+    _ensure_users_table(connection)
+    _ensure_user_sessions_table(connection)
+    _ensure_audit_events_table(connection)
+    _ensure_rename_rollback_tables(connection)
+
+
 def _ensure_scan_job_incremental_columns(connection: sqlite3.Connection) -> None:
     if "scan_jobs" not in _table_names(connection):
         return
@@ -288,6 +436,18 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
     if version < 13:
         _ensure_rename_preview_naming_template_columns(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 14:
+        _ensure_m9_governance_tables(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 15:
+        _ensure_users_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 16:
+        _ensure_operation_logs_table(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 
@@ -433,6 +593,8 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_scan_job_incremental_columns(connection)
         _ensure_rename_preview_title_source_columns(connection)
         _ensure_rename_preview_naming_template_columns(connection)
+        _ensure_m9_governance_tables(connection)
+        _ensure_operation_logs_table(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)

@@ -7,16 +7,19 @@ import { useRoute, useRouter } from "vue-router";
 import type { ScanMode } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import OperationProgressLog from "../components/OperationProgressLog.vue";
+import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "../stores/auth";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime, formatScanJobStatus } from "../utils/displayFormat";
 
 const mediaStore = useMediaStore();
+const authStore = useAuthStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
 const route = useRoute();
@@ -25,6 +28,8 @@ const selectedSourceId = ref<number>();
 const scanMode = ref<ScanMode>("full");
 const scanLogDialogVisible = ref(false);
 const selectedScanLog = ref("");
+const operationLogVisible = ref(false);
+const selectedOperationLogTaskId = ref<number | null>(null);
 const scanProgressVisible = ref(false);
 const scanProgressPercent = ref(0);
 const scanProgressText = ref("");
@@ -48,7 +53,9 @@ const sourceOptions = computed(() =>
 const selectedSource = computed(() =>
   mediaStore.mediaSources.find((source) => source.id === selectedSourceId.value),
 );
-const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled));
+const canRunScan = computed(() => authStore.hasPermission("scan:run"));
+const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled && canRunScan.value));
+const scanPermissionTitle = computed(() => (canRunScan.value ? "" : messages.auth.permissionDenied));
 const scanModeSuggestion = computed(() => mediaStore.scanModeSuggestion);
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
@@ -163,6 +170,11 @@ function openScanLog(row: { error_message?: string | null }) {
   scanLogDialogVisible.value = true;
 }
 
+function openScanOperationLog(row: { id: number }) {
+  selectedOperationLogTaskId.value = row.id;
+  operationLogVisible.value = true;
+}
+
 onMounted(async () => {
   await mediaStore.loadMediaSources();
   const routeSourceId = Number(route.query.media_source_id);
@@ -223,6 +235,7 @@ watch(selectedSourceId, async (value) => {
         type="primary"
         :icon="VideoPlay"
         :disabled="!canStartScan"
+        :title="scanPermissionTitle"
         :loading="mediaStore.loading"
         @click="startScan"
       >
@@ -344,11 +357,10 @@ watch(selectedSourceId, async (value) => {
               <el-tooltip :content="messages.scanJobs.viewLogs" placement="top">
                 <el-button
                   class="table-action-button action-view"
-                  :disabled="!row.error_message"
                   :icon="Notebook"
                   text
                   circle
-                  @click="openScanLog(row)"
+                  @click="openScanOperationLog(row)"
                 />
               </el-tooltip>
             </div>
@@ -367,5 +379,11 @@ watch(selectedSourceId, async (value) => {
         <el-button @click="scanLogDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>
     </el-dialog>
+    <OperationLogDrawer
+      v-model:visible="operationLogVisible"
+      task-type="scan_job"
+      :task-id="selectedOperationLogTaskId"
+      :title="messages.operationLogs.scanTitle"
+    />
   </ListPageLayout>
 </template>

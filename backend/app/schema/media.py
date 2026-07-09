@@ -191,3 +191,35 @@ class RenameOperation:
     created_at: str
     updated_at: str
     items: list[RenameOperationItem]
+
+
+@dataclass(frozen=True)
+class RenameRollbackItem:
+    """One item in a rename rollback plan."""
+
+    id: int
+    plan_id: int
+    operation_item_id: int
+    current_path: str
+    rollback_path: str
+    status: str
+    message: str | None
+    executed_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class RenameRollbackPlan:
+    """Rollback plan for one completed rename operation."""
+
+    id: int
+    operation_id: int
+    status: str
+    item_count: int
+    executable_count: int
+    conflict_count: int
+    created_by: str | None
+    created_at: str
+    updated_at: str
+    items: list[RenameRollbackItem]

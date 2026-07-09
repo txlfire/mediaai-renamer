@@ -1,8 +1,9 @@
 """扫描任务 API。"""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
 from app.service.scan_service import (
     SCAN_MODE_FULL,
     get_scan_mode_suggestion,
@@ -22,7 +23,11 @@ class ScanJobCreateRequest(BaseModel):
 
 
 @router.post("/scan-jobs")
-def create_scan_job(payload: ScanJobCreateRequest, request: Request):
+def create_scan_job(
+    payload: ScanJobCreateRequest,
+    request: Request,
+    _current_user=Depends(require_permission("scan:run")),
+):
     """创建并执行全量扫描任务。"""
 
     try:

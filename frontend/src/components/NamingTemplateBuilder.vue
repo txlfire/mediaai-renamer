@@ -29,6 +29,7 @@ const props = defineProps<{
   episodeElements: NamingTemplateElement[];
   separator: string;
   loading?: boolean;
+  saveDisabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -292,7 +293,7 @@ onBeforeUnmount(() => {
       <div class="naming-builder-actions">
         <el-button :loading="loading" @click="resetCurrentPreset">{{ text.resetCurrentPreset }}</el-button>
         <el-button :loading="loading" @click="emit('refresh')">{{ messages.common.refresh }}</el-button>
-        <el-button type="primary" :loading="loading" @click="emit('save')">{{ messages.common.save }}</el-button>
+        <el-button type="primary" :loading="loading" :disabled="saveDisabled" @click="emit('save')">{{ messages.common.save }}</el-button>
       </div>
     </div>
 

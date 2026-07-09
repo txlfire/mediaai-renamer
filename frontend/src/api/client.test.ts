@@ -1,30 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   apiClient,
+  bootstrapAdmin,
+  changePassword,
+  fetchCurrentUser,
+  getAuthToken,
   applyAiParseCandidate,
   applyRenamePreviewMetadataCandidate,
   bulkDeleteMediaSources,
   clearPendingFiles,
   createMediaSource,
   createRenameDryRun,
+  createRenameRollbackPlan,
   createScanJob,
+  createUser,
   deleteMediaSource,
   executeRenameOperation,
+  executeRenameRollbackPlan,
+  fetchAuditEvents,
   fetchSettings,
   fetchLocalDirectories,
   fetchLogs,
   fetchMediaFiles,
   fetchMediaSourceDirectories,
   fetchMediaSources,
+  fetchOperationLogs,
   fetchSharedProtocolCapabilities,
+  fetchTasks,
   fetchPendingFiles,
+  fetchUsers,
   fetchRenameOperation,
+  fetchRenameRollbackPlan,
+  fetchRenameRollbackPlans,
   fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
   fetchScanJobs,
   generateRenamePreviews,
   getHealth,
+  login,
+  logout,
   matchRenamePreviewMetadata,
   matchRenamePreviewsMetadataWithAiFallback,
   matchAllUnmatchedMetadataWithAiFallback,
@@ -32,7 +47,11 @@ import {
   parseRenamePreviewWithAi,
   parseRenamePreviewsWithAi,
   parsePendingFileWithAi,
+  dryRunRenameRollbackPlan,
   removePendingFile,
+  cleanupOperationLogs,
+  resetAdminPassword,
+  resetUserPassword,
   setMediaSourceEnabled,
   diffNamingTemplate,
   fetchNamingTemplateBundle,
@@ -44,8 +63,20 @@ import {
   updateSettings,
   updateMediaSource,
   updateRenamePreview,
+  updateUser,
   type ApiHttpClient,
+  type AuthUser,
 } from "./client";
+
+function installLocalStorageMock() {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    clear: () => storage.clear(),
+    getItem: (key: string) => storage.get(key) ?? null,
+    removeItem: (key: string) => storage.delete(key),
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+}
 
 describe("getHealth", () => {
   it("uses the API base path for backend requests", () => {
@@ -81,6 +112,102 @@ describe("getHealth", () => {
     };
 
     await expect(getHealth(httpClient)).rejects.toThrow("network down");
+  });
+});
+
+describe("auth API client", () => {
+  beforeEach(() => {
+    installLocalStorageMock();
+    localStorage.clear();
+  });
+
+  it("uses auth endpoints and persists token after login", async () => {
+    const calls: string[] = [];
+    const user: AuthUser = {
+      id: 1,
+      username: "admin",
+      displayName: "系统管理员",
+      enabled: true,
+      permissions: ["settings:write"],
+      mustChangePassword: false,
+      passwordChangedAt: null,
+      lastLoginAt: null,
+      createdAt: "2026-07-09T00:00:00+00:00",
+      updatedAt: "2026-07-09T00:00:00+00:00",
+    };
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return { data: user as T };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        if (url === "/auth/login") {
+          return {
+            data: {
+              accessToken: "token-123",
+              tokenType: "bearer",
+              expiresAt: "2026-07-09T00:00:00+00:00",
+              user,
+            } as T,
+          };
+        }
+        return { data: user as T };
+      },
+      put: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`PUT ${url}:${JSON.stringify(body)}`);
+        return { data: user as T };
+      },
+    };
+
+    await bootstrapAdmin(
+      { username: "admin", displayName: "系统管理员", password: "ChangeMe123!" },
+      httpClient,
+    );
+    const loginResult = await login({ username: "admin", password: "ChangeMe123!" }, httpClient);
+    expect(getAuthToken()).toBe("token-123");
+    await fetchCurrentUser(httpClient);
+    await changePassword({ currentPassword: "123456", newPassword: "ChangeMe123!" }, httpClient);
+    await resetAdminPassword(httpClient);
+    await fetchUsers(httpClient);
+    await createUser(
+      {
+        username: "viewer",
+        displayName: "只读用户",
+        password: "Viewer123!",
+        permissions: ["source:write"],
+        enabled: true,
+      },
+      httpClient,
+    );
+    await updateUser(
+      2,
+      {
+        displayName: "媒体源维护",
+        permissions: ["source:write", "scan:run"],
+        enabled: false,
+      },
+      httpClient,
+    );
+    await resetUserPassword(2, { password: "Viewer456!" }, httpClient);
+    await fetchAuditEvents({ event_type: "auth.login", page: 1, page_size: 20 }, httpClient);
+    await logout(httpClient);
+
+    expect(loginResult.user.username).toBe("admin");
+    expect(getAuthToken()).toBe(null);
+    expect(calls).toEqual([
+      'POST /auth/bootstrap-admin:{"username":"admin","displayName":"系统管理员","password":"ChangeMe123!"}',
+      'POST /auth/login:{"username":"admin","password":"ChangeMe123!"}',
+      "GET /auth/me",
+      'POST /auth/change-password:{"currentPassword":"123456","newPassword":"ChangeMe123!"}',
+      "POST /auth/reset-admin-password:{}",
+      "GET /users",
+      'POST /users:{"username":"viewer","displayName":"只读用户","password":"Viewer123!","permissions":["source:write"],"enabled":true}',
+      'PUT /users/2:{"displayName":"媒体源维护","permissions":["source:write","scan:run"],"enabled":false}',
+      'POST /users/2/reset-password:{"password":"Viewer456!"}',
+      "GET /audit-events?event_type=auth.login&page=1&page_size=20",
+      "POST /auth/logout:{}",
+    ]);
   });
 });
 
@@ -288,12 +415,28 @@ describe("media source API client", () => {
     await fetchScanJobs({ media_source_id: 1 }, httpClient);
     await fetchMediaFiles({ media_source_id: 1, scan_job_id: 2 }, httpClient);
     await fetchLogs(httpClient);
+    await fetchOperationLogs({ task_type: "scan_job", task_id: 2, after_id: 5, limit: 100 }, httpClient);
+    await cleanupOperationLogs(httpClient);
+    await fetchTasks(
+      {
+        task_type: "scan_job",
+        status: "completed",
+        media_source_id: 1,
+        start_at: "2026-07-09T00:00:00+08:00",
+        end_at: "2026-07-09T23:59:59+08:00",
+        limit: 50,
+      },
+      httpClient,
+    );
 
     expect(calls).toEqual([
       'POST /scan-jobs:{"media_source_id":1,"scan_mode":"full"}',
       "GET /scan-jobs?media_source_id=1",
       "GET /media-files?media_source_id=1&scan_job_id=2",
       "GET /logs",
+      "GET /operation-logs?task_type=scan_job&task_id=2&after_id=5&limit=100",
+      "POST /operation-logs/cleanup:{}",
+      "GET /tasks?task_type=scan_job&status=completed&media_source_id=1&start_at=2026-07-09T00%3A00%3A00%2B08%3A00&end_at=2026-07-09T23%3A59%3A59%2B08%3A00&limit=50",
     ]);
   });
 });
@@ -392,11 +535,21 @@ describe("rename operation API client", () => {
     await createRenameDryRun([1, 2], httpClient);
     await fetchRenameOperation(10, httpClient);
     await executeRenameOperation(10, httpClient);
+    await createRenameRollbackPlan(10, httpClient);
+    await fetchRenameRollbackPlans(10, httpClient);
+    await fetchRenameRollbackPlan(20, httpClient);
+    await dryRunRenameRollbackPlan(20, httpClient);
+    await executeRenameRollbackPlan(20, httpClient);
 
     expect(calls).toEqual([
       'POST /rename-operations/dry-run:{"rename_preview_ids":[1,2]}',
       "GET /rename-operations/10",
       "POST /rename-operations/10/execute:{}",
+      "POST /rename-operations/10/rollback-plan:{}",
+      "GET /rename-rollback-plans?operation_id=10",
+      "GET /rename-rollback-plans/20",
+      "POST /rename-rollback-plans/20/dry-run:{}",
+      "POST /rename-rollback-plans/20/execute:{}",
     ]);
   });
 });

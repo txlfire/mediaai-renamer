@@ -9,7 +9,8 @@ export type PaginationKey =
   | "scan-jobs"
   | "scan-results"
   | "rename-previews"
-  | "metadata-candidates";
+  | "metadata-candidates"
+  | "task-governance";
 
 type PaginationState = {
   currentPage: number;

@@ -66,7 +66,7 @@ class ExternalSubmissionBlocksApiTest(unittest.TestCase):
             data = response.json()
             self.assertEqual("ignored", data["status"])
             self.assertEqual("不进行匹配", data["user_decision"])
-            self.assertEqual("admin", data["operator"])
+            self.assertEqual("system", data["operator"])
             self.assertIsNotNone(data["decided_at"])
 
     def test_override_submission_requires_reason(self):

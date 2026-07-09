@@ -50,15 +50,35 @@ class ScanSettings:
 
 
 @dataclass(frozen=True)
+class AuthSettings:
+    """认证配置。
+
+    Attributes:
+        default_admin_enabled: 是否在用户表为空时自动创建默认 admin。
+        default_admin_username: 默认管理员用户名。
+        default_admin_display_name: 默认管理员显示名称。
+        default_admin_password: 默认管理员初始密码。
+        admin_password_reset_enabled: 是否启用隐藏的 admin 密码重置接口。
+    """
+
+    default_admin_enabled: bool = False
+    default_admin_username: str = "admin"
+    default_admin_display_name: str = "系统管理员"
+    default_admin_password: str = "123456"
+    admin_password_reset_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class AppSettings:
     """应用运行配置。"""
 
     app_name: str = "MediaAI Renamer"
-    version: str = "0.8.0"
+    version: str = "0.9.0"
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()
     scan: ScanSettings = ScanSettings()
+    auth: AuthSettings = AuthSettings()
 
 
 DEFAULT_CONFIG_PATH = Path("config/config.toml")
@@ -84,6 +104,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
     paths_config = config.get("paths", {})
     logging_config = config.get("logging", {})
     scan_config = config.get("scan", {})
+    auth_config = config.get("auth", {})
 
     data_dir = Path(str(paths_config.get("data_dir", AppSettings.data_dir)))
     database_path = Path(str(paths_config.get("database_path", data_dir / "mediaai.sqlite3")))
@@ -101,6 +122,29 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
             scan_config.get("batch_interval_seconds", ScanSettings.batch_interval_seconds)
         ),
     )
+    auth = AuthSettings(
+        default_admin_enabled=bool(
+            auth_config.get("default_admin_enabled", AuthSettings.default_admin_enabled)
+        ),
+        default_admin_username=str(
+            auth_config.get("default_admin_username", AuthSettings.default_admin_username)
+        ),
+        default_admin_display_name=str(
+            auth_config.get(
+                "default_admin_display_name",
+                AuthSettings.default_admin_display_name,
+            )
+        ),
+        default_admin_password=str(
+            auth_config.get("default_admin_password", AuthSettings.default_admin_password)
+        ),
+        admin_password_reset_enabled=bool(
+            auth_config.get(
+                "admin_password_reset_enabled",
+                AuthSettings.admin_password_reset_enabled,
+            )
+        ),
+    )
 
     return AppSettings(
         app_name=str(app_config.get("name", AppSettings.app_name)),
@@ -109,4 +153,5 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         database_path=database_path,
         logging=logging,
         scan=scan,
+        auth=auth,
     )

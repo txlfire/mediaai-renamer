@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
+from app.service.audit_service import record_audit_event, sanitize_audit_detail
 from app.service.media_source_service import (
     bulk_delete_media_sources,
     create_media_source,
@@ -75,6 +77,19 @@ class MediaSourceConnectionTestRequest(BaseModel):
     local_mount_path: str | None = None
 
 
+def _audit_request_context(request: Request) -> dict[str, str | None]:
+    return {
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+    }
+
+
+def _model_payload(model: BaseModel) -> dict[str, object]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
+
+
 @router.get("")
 def list_sources(request: Request):
     return list_media_sources(request.app.state.settings)
@@ -127,9 +142,13 @@ def test_source_connection(source_id: int, request: Request):
 
 
 @router.post("")
-def create_source(payload: MediaSourceCreateRequest, request: Request):
+def create_source(
+    payload: MediaSourceCreateRequest,
+    request: Request,
+    current_user=Depends(require_permission("source:write")),
+):
     try:
-        return create_media_source(
+        result = create_media_source(
             request.app.state.settings,
             payload.name,
             payload.path,
@@ -150,12 +169,32 @@ def create_source(payload: MediaSourceCreateRequest, request: Request):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    source = result.get("source", result) if isinstance(result, dict) else result
+    source_id = source.get("id") if isinstance(source, dict) else None
+    record_audit_event(
+        request.app.state.settings,
+        event_type="media_source.change",
+        action="create_media_source",
+        result="success",
+        summary=f"新增媒体源：{payload.name}",
+        target_type="media_source",
+        target_id=source_id,
+        actor=current_user,
+        detail=sanitize_audit_detail(_model_payload(payload)),
+        **_audit_request_context(request),
+    )
+    return result
 
 
 @router.put("/{source_id}")
-def update_source(source_id: int, payload: MediaSourceUpdateRequest, request: Request):
+def update_source(
+    source_id: int,
+    payload: MediaSourceUpdateRequest,
+    request: Request,
+    current_user=Depends(require_permission("source:write")),
+):
     try:
-        return update_media_source(
+        result = update_media_source(
             request.app.state.settings,
             source_id,
             payload.name,
@@ -169,6 +208,19 @@ def update_source(source_id: int, payload: MediaSourceUpdateRequest, request: Re
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        request.app.state.settings,
+        event_type="media_source.change",
+        action="update_media_source",
+        result="success",
+        summary=f"更新媒体源：{payload.name}",
+        target_type="media_source",
+        target_id=source_id,
+        actor=current_user,
+        detail=sanitize_audit_detail(_model_payload(payload)),
+        **_audit_request_context(request),
+    )
+    return result
 
 
 @router.patch("/{source_id}/enabled")
@@ -176,28 +228,75 @@ def update_source_enabled(
     source_id: int,
     payload: MediaSourceEnabledRequest,
     request: Request,
+    current_user=Depends(require_permission("source:write")),
 ):
     try:
-        return set_media_source_enabled(
+        result = set_media_source_enabled(
             request.app.state.settings,
             source_id,
             payload.enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        request.app.state.settings,
+        event_type="media_source.change",
+        action="set_media_source_enabled",
+        result="success",
+        summary=f"{'启用' if payload.enabled else '停用'}媒体源：{source_id}",
+        target_type="media_source",
+        target_id=source_id,
+        actor=current_user,
+        detail={"enabled": payload.enabled},
+        **_audit_request_context(request),
+    )
+    return result
 
 
 @router.delete("/{source_id}")
-def remove_source(source_id: int, request: Request):
+def remove_source(
+    source_id: int,
+    request: Request,
+    current_user=Depends(require_permission("source:write")),
+):
     try:
-        return delete_media_source(request.app.state.settings, source_id)
+        result = delete_media_source(request.app.state.settings, source_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        request.app.state.settings,
+        event_type="media_source.change",
+        action="delete_media_source",
+        result="success",
+        summary=f"删除媒体源：{source_id}",
+        target_type="media_source",
+        target_id=source_id,
+        actor=current_user,
+        detail=result if isinstance(result, dict) else None,
+        **_audit_request_context(request),
+    )
+    return result
 
 
 @router.post("/bulk-delete")
-def remove_sources(payload: MediaSourceBulkDeleteRequest, request: Request):
+def remove_sources(
+    payload: MediaSourceBulkDeleteRequest,
+    request: Request,
+    current_user=Depends(require_permission("source:write")),
+):
     try:
-        return bulk_delete_media_sources(request.app.state.settings, payload.ids)
+        result = bulk_delete_media_sources(request.app.state.settings, payload.ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        request.app.state.settings,
+        event_type="media_source.change",
+        action="bulk_delete_media_sources",
+        result="success",
+        summary=f"批量删除媒体源：{len(payload.ids)} 个",
+        target_type="media_source",
+        actor=current_user,
+        detail={"ids": payload.ids, "result": result},
+        **_audit_request_context(request),
+    )
+    return result
