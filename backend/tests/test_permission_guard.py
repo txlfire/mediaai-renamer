@@ -184,6 +184,28 @@ class PermissionGuardTest(unittest.TestCase):
             self.assertEqual(403, forbidden_response.status_code)
             self.assertEqual(400, allowed_response.status_code)
 
+    def test_rollback_execute_requires_rollback_permission_after_bootstrap(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            client = self.build_client(root)
+            token = self.bootstrap_and_login(client)
+
+            unauthenticated_response = client.post("/api/rename-rollback-plans/999/execute")
+            self.update_permissions(root, ["settings:write"])
+            forbidden_response = client.post(
+                "/api/rename-rollback-plans/999/execute",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.update_permissions(root, ["rollback:execute"])
+            allowed_response = client.post(
+                "/api/rename-rollback-plans/999/execute",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            self.assertEqual(401, unauthenticated_response.status_code)
+            self.assertEqual(403, forbidden_response.status_code)
+            self.assertEqual(400, allowed_response.status_code)
+
     def test_external_submission_override_requires_metadata_permission_after_bootstrap(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             root = Path(temp_dir)
