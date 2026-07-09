@@ -11,14 +11,17 @@ import {
   VideoCamera,
 } from "@element-plus/icons-vue";
 import { computed, onMounted, onUnmounted } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import LogDrawer from "./components/LogDrawer.vue";
 import { zhCnMessages as messages } from "./locales/zh-CN";
 import { useAppStore } from "./stores/app";
+import { useAuthStore } from "./stores/auth";
 
 const appStore = useAppStore();
+const authStore = useAuthStore();
 const route = useRoute();
+const router = useRouter();
 
 const menuItems = [
   { path: "/media-sources", label: messages.app.menu.mediaSources, icon: FolderOpened },
@@ -29,6 +32,8 @@ const menuItems = [
 ];
 
 const isDarkTheme = computed(() => appStore.resolvedTheme === "dark");
+const isPublicPage = computed(() => Boolean(route.meta.public));
+const currentUserName = computed(() => authStore.currentUser?.displayName || authStore.currentUser?.username || "");
 const versionText = computed(() => `${messages.app.previewVersion} v${appStore.health?.version ?? "0.1.0"}`);
 
 const connectionLabel = computed(() => {
@@ -59,20 +64,36 @@ function toggleLightDarkTheme() {
   appStore.setThemeMode(isDarkTheme.value ? "light" : "dark");
 }
 
+async function logout() {
+  await authStore.logout();
+  await router.replace("/login");
+}
+
+function handleAuthExpired() {
+  authStore.clearSession(messages.auth.sessionExpired);
+  if (route.path !== "/login") {
+    void router.replace({ path: "/login", query: { redirect: route.fullPath } });
+  }
+}
+
 onMounted(() => {
   appStore.loadSidebarCollapsed();
   appStore.loadThemeMode();
   void appStore.refreshHealth();
+  void authStore.loadStoredSession();
+  window.addEventListener("mediaai:auth-expired", handleAuthExpired);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateSystemTheme);
 });
 
 onUnmounted(() => {
+  window.removeEventListener("mediaai:auth-expired", handleAuthExpired);
   window.matchMedia("(prefers-color-scheme: dark)").removeEventListener("change", updateSystemTheme);
 });
 </script>
 
 <template>
-  <div class="app-layout" :class="{ 'is-collapsed': appStore.sidebarCollapsed }">
+  <RouterView v-if="isPublicPage" />
+  <div v-else class="app-layout" :class="{ 'is-collapsed': appStore.sidebarCollapsed }">
     <aside class="app-sidebar">
       <el-tooltip :content="sidebarToggleLabel" placement="right">
         <button type="button" class="brand-block" :aria-label="sidebarToggleLabel" @click="appStore.toggleSidebar">
@@ -129,10 +150,10 @@ onUnmounted(() => {
           </el-tooltip>
         </div>
 
-        <el-button class="logout-button" :icon="SwitchButton" text>
+        <el-button class="logout-button" :icon="SwitchButton" text :loading="authStore.loading" @click="logout">
           <template v-if="!appStore.sidebarCollapsed">
             <span class="logout-text">{{ messages.app.logout }}</span>
-            <span class="user-name">{{ messages.app.userName }}</span>
+            <span class="user-name">{{ currentUserName || messages.auth.loginRequired }}</span>
           </template>
         </el-button>
       </div>

@@ -2,9 +2,10 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
 from app.service.external_submission_guard import (
     list_external_submission_blocks,
     update_external_submission_block_decision,
@@ -51,6 +52,7 @@ def update_external_submission_block(
     block_id: int,
     payload: UpdateExternalSubmissionBlockRequest,
     request: Request,
+    current_user=Depends(require_permission("metadata:submit")),
 ):
     """Update one external submission block decision."""
 
@@ -61,7 +63,7 @@ def update_external_submission_block(
             status=payload.status,
             user_decision=payload.user_decision,
             override_reason=payload.override_reason,
-            operator="admin",
+            operator=current_user.username if current_user is not None else "system",
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

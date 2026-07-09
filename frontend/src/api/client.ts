@@ -8,6 +8,35 @@ export type HealthStatus = {
   status: "ok" | string;
 };
 
+export type AuthUser = {
+  id: number;
+  username: string;
+  displayName: string;
+  enabled: boolean;
+  permissions: string[];
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BootstrapAdminPayload = {
+  username: string;
+  displayName: string;
+  password: string;
+};
+
+export type LoginPayload = {
+  username: string;
+  password: string;
+};
+
+export type LoginResult = {
+  accessToken: string;
+  tokenType: "bearer" | string;
+  expiresAt: string;
+  user: AuthUser;
+};
+
 export type ApiHttpClient = {
   get<T = unknown>(url: string): Promise<{ data: T }>;
   post?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
@@ -576,6 +605,96 @@ export const apiClient = axios.create({
   baseURL: "/api",
   timeout: 15000,
 });
+
+const AUTH_TOKEN_STORAGE_KEY = "mediaai-auth-token";
+
+function canUseLocalStorage() {
+  return typeof globalThis.localStorage !== "undefined";
+}
+
+export function getAuthToken(): string | null {
+  return canUseLocalStorage() ? globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) : null;
+}
+
+export function setAuthToken(token: string) {
+  if (canUseLocalStorage()) {
+    globalThis.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+  }
+}
+
+export function clearAuthToken() {
+  if (canUseLocalStorage()) {
+    globalThis.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  }
+}
+
+apiClient.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      clearAuthToken();
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("mediaai:auth-expired"));
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
+export async function bootstrapAdmin(
+  payload: BootstrapAdminPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuthUser> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AuthUser>("/auth/bootstrap-admin", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function login(
+  payload: LoginPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<LoginResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<LoginResult>("/auth/login", payload);
+    setAuthToken(response.data.accessToken);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function logout(httpClient: ApiHttpClient = apiClient): Promise<void> {
+  const post = requirePost(httpClient);
+  try {
+    await post("/auth/logout", {});
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  } finally {
+    clearAuthToken();
+  }
+}
+
+export async function fetchCurrentUser(httpClient: ApiHttpClient = apiClient): Promise<AuthUser> {
+  try {
+    const response = await httpClient.get<AuthUser>("/auth/me");
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
 
 export async function getHealth(httpClient: ApiHttpClient = apiClient): Promise<HealthStatus> {
   try {

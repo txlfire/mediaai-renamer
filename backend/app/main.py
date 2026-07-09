@@ -5,6 +5,7 @@
 
 from fastapi import FastAPI
 
+from app.api.auth import router as auth_router
 from app.api.health import router as health_router
 from app.api.external_submission_blocks import router as external_submission_blocks_router
 from app.api.logs import router as logs_router
@@ -44,6 +45,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     app = FastAPI(title=settings.app_name, version=settings.version)
     app.state.settings = settings
+    app.include_router(auth_router)
     app.include_router(health_router)
     app.include_router(media_sources_router)
     app.include_router(shared_protocols_router)

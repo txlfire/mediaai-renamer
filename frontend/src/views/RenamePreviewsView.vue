@@ -20,6 +20,7 @@ import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "../stores/auth";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
@@ -42,6 +43,7 @@ import {
 } from "../utils/renameSelection";
 
 const mediaStore = useMediaStore();
+const authStore = useAuthStore();
 const previewStore = usePreviewStore();
 const pendingFileStore = usePendingFileStore();
 const renameOperationStore = useRenameOperationStore();
@@ -49,6 +51,10 @@ const settingsStore = useSettingsStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
 const route = useRoute();
+const canSubmitMetadata = computed(() => authStore.hasPermission("metadata:submit"));
+const canExecuteRename = computed(() => authStore.hasPermission("rename:execute"));
+const metadataPermissionTitle = computed(() => (canSubmitMetadata.value ? "" : messages.auth.permissionDenied));
+const renamePermissionTitle = computed(() => (canExecuteRename.value ? "" : messages.auth.permissionDenied));
 
 const editDialogVisible = ref(false);
 const operationDialogVisible = ref(false);
@@ -1195,7 +1201,8 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="Connection"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !canSubmitMetadata"
+                :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.tmdbMatch"
                 class="action-split-main"
                 @click="matchSelectedTmdbOnly"
@@ -1204,7 +1211,7 @@ onMounted(async () => {
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading"
+                :disabled="previewStore.loading || !canSubmitMetadata"
                 @command="handleTmdbDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1212,9 +1219,9 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_tmdb">{{ messages.renamePreviews.tmdbMatchAll }}</el-dropdown-item>
-                    <el-dropdown-item command="selected_tmdb_ai" :disabled="!aiBatchReady">{{ messages.renamePreviews.tmdbAiFallbackSelected }}</el-dropdown-item>
-                    <el-dropdown-item command="all_tmdb_ai" :disabled="!aiBatchReady">{{ messages.renamePreviews.tmdbAiFallbackAll }}</el-dropdown-item>
+                    <el-dropdown-item command="all_tmdb" :disabled="!canSubmitMetadata">{{ messages.renamePreviews.tmdbMatchAll }}</el-dropdown-item>
+                    <el-dropdown-item command="selected_tmdb_ai" :disabled="!aiBatchReady || !canSubmitMetadata">{{ messages.renamePreviews.tmdbAiFallbackSelected }}</el-dropdown-item>
+                    <el-dropdown-item command="all_tmdb_ai" :disabled="!aiBatchReady || !canSubmitMetadata">{{ messages.renamePreviews.tmdbAiFallbackAll }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1222,7 +1229,8 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="MagicStick"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !aiBatchReady"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !aiBatchReady || !canSubmitMetadata"
+                :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchSelected"
                 class="action-split-main"
                 @click="parseSelectedWithAiFromToolbar"
@@ -1231,7 +1239,7 @@ onMounted(async () => {
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading"
+                :disabled="previewStore.loading || !canSubmitMetadata"
                 @command="handleAiDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1239,7 +1247,7 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewStore.previews.length === 0">
+                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewStore.previews.length === 0 || !canSubmitMetadata">
                       {{ messages.renamePreviews.aiParse.batchAll }}
                     </el-dropdown-item>
                   </el-dropdown-menu>
@@ -1250,7 +1258,8 @@ onMounted(async () => {
               <el-button
                 type="success"
                 :icon="Select"
-                :disabled="selectedPreviewIds.length === 0"
+                :disabled="selectedPreviewIds.length === 0 || !canExecuteRename"
+                :title="renamePermissionTitle"
                 :loading="renameOperationStore.loading && !operationProgressVisible"
                 class="action-split-main"
                 @click="executeSelectedPreviews"
@@ -1259,7 +1268,7 @@ onMounted(async () => {
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.previews.length === 0"
+                :disabled="previewStore.previews.length === 0 || !canExecuteRename"
                 @command="handleRenameDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1267,7 +1276,7 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_rename">{{ messages.renamePreviews.executeAll }}</el-dropdown-item>
+                    <el-dropdown-item command="all_rename" :disabled="!canExecuteRename">{{ messages.renamePreviews.executeAll }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1483,6 +1492,7 @@ onMounted(async () => {
           :icon="Connection"
           text
           circle
+          :disabled="!canSubmitMetadata"
           @click.stop="matchMetadata(row)"
           />
           </el-tooltip>
@@ -1493,7 +1503,7 @@ onMounted(async () => {
           text
           circle
           :loading="aiParsingPreviewId === row.id"
-          :disabled="previewStore.loading && aiParsingPreviewId !== row.id"
+          :disabled="!canSubmitMetadata || (previewStore.loading && aiParsingPreviewId !== row.id)"
           @click.stop="parseSingleWithAi(row)"
           />
           </el-tooltip>
@@ -1503,6 +1513,7 @@ onMounted(async () => {
           :icon="MagicStick"
           text
           circle
+          :disabled="!canSubmitMetadata"
           @click.stop="openMetadataBackfill(row)"
           />
           </el-tooltip>
@@ -1524,6 +1535,7 @@ onMounted(async () => {
           :icon="Select"
           text
           circle
+          :disabled="!canExecuteRename"
           @click.stop="executeSinglePreview(row)"
           />
           </el-tooltip>
@@ -1962,7 +1974,8 @@ onMounted(async () => {
         <el-button
           v-if="!operationHasExecuted"
           type="danger"
-          :disabled="!renameOperationStore.canExecute"
+          :disabled="!renameOperationStore.canExecute || !canExecuteRename"
+          :title="renamePermissionTitle"
           :loading="renameOperationStore.loading"
           @click="executeRenameOperation"
         >

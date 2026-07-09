@@ -27,6 +27,7 @@ import {
 import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "../stores/auth";
 import { useSettingsStore } from "../stores/settings";
 import { getAiProviderDefaults } from "../utils/aiProviderDefaults";
 import { formatDateTime } from "../utils/displayFormat";
@@ -40,8 +41,11 @@ import {
 import { formatSensitiveWordsInput, parseSensitiveWordsInput } from "../utils/sensitiveWords";
 
 const settingsStore = useSettingsStore();
+const authStore = useAuthStore();
 const activeCategory = ref("tmdb");
 const pageText = messages.settings;
+const settingsWriteDisabled = computed(() => !authStore.hasPermission("settings:write"));
+const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? messages.auth.permissionDenied : ""));
 const movieNamingElements = ref<NamingTemplateElement[]>([]);
 const episodeNamingElements = ref<NamingTemplateElement[]>([]);
 const imdbCardCollapsed = ref(localStorage.getItem("settings.imdb.cardCollapsed") !== "false");
@@ -1872,7 +1876,7 @@ onMounted(async () => {
             <el-button :loading="settingsStore.loading" @click="testTmdbConnection">
               {{ pageText.tmdb.testConnection }}
             </el-button>
-            <el-button type="primary" :loading="settingsStore.loading" @click="saveTmdbSettings">
+            <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveTmdbSettings">
               {{ messages.common.save }}
             </el-button>
             </div>
@@ -1984,7 +1988,7 @@ onMounted(async () => {
               <el-button :loading="settingsStore.loading || testingImdb" @click="testImdbConnection">
                 {{ pageText.imdb.testConnection }}
               </el-button>
-              <el-button type="primary" :loading="settingsStore.loading" @click="saveImdbSettings">
+              <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveImdbSettings">
                 {{ messages.common.save }}
               </el-button>
             </div>
@@ -2091,7 +2095,7 @@ onMounted(async () => {
                   <el-button size="small" :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
                     {{ messages.common.refresh }}
                   </el-button>
-                  <el-button type="primary" size="small" :loading="settingsStore.loading" @click="savePrivacySettings">
+                  <el-button type="primary" size="small" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="savePrivacySettings">
                     {{ messages.common.save }}
                   </el-button>
                 </div>
@@ -2254,7 +2258,7 @@ onMounted(async () => {
                     <span class="setting-source">{{ pageText.ai.profileHint }}</span>
                   </div>
                 </div>
-                <el-button size="small" @click="createAiProfile">
+                <el-button size="small" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="createAiProfile">
                   {{ pageText.ai.newProfile }}
                 </el-button>
               </div>
@@ -2316,6 +2320,7 @@ onMounted(async () => {
                           :icon="Delete"
                           text
                           circle
+                          :disabled="settingsWriteDisabled"
                           @click="deleteAiProfile(row)"
                         />
                       </el-tooltip>
@@ -2377,7 +2382,7 @@ onMounted(async () => {
               <el-button :loading="settingsStore.loading || testingAi" @click="testAiConnection">
                 {{ pageText.ai.testConnection }}
               </el-button>
-              <el-button type="primary" :loading="settingsStore.loading" @click="saveAiSettings">
+              <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveAiSettings">
                 {{ messages.common.save }}
               </el-button>
             </div>
@@ -2473,7 +2478,7 @@ onMounted(async () => {
             <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
               {{ messages.common.refresh }}
             </el-button>
-            <el-button type="primary" :loading="settingsStore.loading" @click="saveScanSettings">
+            <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveScanSettings">
               {{ messages.common.save }}
             </el-button>
           </div>
@@ -2485,6 +2490,7 @@ onMounted(async () => {
             v-model:episode-elements="episodeNamingElements"
             v-model:separator="form.namingSeparator"
             :loading="settingsStore.loading"
+            :save-disabled="settingsWriteDisabled"
             @refresh="refreshNamingSettings"
             @save="saveNamingSettings"
           />
@@ -2727,7 +2733,7 @@ onMounted(async () => {
             <el-button :loading="settingsStore.loading" @click="cleanupLogFiles">
               {{ pageText.operations.cleanupLogs }}
             </el-button>
-            <el-button type="primary" :loading="settingsStore.loading" @click="saveOperationSettings">
+            <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveOperationSettings">
               {{ messages.common.save }}
             </el-button>
           </div>
@@ -2777,7 +2783,7 @@ onMounted(async () => {
             <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
               {{ messages.common.refresh }}
             </el-button>
-            <el-button type="primary" :loading="settingsStore.loading" @click="saveSharedSettings">
+            <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveSharedSettings">
               {{ messages.common.save }}
             </el-button>
           </div>

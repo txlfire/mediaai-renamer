@@ -11,12 +11,14 @@ import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "../stores/auth";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime, formatScanJobStatus } from "../utils/displayFormat";
 
 const mediaStore = useMediaStore();
+const authStore = useAuthStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
 const route = useRoute();
@@ -48,7 +50,9 @@ const sourceOptions = computed(() =>
 const selectedSource = computed(() =>
   mediaStore.mediaSources.find((source) => source.id === selectedSourceId.value),
 );
-const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled));
+const canRunScan = computed(() => authStore.hasPermission("scan:run"));
+const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled && canRunScan.value));
+const scanPermissionTitle = computed(() => (canRunScan.value ? "" : messages.auth.permissionDenied));
 const scanModeSuggestion = computed(() => mediaStore.scanModeSuggestion);
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
@@ -223,6 +227,7 @@ watch(selectedSourceId, async (value) => {
         type="primary"
         :icon="VideoPlay"
         :disabled="!canStartScan"
+        :title="scanPermissionTitle"
         :loading="mediaStore.loading"
         @click="startScan"
       >

@@ -1,8 +1,9 @@
 """Safe rename operation API."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
 from app.service.rename_operation_service import (
     create_rename_dry_run,
     execute_rename_operation,
@@ -39,7 +40,11 @@ def get_operation(operation_id: int, request: Request):
 
 
 @router.post("/{operation_id}/execute")
-def execute_operation(operation_id: int, request: Request):
+def execute_operation(
+    operation_id: int,
+    request: Request,
+    _current_user=Depends(require_permission("rename:execute")),
+):
     """Execute a safe rename operation."""
 
     try:

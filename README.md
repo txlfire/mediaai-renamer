@@ -2,11 +2,11 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与安全重命名工具。项目目标是安全整理本地或服务端可访问目录中的媒体文件，并提供元数据匹配、命名规则和共享目录能力。
 
-当前版本：`0.8.0`
+当前版本：`0.8.1`
 
 最近正式发布版本：`v0.8.0`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.8.0)
 
-当前阶段：M8 已完成并准备发布 `v0.8.0`，下一阶段进入 M9 权限、历史、回滚、审计和任务治理。
+当前阶段：M8 已发布 `v0.8.0`，M9 正在开发中，已完成用户认证、直接用户权限、敏感操作守卫和前端权限联动基础。
 
 ## 当前能力
 
@@ -201,6 +201,12 @@ npm run release:publish
 - M8 开发计划：[docs/development/m8/M8-命名规则高级配置二期开发计划.md](docs/development/m8/M8-%E5%91%BD%E5%90%8D%E8%A7%84%E5%88%99%E9%AB%98%E7%BA%A7%E9%85%8D%E7%BD%AE%E4%BA%8C%E6%9C%9F%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)
 - M8 验收清单：[docs/development/m8/M8-命名规则高级配置二期验收清单.md](docs/development/m8/M8-%E5%91%BD%E5%90%8D%E8%A7%84%E5%88%99%E9%AB%98%E7%BA%A7%E9%85%8D%E7%BD%AE%E4%BA%8C%E6%9C%9F%E9%AA%8C%E6%94%B6%E6%B8%85%E5%8D%95.md)
 - M8 用户手册：[docs/manuals/M8-user-manual-cn.md](docs/manuals/M8-user-manual-cn.md)
+- M9 设计手册：[docs/design/M9-design-manual.md](docs/design/M9-design-manual.md)
+- M9 开发计划：[docs/development/m9/M9-权限历史回滚审计任务治理开发计划.md](docs/development/m9/M9-%E6%9D%83%E9%99%90%E5%8E%86%E5%8F%B2%E5%9B%9E%E6%BB%9A%E5%AE%A1%E8%AE%A1%E4%BB%BB%E5%8A%A1%E6%B2%BB%E7%90%86%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)
+- M9 验收清单：[docs/development/m9/M9-权限历史回滚审计任务治理验收清单.md](docs/development/m9/M9-%E6%9D%83%E9%99%90%E5%8E%86%E5%8F%B2%E5%9B%9E%E6%BB%9A%E5%AE%A1%E8%AE%A1%E4%BB%BB%E5%8A%A1%E6%B2%BB%E7%90%86%E9%AA%8C%E6%94%B6%E6%B8%85%E5%8D%95.md)
+- M10 设计手册：[docs/design/M10-design-manual.md](docs/design/M10-design-manual.md)
+- M10 开发计划：[docs/development/m10/M10-多站点元数据源开发计划.md](docs/development/m10/M10-%E5%A4%9A%E7%AB%99%E7%82%B9%E5%85%83%E6%95%B0%E6%8D%AE%E6%BA%90%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)
+- M10 验收清单：[docs/development/m10/M10-多站点元数据源验收清单.md](docs/development/m10/M10-%E5%A4%9A%E7%AB%99%E7%82%B9%E5%85%83%E6%95%B0%E6%8D%AE%E6%BA%90%E9%AA%8C%E6%94%B6%E6%B8%85%E5%8D%95.md)
 - M5 开发计划：[docs/development/m5/M5-NAS-SMB共享目录开发计划.md](docs/development/m5/M5-NAS-SMB共享目录开发计划.md)
 - M5 验收清单：[docs/development/m5/M5-NAS-SMB共享目录验收清单.md](docs/development/m5/M5-NAS-SMB共享目录验收清单.md)
 - M5 设计手册：[docs/design/M5-design-manual.md](docs/design/M5-design-manual.md)

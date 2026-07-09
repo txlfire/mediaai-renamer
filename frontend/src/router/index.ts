@@ -6,6 +6,9 @@
 
 import { createRouter, createWebHistory } from "vue-router";
 
+import { getAuthToken } from "../api/client";
+import { useAuthStore } from "../stores/auth";
+import LoginView from "../views/LoginView.vue";
 import MediaSourcesView from "../views/MediaSourcesView.vue";
 import RenamePreviewsView from "../views/RenamePreviewsView.vue";
 import ScanJobsView from "../views/ScanJobsView.vue";
@@ -18,6 +21,12 @@ const router = createRouter({
     {
       path: "/",
       redirect: "/media-sources",
+    },
+    {
+      path: "/login",
+      name: "login",
+      component: LoginView,
+      meta: { public: true },
     },
     {
       path: "/media-sources",
@@ -45,6 +54,30 @@ const router = createRouter({
       component: SettingsView,
     },
   ],
+});
+
+router.beforeEach(async (to) => {
+  const authStore = useAuthStore();
+  if (to.meta.public) {
+    if (authStore.isAuthenticated && to.path === "/login") {
+      return "/media-sources";
+    }
+    return true;
+  }
+
+  if (!getAuthToken()) {
+    return { path: "/login", query: { redirect: to.fullPath } };
+  }
+
+  if (!authStore.currentUser) {
+    await authStore.loadStoredSession();
+  }
+
+  if (!authStore.isAuthenticated) {
+    return { path: "/login", query: { redirect: to.fullPath } };
+  }
+
+  return true;
 });
 
 export default router;

@@ -27,12 +27,14 @@ import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "../stores/auth";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { canGoToParentDirectory, parentDirectoryPath } from "../utils/localDirectory";
 
 const pageText = messages.mediaSources;
 
+const authStore = useAuthStore();
 const mediaStore = useMediaStore();
 const paginationStore = usePaginationStore();
 const router = useRouter();
@@ -87,6 +89,8 @@ const pagedMediaSources = computed(() =>
   paginationStore.paginate("media-sources", mediaStore.mediaSources),
 );
 const selectedIds = computed(() => selectedRows.value.map((row) => row.id));
+const canWriteSources = computed(() => authStore.hasPermission("source:write"));
+const sourcePermissionTitle = computed(() => (canWriteSources.value ? "" : messages.auth.permissionDenied));
 const pathTypeNotice = computed(() => {
   if (form.path_type === "unc") {
     return pageText.smbNotice;
@@ -586,7 +590,13 @@ onMounted(() => {
                 <span>{{ messages.common.status }}</span>
                 <el-switch v-model="form.enabled" :active-text="messages.status.enabled" :inactive-text="messages.status.disabled" />
               </div>
-              <el-button type="primary" :icon="FolderAdd" @click="submitSource">
+              <el-button
+                type="primary"
+                :icon="FolderAdd"
+                :disabled="!canWriteSources"
+                :title="sourcePermissionTitle"
+                @click="submitSource"
+              >
                 {{ messages.mediaSources.save }}
               </el-button>
               <el-button @click="resetMediaSources">{{ messages.common.reset }}</el-button>
@@ -600,7 +610,12 @@ onMounted(() => {
     <template #table>
       <div class="media-source-table-panel">
         <div class="media-source-table-toolbar">
-          <el-button :icon="Delete" :disabled="!selectedIds.length" @click="removeSelectedSources">
+          <el-button
+            :icon="Delete"
+            :disabled="!selectedIds.length || !canWriteSources"
+            :title="sourcePermissionTitle"
+            @click="removeSelectedSources"
+          >
             {{ pageText.batchRemove }}
           </el-button>
           <el-button :icon="Refresh" @click="mediaStore.loadMediaSources">{{ messages.common.refresh }}</el-button>
@@ -664,6 +679,7 @@ onMounted(() => {
                 <el-button
                   class="table-action-button action-edit"
                   :icon="Edit"
+                  :disabled="!canWriteSources"
                   text
                   circle
                   @click="openEditDialog(row)"
@@ -673,6 +689,7 @@ onMounted(() => {
                 <el-button
                   class="table-action-button action-toggle"
                   :icon="SwitchButton"
+                  :disabled="!canWriteSources"
                   text
                   circle
                   @click="toggleSource(row)"
@@ -682,6 +699,7 @@ onMounted(() => {
                 <el-button
                   class="table-action-button action-delete"
                   :icon="Delete"
+                  :disabled="!canWriteSources"
                   text
                   circle
                   @click="removeSource(row)"
@@ -755,7 +773,7 @@ onMounted(() => {
         <el-button :icon="Link" :loading="testingEditSource" @click="testEditConnection">
           {{ pageText.testConnection }}
         </el-button>
-        <el-button type="primary" @click="submitEditSource">{{ messages.common.save }}</el-button>
+        <el-button type="primary" :disabled="!canWriteSources" :title="sourcePermissionTitle" @click="submitEditSource">{{ messages.common.save }}</el-button>
       </template>
     </el-dialog>
 

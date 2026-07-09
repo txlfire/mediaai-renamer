@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
 from app.service.media_source_service import (
     bulk_delete_media_sources,
     create_media_source,
@@ -127,7 +128,11 @@ def test_source_connection(source_id: int, request: Request):
 
 
 @router.post("")
-def create_source(payload: MediaSourceCreateRequest, request: Request):
+def create_source(
+    payload: MediaSourceCreateRequest,
+    request: Request,
+    _current_user=Depends(require_permission("source:write")),
+):
     try:
         return create_media_source(
             request.app.state.settings,
@@ -153,7 +158,12 @@ def create_source(payload: MediaSourceCreateRequest, request: Request):
 
 
 @router.put("/{source_id}")
-def update_source(source_id: int, payload: MediaSourceUpdateRequest, request: Request):
+def update_source(
+    source_id: int,
+    payload: MediaSourceUpdateRequest,
+    request: Request,
+    _current_user=Depends(require_permission("source:write")),
+):
     try:
         return update_media_source(
             request.app.state.settings,
@@ -176,6 +186,7 @@ def update_source_enabled(
     source_id: int,
     payload: MediaSourceEnabledRequest,
     request: Request,
+    _current_user=Depends(require_permission("source:write")),
 ):
     try:
         return set_media_source_enabled(
@@ -188,7 +199,11 @@ def update_source_enabled(
 
 
 @router.delete("/{source_id}")
-def remove_source(source_id: int, request: Request):
+def remove_source(
+    source_id: int,
+    request: Request,
+    _current_user=Depends(require_permission("source:write")),
+):
     try:
         return delete_media_source(request.app.state.settings, source_id)
     except ValueError as exc:
@@ -196,7 +211,11 @@ def remove_source(source_id: int, request: Request):
 
 
 @router.post("/bulk-delete")
-def remove_sources(payload: MediaSourceBulkDeleteRequest, request: Request):
+def remove_sources(
+    payload: MediaSourceBulkDeleteRequest,
+    request: Request,
+    _current_user=Depends(require_permission("source:write")),
+):
     try:
         return bulk_delete_media_sources(request.app.state.settings, payload.ids)
     except ValueError as exc:

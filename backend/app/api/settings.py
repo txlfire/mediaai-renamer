@@ -1,8 +1,9 @@
 """System settings API."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.auth import require_permission
 from app.service.settings_service import (
     AI_TEST_PAGE_KEY,
     TMDB_TEST_PAGE_KEY,
@@ -99,14 +100,19 @@ def get_settings(request: Request):
 
 
 @router.put("")
-def update_settings(payload: UpdateSettingsRequest, request: Request):
+def update_settings(
+    payload: UpdateSettingsRequest,
+    request: Request,
+    current_user=Depends(require_permission("settings:write")),
+):
     """Update hot system settings."""
 
+    operator = current_user.username if current_user is not None else "system"
     try:
         return update_setting_values(
             request.app.state.settings,
             payload.values,
-            operator="admin",
+            operator=operator,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

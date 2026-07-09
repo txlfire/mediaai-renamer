@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   apiClient,
+  bootstrapAdmin,
+  fetchCurrentUser,
+  getAuthToken,
   applyAiParseCandidate,
   applyRenamePreviewMetadataCandidate,
   bulkDeleteMediaSources,
@@ -25,6 +28,8 @@ import {
   fetchScanJobs,
   generateRenamePreviews,
   getHealth,
+  login,
+  logout,
   matchRenamePreviewMetadata,
   matchRenamePreviewsMetadataWithAiFallback,
   matchAllUnmatchedMetadataWithAiFallback,
@@ -45,7 +50,18 @@ import {
   updateMediaSource,
   updateRenamePreview,
   type ApiHttpClient,
+  type AuthUser,
 } from "./client";
+
+function installLocalStorageMock() {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    clear: () => storage.clear(),
+    getItem: (key: string) => storage.get(key) ?? null,
+    removeItem: (key: string) => storage.delete(key),
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+}
 
 describe("getHealth", () => {
   it("uses the API base path for backend requests", () => {
@@ -81,6 +97,65 @@ describe("getHealth", () => {
     };
 
     await expect(getHealth(httpClient)).rejects.toThrow("network down");
+  });
+});
+
+describe("auth API client", () => {
+  beforeEach(() => {
+    installLocalStorageMock();
+    localStorage.clear();
+  });
+
+  it("uses auth endpoints and persists token after login", async () => {
+    const calls: string[] = [];
+    const user: AuthUser = {
+      id: 1,
+      username: "admin",
+      displayName: "系统管理员",
+      enabled: true,
+      permissions: ["settings:write"],
+      lastLoginAt: null,
+      createdAt: "2026-07-09T00:00:00+00:00",
+      updatedAt: "2026-07-09T00:00:00+00:00",
+    };
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        calls.push(`GET ${url}`);
+        return { data: user as T };
+      },
+      post: async <T = unknown>(url: string, body: unknown): Promise<{ data: T }> => {
+        calls.push(`POST ${url}:${JSON.stringify(body)}`);
+        if (url === "/auth/login") {
+          return {
+            data: {
+              accessToken: "token-123",
+              tokenType: "bearer",
+              expiresAt: "2026-07-09T00:00:00+00:00",
+              user,
+            } as T,
+          };
+        }
+        return { data: user as T };
+      },
+    };
+
+    await bootstrapAdmin(
+      { username: "admin", displayName: "系统管理员", password: "ChangeMe123!" },
+      httpClient,
+    );
+    const loginResult = await login({ username: "admin", password: "ChangeMe123!" }, httpClient);
+    expect(getAuthToken()).toBe("token-123");
+    await fetchCurrentUser(httpClient);
+    await logout(httpClient);
+
+    expect(loginResult.user.username).toBe("admin");
+    expect(getAuthToken()).toBe(null);
+    expect(calls).toEqual([
+      'POST /auth/bootstrap-admin:{"username":"admin","displayName":"系统管理员","password":"ChangeMe123!"}',
+      'POST /auth/login:{"username":"admin","password":"ChangeMe123!"}',
+      "GET /auth/me",
+      "POST /auth/logout:{}",
+    ]);
   });
 });
 
