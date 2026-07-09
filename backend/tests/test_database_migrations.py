@@ -106,12 +106,19 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("audit_events", tables)
             self.assertIn("rename_rollback_plans", tables)
             self.assertIn("rename_rollback_items", tables)
+            self.assertIn("operation_logs", tables)
             self.assertIn("scan_mode", scan_job_columns)
             self.assertIn("new_count", scan_job_columns)
             self.assertIn("changed_count", scan_job_columns)
             self.assertIn("skipped_count", scan_job_columns)
             self.assertIn("missing_count", scan_job_columns)
             self.assertIn("indexed_count", scan_job_columns)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                user_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(users)")
+                }
+            self.assertIn("must_change_password", user_columns)
+            self.assertIn("password_changed_at", user_columns)
 
     def test_existing_m13_database_is_migrated_to_m9_governance_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -159,6 +166,8 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("username", user_columns)
             self.assertIn("password_hash", user_columns)
             self.assertIn("permissions_json", user_columns)
+            self.assertIn("must_change_password", user_columns)
+            self.assertIn("password_changed_at", user_columns)
             self.assertNotIn("role", user_columns)
             self.assertIn("enabled", user_columns)
             self.assertIn("user_sessions", tables)
@@ -175,6 +184,82 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("rename_rollback_items", tables)
             self.assertIn("current_path", rollback_item_columns)
             self.assertIn("rollback_path", rollback_item_columns)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m14_database_is_migrated_to_admin_password_prompt_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '14')")
+                connection.execute(
+                    "CREATE TABLE users "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "username TEXT NOT NULL UNIQUE, "
+                    "display_name TEXT NOT NULL, "
+                    "password_hash TEXT NOT NULL, "
+                    "permissions_json TEXT NOT NULL, "
+                    "enabled INTEGER NOT NULL DEFAULT 1, "
+                    "last_login_at TEXT, "
+                    "created_at TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL)"
+                )
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                user_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(users)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("must_change_password", user_columns)
+            self.assertIn("password_changed_at", user_columns)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m15_database_is_migrated_to_operation_logs_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '15')")
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(operation_logs)")
+                }
+                indexes = {
+                    row[1] for row in connection.execute("PRAGMA index_list(operation_logs)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("task_type", columns)
+            self.assertIn("task_id", columns)
+            self.assertIn("level", columns)
+            self.assertIn("stage", columns)
+            self.assertIn("approx_bytes", columns)
+            self.assertIn("idx_operation_logs_task", indexes)
+            self.assertIn("idx_operation_logs_created", indexes)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
     def test_existing_m11_database_is_migrated_to_parent_title_schema(self):

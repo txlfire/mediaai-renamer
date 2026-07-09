@@ -2,11 +2,13 @@ import { defineStore } from "pinia";
 
 import {
   bootstrapAdmin,
+  changePassword as changePasswordApi,
   clearAuthToken,
   fetchCurrentUser,
   getAuthToken,
   login as loginApi,
   logout as logoutApi,
+  resetAdminPassword as resetAdminPasswordApi,
   type AuthUser,
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
@@ -70,6 +72,32 @@ export const useAuthStore = defineStore("auth", {
         this.currentUser = result.user;
       } catch (error) {
         this.clearSession(error instanceof Error ? error.message : messages.auth.bootstrapFailed);
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async changePassword(currentPassword: string, newPassword: string) {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        this.currentUser = await changePasswordApi({ currentPassword, newPassword });
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.auth.changePasswordFailed;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async resetAdminPassword() {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        await resetAdminPasswordApi();
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.auth.resetAdminPasswordFailed;
         throw error;
       } finally {
         this.loading = false;

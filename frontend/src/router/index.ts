@@ -14,6 +14,7 @@ import RenamePreviewsView from "../views/RenamePreviewsView.vue";
 import ScanJobsView from "../views/ScanJobsView.vue";
 import ScanResultsView from "../views/ScanResultsView.vue";
 import SettingsView from "../views/SettingsView.vue";
+import TaskGovernanceView from "../views/TaskGovernanceView.vue";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -47,6 +48,11 @@ const router = createRouter({
       path: "/rename-previews",
       name: "rename-previews",
       component: RenamePreviewsView,
+    },
+    {
+      path: "/tasks",
+      name: "tasks",
+      component: TaskGovernanceView,
     },
     {
       path: "/settings",

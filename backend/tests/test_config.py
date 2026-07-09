@@ -38,6 +38,13 @@ console_output = false
 [scan]
 batch_size = 7
 batch_interval_seconds = 0.5
+
+[auth]
+default_admin_enabled = true
+default_admin_username = "admin"
+default_admin_display_name = "系统管理员"
+default_admin_password = "123456"
+admin_password_reset_enabled = true
 """.strip(),
                 encoding="utf-8",
             )
@@ -55,6 +62,11 @@ batch_interval_seconds = 0.5
         self.assertFalse(settings.logging.console_output)
         self.assertEqual(7, settings.scan.batch_size)
         self.assertEqual(0.5, settings.scan.batch_interval_seconds)
+        self.assertTrue(settings.auth.default_admin_enabled)
+        self.assertEqual("admin", settings.auth.default_admin_username)
+        self.assertEqual("系统管理员", settings.auth.default_admin_display_name)
+        self.assertEqual("123456", settings.auth.default_admin_password)
+        self.assertTrue(settings.auth.admin_password_reset_enabled)
 
 
 if __name__ == "__main__":

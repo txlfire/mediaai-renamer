@@ -7,6 +7,7 @@ import { useRoute, useRouter } from "vue-router";
 import type { ScanMode } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import OperationProgressLog from "../components/OperationProgressLog.vue";
+import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
@@ -27,6 +28,8 @@ const selectedSourceId = ref<number>();
 const scanMode = ref<ScanMode>("full");
 const scanLogDialogVisible = ref(false);
 const selectedScanLog = ref("");
+const operationLogVisible = ref(false);
+const selectedOperationLogTaskId = ref<number | null>(null);
 const scanProgressVisible = ref(false);
 const scanProgressPercent = ref(0);
 const scanProgressText = ref("");
@@ -165,6 +168,11 @@ function hasScanDetail(row: { status: string; error_message?: string | null }) {
 function openScanLog(row: { error_message?: string | null }) {
   selectedScanLog.value = row.error_message || messages.common.emptyLogs;
   scanLogDialogVisible.value = true;
+}
+
+function openScanOperationLog(row: { id: number }) {
+  selectedOperationLogTaskId.value = row.id;
+  operationLogVisible.value = true;
 }
 
 onMounted(async () => {
@@ -349,11 +357,10 @@ watch(selectedSourceId, async (value) => {
               <el-tooltip :content="messages.scanJobs.viewLogs" placement="top">
                 <el-button
                   class="table-action-button action-view"
-                  :disabled="!row.error_message"
                   :icon="Notebook"
                   text
                   circle
-                  @click="openScanLog(row)"
+                  @click="openScanOperationLog(row)"
                 />
               </el-tooltip>
             </div>
@@ -372,5 +379,11 @@ watch(selectedSourceId, async (value) => {
         <el-button @click="scanLogDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>
     </el-dialog>
+    <OperationLogDrawer
+      v-model:visible="operationLogVisible"
+      task-type="scan_job"
+      :task-id="selectedOperationLogTaskId"
+      :title="messages.operationLogs.scanTitle"
+    />
   </ListPageLayout>
 </template>

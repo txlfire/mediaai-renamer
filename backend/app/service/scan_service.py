@@ -13,6 +13,15 @@ import time
 from app.core.config import AppSettings
 from app.schema.media import MediaFile, ScanJob, ScanModeSuggestion
 from app.service.media_source_service import get_media_source, get_media_source_protocol_context
+from app.service.operation_log_service import (
+    LEVEL_ERROR,
+    LEVEL_INFO,
+    LEVEL_SUCCESS,
+    LEVEL_WARNING,
+    TASK_TYPE_SCAN_JOB,
+    cleanup_operation_logs,
+    record_operation_log,
+)
 from app.service.pending_file_service import add_pending_file
 from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
@@ -356,6 +365,20 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
         )
         job_id = int(cursor.lastrowid)
         connection.commit()
+        record_operation_log(
+            settings,
+            task_type=TASK_TYPE_SCAN_JOB,
+            task_id=job_id,
+            level=LEVEL_INFO,
+            stage="scan_prepare",
+            message=f"扫描任务已创建，模式：{scan_mode}",
+            detail={
+                "media_source_id": media_source_id,
+                "source_path": str(source_path),
+                "batch_size": batch_size,
+                "minimum_file_size": minimum_file_size,
+            },
+        )
 
         scanned_count = 0
         video_count = 0
@@ -486,6 +509,24 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                     indexed_count += 1
                     video_count += 1
 
+                if scanned_count > 0 and scanned_count % batch_size == 0:
+                    record_operation_log(
+                        settings,
+                        task_type=TASK_TYPE_SCAN_JOB,
+                        task_id=job_id,
+                        level=LEVEL_INFO,
+                        stage="scan_progress",
+                        message=f"已扫描 {scanned_count} 个文件，识别视频 {video_count} 个",
+                        progress_current=scanned_count,
+                        detail={
+                            "video_count": video_count,
+                            "warning_count": warning_count,
+                            "new_count": new_count,
+                            "changed_count": changed_count,
+                            "skipped_count": skipped_count,
+                        },
+                        connection=connection,
+                    )
                 if batch_interval_seconds > 0 and scanned_count % batch_size == 0:
                     time.sleep(batch_interval_seconds)
 
@@ -502,6 +543,40 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                 detail_text = "；".join(warning_details[:5])
                 more_text = f" 等{warning_count}个文件" if warning_count > len(warning_details[:5]) else ""
                 warning_message = f"部分完成：{warning_count}个文件扫描失败（{detail_text}{more_text}）"
+                record_operation_log(
+                    settings,
+                    task_type=TASK_TYPE_SCAN_JOB,
+                    task_id=job_id,
+                    level=LEVEL_WARNING,
+                    stage="scan_summary",
+                    message=warning_message,
+                    progress_current=scanned_count,
+                    detail={
+                        "warning_count": warning_count,
+                        "warning_examples": warning_details[:10],
+                    },
+                    connection=connection,
+                )
+            record_operation_log(
+                settings,
+                task_type=TASK_TYPE_SCAN_JOB,
+                task_id=job_id,
+                level=LEVEL_SUCCESS if completed_status == "completed" else LEVEL_WARNING,
+                stage="scan_completed",
+                message=(
+                    f"扫描完成：扫描 {scanned_count} 个文件，视频 {video_count} 个，"
+                    f"新增 {new_count} 个，变更 {changed_count} 个，跳过 {skipped_count} 个"
+                ),
+                progress_current=scanned_count,
+                detail={
+                    "status": completed_status,
+                    "video_count": video_count,
+                    "warning_count": warning_count,
+                    "missing_count": missing_count,
+                    "indexed_count": indexed_count,
+                },
+                connection=connection,
+            )
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
                 "video_count = ?, warning_count = ?, new_count = ?, changed_count = ?, "
@@ -524,6 +599,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
             )
             connection.execute(f"RELEASE SAVEPOINT {scan_savepoint}")
             connection.commit()
+            cleanup_operation_logs(settings)
         except Exception as exc:
             ended_at = _utc_now()
             failure_status = _scan_failure_status(exc)
@@ -550,6 +626,20 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                 ),
             )
             connection.commit()
+            record_operation_log(
+                settings,
+                task_type=TASK_TYPE_SCAN_JOB,
+                task_id=job_id,
+                level=LEVEL_ERROR,
+                stage="scan_failed",
+                message=f"扫描失败：{_scan_error_message(exc)}",
+                progress_current=scanned_count,
+                detail={
+                    "status": failure_status,
+                    "video_count": video_count,
+                    "warning_count": warning_count,
+                },
+            )
             raise
 
         return _fetch_scan_job(connection, job_id)

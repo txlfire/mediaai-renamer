@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.core.config import AppSettings, LoggingSettings
+from app.core.config import AppSettings, AuthSettings, LoggingSettings
 from app.main import create_app
 
 
@@ -21,6 +21,15 @@ class AuthApiTest(unittest.TestCase):
             data_dir=root,
             database_path=root / "mediaai.sqlite3",
             logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+        )
+        return TestClient(create_app(settings))
+
+    def build_client_with_auth(self, root: Path, auth: AuthSettings) -> TestClient:
+        settings = AppSettings(
+            data_dir=root,
+            database_path=root / "mediaai.sqlite3",
+            logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            auth=auth,
         )
         return TestClient(create_app(settings))
 
@@ -44,6 +53,7 @@ class AuthApiTest(unittest.TestCase):
             self.assertEqual("系统管理员", bootstrap_payload["displayName"])
             self.assertNotIn("role", bootstrap_payload)
             self.assertIn("settings:write", bootstrap_payload["permissions"])
+            self.assertFalse(bootstrap_payload["mustChangePassword"])
             self.assertNotIn("passwordHash", bootstrap_payload)
 
             login_response = client.post(
@@ -57,6 +67,7 @@ class AuthApiTest(unittest.TestCase):
             self.assertTrue(login_payload["accessToken"])
             self.assertEqual("admin", login_payload["user"]["username"])
             self.assertIn("rename:execute", login_payload["user"]["permissions"])
+            self.assertFalse(login_payload["user"]["mustChangePassword"])
 
             headers = {"Authorization": f"Bearer {login_payload['accessToken']}"}
             me_response = client.get("/api/auth/me", headers=headers)
@@ -76,6 +87,122 @@ class AuthApiTest(unittest.TestCase):
                 ).fetchone()[0]
             self.assertNotEqual("ChangeMe123!", password_hash)
             self.assertTrue(password_hash.startswith("pbkdf2_sha256$"))
+
+    def test_default_admin_is_created_with_default_password_when_enabled(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            client = self.build_client_with_auth(
+                root,
+                AuthSettings(default_admin_enabled=True),
+            )
+
+            login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+            bootstrap_response = client.post(
+                "/api/auth/bootstrap-admin",
+                json={
+                    "username": "other",
+                    "displayName": "其他管理员",
+                    "password": "ChangeMe123!",
+                },
+            )
+
+            self.assertEqual(200, login_response.status_code)
+            self.assertEqual("admin", login_response.json()["user"]["username"])
+            self.assertTrue(login_response.json()["user"]["mustChangePassword"])
+            self.assertEqual(409, bootstrap_response.status_code)
+
+    def test_change_password_clears_default_password_prompt(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            client = self.build_client_with_auth(
+                Path(temp_dir),
+                AuthSettings(default_admin_enabled=True),
+            )
+            login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+            token = login_response.json()["accessToken"]
+
+            change_response = client.post(
+                "/api/auth/change-password",
+                json={"currentPassword": "123456", "newPassword": "ChangeMe123!"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            old_login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+            new_login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "ChangeMe123!"},
+            )
+
+            self.assertEqual(200, change_response.status_code)
+            self.assertFalse(change_response.json()["mustChangePassword"])
+            self.assertEqual(401, old_login_response.status_code)
+            self.assertEqual(200, new_login_response.status_code)
+            self.assertFalse(new_login_response.json()["user"]["mustChangePassword"])
+
+    def test_change_password_rejects_default_password(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            client = self.build_client_with_auth(
+                Path(temp_dir),
+                AuthSettings(default_admin_enabled=True),
+            )
+            login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+            token = login_response.json()["accessToken"]
+
+            response = client.post(
+                "/api/auth/change-password",
+                json={"currentPassword": "123456", "newPassword": "123456"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            self.assertEqual(400, response.status_code)
+            self.assertIn("新密码不能继续使用默认密码", response.json()["detail"])
+
+    def test_reset_admin_password_is_hidden_by_config_switch(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            disabled_client = self.build_client_with_auth(
+                Path(temp_dir) / "disabled",
+                AuthSettings(default_admin_enabled=True, admin_password_reset_enabled=False),
+            )
+            disabled_response = disabled_client.post("/api/auth/reset-admin-password")
+
+            self.assertEqual(403, disabled_response.status_code)
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            client = self.build_client_with_auth(
+                Path(temp_dir),
+                AuthSettings(default_admin_enabled=True, admin_password_reset_enabled=True),
+            )
+            login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+            token = login_response.json()["accessToken"]
+            client.post(
+                "/api/auth/change-password",
+                json={"currentPassword": "123456", "newPassword": "ChangeMe123!"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            reset_response = client.post("/api/auth/reset-admin-password")
+            reset_login_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+
+            self.assertEqual(200, reset_response.status_code)
+            self.assertTrue(reset_response.json()["mustChangePassword"])
+            self.assertEqual(200, reset_login_response.status_code)
+            self.assertTrue(reset_login_response.json()["user"]["mustChangePassword"])
 
     def test_bootstrap_admin_is_allowed_only_when_user_table_is_empty(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:

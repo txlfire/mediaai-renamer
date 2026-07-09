@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 16
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -168,6 +168,8 @@ def _ensure_users_table(connection: sqlite3.Connection) -> None:
         "display_name TEXT NOT NULL, "
         "password_hash TEXT NOT NULL, "
         "permissions_json TEXT NOT NULL, "
+        "must_change_password INTEGER NOT NULL DEFAULT 0, "
+        "password_changed_at TEXT, "
         "enabled INTEGER NOT NULL DEFAULT 1, "
         "last_login_at TEXT, "
         "created_at TEXT NOT NULL, "
@@ -182,6 +184,12 @@ def _ensure_users_table(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE users ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '[]'"
         )
+    if "must_change_password" not in columns:
+        connection.execute(
+            "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+        )
+    if "password_changed_at" not in columns:
+        connection.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
 
 
 def _ensure_user_sessions_table(connection: sqlite3.Connection) -> None:
@@ -226,6 +234,31 @@ def _ensure_audit_events_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_audit_events_target "
         "ON audit_events(target_type, target_id, created_at)"
+    )
+
+
+def _ensure_operation_logs_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS operation_logs "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "task_type TEXT NOT NULL, "
+        "task_id INTEGER NOT NULL, "
+        "level TEXT NOT NULL, "
+        "stage TEXT NOT NULL, "
+        "message TEXT NOT NULL, "
+        "progress_current INTEGER, "
+        "progress_total INTEGER, "
+        "detail_json TEXT, "
+        "approx_bytes INTEGER NOT NULL DEFAULT 0, "
+        "created_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operation_logs_task "
+        "ON operation_logs(task_type, task_id, id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operation_logs_created "
+        "ON operation_logs(created_at)"
     )
 
 
@@ -409,6 +442,14 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         _ensure_m9_governance_tables(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 15:
+        _ensure_users_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 16:
+        _ensure_operation_logs_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -553,6 +594,7 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_rename_preview_title_source_columns(connection)
         _ensure_rename_preview_naming_template_columns(connection)
         _ensure_m9_governance_tables(connection)
+        _ensure_operation_logs_table(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)

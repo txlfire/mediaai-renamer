@@ -5,11 +5,13 @@ import { useAuthStore } from "./auth";
 
 const api = vi.hoisted(() => ({
   bootstrapAdmin: vi.fn(),
+  changePassword: vi.fn(),
   clearAuthToken: vi.fn(),
   fetchCurrentUser: vi.fn(),
   getAuthToken: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  resetAdminPassword: vi.fn(),
 }));
 
 vi.mock("../api/client", () => api);
@@ -30,6 +32,8 @@ const user = {
   displayName: "系统管理员",
   enabled: true,
   permissions: ["settings:write", "source:write"],
+  mustChangePassword: false,
+  passwordChangedAt: null,
   lastLoginAt: null,
   createdAt: "2026-07-09T00:00:00+00:00",
   updatedAt: "2026-07-09T00:00:00+00:00",
@@ -109,5 +113,31 @@ describe("auth store", () => {
     expect(api.logout).toHaveBeenCalled();
     expect(api.clearAuthToken).toHaveBeenCalled();
     expect(store.currentUser).toBe(null);
+  });
+
+  it("changes password and clears the prompt flag", async () => {
+    api.changePassword.mockResolvedValue({
+      ...user,
+      mustChangePassword: false,
+      passwordChangedAt: "2026-07-09T00:10:00+00:00",
+    });
+    const store = useAuthStore();
+
+    await store.changePassword("123456", "ChangeMe123!");
+
+    expect(api.changePassword).toHaveBeenCalledWith({
+      currentPassword: "123456",
+      newPassword: "ChangeMe123!",
+    });
+    expect(store.currentUser?.mustChangePassword).toBe(false);
+  });
+
+  it("calls hidden admin password reset endpoint", async () => {
+    api.resetAdminPassword.mockResolvedValue({ ...user, mustChangePassword: true });
+    const store = useAuthStore();
+
+    await store.resetAdminPassword();
+
+    expect(api.resetAdminPassword).toHaveBeenCalled();
   });
 });

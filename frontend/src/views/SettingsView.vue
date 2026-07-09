@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { Check, Delete, Edit, InfoFilled } from "@element-plus/icons-vue";
+import { Check, Delete, Edit, InfoFilled, Key, Plus, Refresh } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import type {
   AiConnectionTestResult,
   AiProviderProfile,
+  AuditEvent,
+  AuthUser,
   ExternalSubmissionBlockRecord,
   ExternalSubmissionBlockStatus,
   ImdbConnectionTestResult,
@@ -17,12 +19,17 @@ import type {
 } from "../api/client";
 import {
   cleanupLogs,
+  createUser,
   diffNamingTemplate,
   fetchExternalSubmissionBlocks,
+  fetchAuditEvents,
   fetchNamingTemplateBundle,
+  fetchUsers,
   importNamingTemplateBundle,
+  resetUserPassword,
   testNamingTemplate,
   updateExternalSubmissionBlock,
+  updateUser,
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
@@ -61,6 +68,21 @@ const namingWorkbenchResult = ref<NamingTemplatePreviewResult | null>(null);
 const namingWorkbenchDiffResult = ref<NamingTemplateDiffResult | null>(null);
 const namingImportInput = ref<HTMLInputElement | null>(null);
 const namingBundleLoading = ref(false);
+const users = ref<AuthUser[]>([]);
+const availableUserPermissions = ref<string[]>([]);
+const usersLoading = ref(false);
+const auditEvents = ref<AuditEvent[]>([]);
+const auditTotal = ref(0);
+const auditLoading = ref(false);
+const auditDetailVisible = ref(false);
+const auditDetailEvent = ref<AuditEvent | null>(null);
+const userDialogVisible = ref(false);
+const userDialogMode = ref<"create" | "edit">("create");
+const editingUserId = ref<number | null>(null);
+const passwordDialogVisible = ref(false);
+const passwordResetUser = ref<AuthUser | null>(null);
+const permissionDialogVisible = ref(false);
+const permissionDetailUser = ref<AuthUser | null>(null);
 
 const form = reactive({
   v4Token: "",
@@ -101,6 +123,9 @@ const form = reactive({
   logPath: "logs",
   logArchiveAfterDays: "7",
   logDefaultLimit: "200",
+  operationLogMaxTotalMb: "128",
+  operationLogMaxTaskMb: "16",
+  operationLogCleanupBatchSize: "1000",
   forceDryRun: true,
   requireSecondConfirmation: true,
   persistFailureDetail: true,
@@ -117,6 +142,23 @@ const form = reactive({
   defaultSensitiveWordsEnabled: true,
   defaultSensitiveWordsText: "",
   customSensitiveWordsText: "",
+});
+const userForm = reactive({
+  username: "",
+  displayName: "",
+  password: "",
+  enabled: true,
+  permissions: [] as string[],
+});
+const passwordResetForm = reactive({
+  password: "",
+});
+const auditFilters = reactive({
+  eventType: "",
+  result: "",
+  actorName: "",
+  page: 1,
+  pageSize: 20,
 });
 const namingWorkbenchForm = reactive({
   mediaType: "movie" as "movie" | "episode",
@@ -139,6 +181,8 @@ const categories = computed(() => [
   { key: "naming", label: pageText.categories.naming },
   { key: "scan", label: pageText.categories.scan },
   { key: "shared", label: pageText.categories.shared },
+  { key: "users", label: pageText.categories.users },
+  { key: "audit", label: pageText.categories.audit },
   // 通用设置固定在最下方；后续新增设置分类应插入到它上方。
   { key: "operations", label: pageText.categories.operations },
 ]);
@@ -163,6 +207,17 @@ const savedApiKeyDisplay = computed(() => {
 
 const v4TokenPlaceholder = computed(() => savedV4TokenDisplay.value || pageText.tmdb.v4TokenPlaceholder);
 const apiKeyPlaceholder = computed(() => savedApiKeyDisplay.value || pageText.tmdb.apiKeyPlaceholder);
+const isMountedNfsSharedPath = computed(() => form.sharedDefaultPathType === "mounted_nfs");
+const sharedPathTypeHint = computed(() => {
+  const hints = pageText.shared.pathTypeHints;
+  if (form.sharedDefaultPathType === "mounted_nfs") {
+    return hints.mountedNfs;
+  }
+  if (form.sharedDefaultPathType === "unc") {
+    return hints.unc;
+  }
+  return hints.local;
+});
 const savedAiApiKeyDisplay = computed(() => {
   const value = settingsStore.settingMap["ai.api_key"]?.value;
   return isMaskedSecret(value) ? String(value) : "";
@@ -229,6 +284,12 @@ watch(activeCategory, (category) => {
   if (category === "privacy") {
     void loadExternalSubmissionBlocks();
   }
+  if (category === "users") {
+    void loadUsers();
+  }
+  if (category === "audit") {
+    void loadAuditEvents();
+  }
 });
 
 watch(
@@ -241,6 +302,160 @@ watch(
 
 function resetDefaultSensitiveWords() {
   form.defaultSensitiveWordsText = formatSensitiveWordsInput(pageText.privacy.defaultWordsInitial);
+}
+
+function userPermissionLabel(permission: string) {
+  return pageText.users.permissionLabels[permission] || permission;
+}
+
+function auditEventTypeLabel(eventType: string) {
+  return pageText.audit.eventTypeLabels[eventType] || eventType;
+}
+
+function auditTargetTypeLabel(targetType: string) {
+  return pageText.audit.targetTypeLabels[targetType] || targetType;
+}
+
+function auditResultLabel(result: string) {
+  return pageText.audit.resultLabels[result] || result;
+}
+
+function auditResultTagType(result: string) {
+  return result === "success" ? "success" : result === "failed" ? "danger" : "info";
+}
+
+function auditDetailText(event: AuditEvent | null) {
+  if (!event?.detail) {
+    return "{}";
+  }
+  return JSON.stringify(event.detail, null, 2);
+}
+
+function openAuditDetail(event: AuditEvent) {
+  auditDetailEvent.value = event;
+  auditDetailVisible.value = true;
+}
+
+async function loadAuditEvents() {
+  auditLoading.value = true;
+  try {
+    const result = await fetchAuditEvents({
+      event_type: auditFilters.eventType || undefined,
+      result: auditFilters.result || undefined,
+      actor_name: auditFilters.actorName.trim() || undefined,
+      page: auditFilters.page,
+      page_size: auditFilters.pageSize,
+    });
+    auditEvents.value = result.items;
+    auditTotal.value = result.total;
+    auditFilters.page = result.page;
+    auditFilters.pageSize = result.pageSize;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.audit.loadFailed);
+  } finally {
+    auditLoading.value = false;
+  }
+}
+
+function applyAuditFilters() {
+  auditFilters.page = 1;
+  void loadAuditEvents();
+}
+
+function handleAuditPageChange(page: number) {
+  auditFilters.page = page;
+  void loadAuditEvents();
+}
+
+function resetUserForm() {
+  userForm.username = "";
+  userForm.displayName = "";
+  userForm.password = "";
+  userForm.enabled = true;
+  userForm.permissions = ["settings:write"];
+  editingUserId.value = null;
+}
+
+async function loadUsers() {
+  usersLoading.value = true;
+  try {
+    const result = await fetchUsers();
+    users.value = result.items;
+    availableUserPermissions.value = result.permissions;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.users.loadFailed);
+  } finally {
+    usersLoading.value = false;
+  }
+}
+
+function openCreateUser() {
+  resetUserForm();
+  userDialogMode.value = "create";
+  userDialogVisible.value = true;
+}
+
+function openEditUser(user: AuthUser) {
+  userDialogMode.value = "edit";
+  editingUserId.value = user.id;
+  userForm.username = user.username;
+  userForm.displayName = user.displayName;
+  userForm.password = "";
+  userForm.enabled = user.enabled;
+  userForm.permissions = [...user.permissions];
+  userDialogVisible.value = true;
+}
+
+async function saveUser() {
+  try {
+    if (userDialogMode.value === "create") {
+      await createUser({
+        username: userForm.username.trim(),
+        displayName: userForm.displayName.trim(),
+        password: userForm.password,
+        enabled: userForm.enabled,
+        permissions: userForm.permissions,
+      });
+      ElMessage.success(pageText.users.createSuccess);
+    } else if (editingUserId.value !== null) {
+      await updateUser(editingUserId.value, {
+        displayName: userForm.displayName.trim(),
+        enabled: userForm.enabled,
+        permissions: userForm.permissions,
+      });
+      ElMessage.success(pageText.users.updateSuccess);
+    }
+    userDialogVisible.value = false;
+    await loadUsers();
+    await authStore.loadStoredSession();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.users.saveFailed);
+  }
+}
+
+function openResetUserPassword(user: AuthUser) {
+  passwordResetUser.value = user;
+  passwordResetForm.password = "";
+  passwordDialogVisible.value = true;
+}
+
+function openUserPermissions(user: AuthUser) {
+  permissionDetailUser.value = user;
+  permissionDialogVisible.value = true;
+}
+
+async function submitResetUserPassword() {
+  if (!passwordResetUser.value) {
+    return;
+  }
+  try {
+    await resetUserPassword(passwordResetUser.value.id, { password: passwordResetForm.password });
+    ElMessage.success(pageText.users.resetPasswordSuccess);
+    passwordDialogVisible.value = false;
+    await loadUsers();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.users.resetPasswordFailed);
+  }
 }
 
 function syncForm() {
@@ -288,6 +503,9 @@ function syncForm() {
   form.logPath = String(settingValue("logging.path", "logs"));
   form.logArchiveAfterDays = String(settingValue("logging.archive_after_days", 7));
   form.logDefaultLimit = String(settingValue("operations.log_default_limit", 200));
+  form.operationLogMaxTotalMb = String(settingValue("operation_logs.max_total_mb", 128));
+  form.operationLogMaxTaskMb = String(settingValue("operation_logs.max_task_mb", 16));
+  form.operationLogCleanupBatchSize = String(settingValue("operation_logs.cleanup_batch_size", 1000));
   form.forceDryRun = Boolean(settingValue("operations.force_dry_run", true));
   form.requireSecondConfirmation = Boolean(settingValue("operations.require_second_confirmation", true));
   form.persistFailureDetail = Boolean(settingValue("operations.persist_failure_detail", true));
@@ -320,6 +538,9 @@ function onlyDigits(
     | "logRetentionDays"
     | "logArchiveAfterDays"
     | "logDefaultLimit"
+    | "operationLogMaxTotalMb"
+    | "operationLogMaxTaskMb"
+    | "operationLogCleanupBatchSize"
     | "batchLimit"
     | "sharedConnectionTimeoutSeconds"
     | "sharedDirectoryBrowseLimit"
@@ -615,6 +836,9 @@ async function saveOperationSettings() {
       "logging.path": form.logPath.trim() || "logs",
       "logging.archive_after_days": Number(form.logArchiveAfterDays || 7),
       "operations.log_default_limit": Number(form.logDefaultLimit || 200),
+      "operation_logs.max_total_mb": Number(form.operationLogMaxTotalMb || 128),
+      "operation_logs.max_task_mb": Number(form.operationLogMaxTaskMb || 16),
+      "operation_logs.cleanup_batch_size": Number(form.operationLogCleanupBatchSize || 1000),
       "operations.force_dry_run": true,
       "operations.require_second_confirmation": true,
       "operations.persist_failure_detail": form.persistFailureDetail,
@@ -2713,6 +2937,15 @@ onMounted(async () => {
             <el-form-item :label="pageText.operations.logDefaultLimit">
               <el-input v-model="form.logDefaultLimit" maxlength="5" @input="onlyDigits('logDefaultLimit')" />
             </el-form-item>
+            <el-form-item :label="pageText.operations.operationLogMaxTotalMb">
+              <el-input v-model="form.operationLogMaxTotalMb" maxlength="4" @input="onlyDigits('operationLogMaxTotalMb')" />
+            </el-form-item>
+            <el-form-item :label="pageText.operations.operationLogMaxTaskMb">
+              <el-input v-model="form.operationLogMaxTaskMb" maxlength="4" @input="onlyDigits('operationLogMaxTaskMb')" />
+            </el-form-item>
+            <el-form-item :label="pageText.operations.operationLogCleanupBatchSize">
+              <el-input v-model="form.operationLogCleanupBatchSize" maxlength="5" @input="onlyDigits('operationLogCleanupBatchSize')" />
+            </el-form-item>
             <el-form-item :label="pageText.operations.batchLimit">
               <el-input v-model="form.batchLimit" maxlength="5" @input="onlyDigits('batchLimit')" />
             </el-form-item>
@@ -2740,6 +2973,10 @@ onMounted(async () => {
         </el-form>
 
         <el-form v-else-if="activeCategory === 'shared'" label-position="top" class="settings-form">
+          <div class="settings-page-notice">
+            <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+            <span class="settings-page-notice-text">{{ sharedPathTypeHint }}</span>
+          </div>
           <div class="settings-grid">
             <el-form-item :label="pageText.shared.defaultPathType">
               <el-select v-model="form.sharedDefaultPathType">
@@ -2756,15 +2993,15 @@ onMounted(async () => {
             <el-form-item :label="pageText.shared.directoryBrowseLimit">
               <el-input v-model="form.sharedDirectoryBrowseLimit" maxlength="5" @input="onlyDigits('sharedDirectoryBrowseLimit')" />
             </el-form-item>
-            <el-form-item :label="pageText.shared.nfsOperationTimeout">
+            <el-form-item v-if="isMountedNfsSharedPath" :label="pageText.shared.nfsOperationTimeout">
               <el-input v-model="form.nfsOperationTimeoutSeconds" maxlength="4" @input="onlyDigits('nfsOperationTimeoutSeconds')">
                 <template #append>{{ pageText.units.seconds }}</template>
               </el-input>
             </el-form-item>
-            <el-form-item :label="pageText.shared.nfsRetryCount">
+            <el-form-item v-if="isMountedNfsSharedPath" :label="pageText.shared.nfsRetryCount">
               <el-input v-model="form.nfsRetryCount" maxlength="2" @input="onlyDigits('nfsRetryCount')" />
             </el-form-item>
-            <el-form-item :label="pageText.shared.mountCheckInterval">
+            <el-form-item v-if="isMountedNfsSharedPath" :label="pageText.shared.mountCheckInterval">
               <el-input v-model="form.mountCheckIntervalSeconds" maxlength="5" @input="onlyDigits('mountCheckIntervalSeconds')">
                 <template #append>{{ pageText.units.seconds }}</template>
               </el-input>
@@ -2775,7 +3012,7 @@ onMounted(async () => {
             <el-form-item :label="pageText.shared.forceRenameWriteTest">
               <el-switch v-model="form.forceRenameWriteTest" />
             </el-form-item>
-            <el-form-item :label="pageText.shared.preferNfsv4">
+            <el-form-item v-if="isMountedNfsSharedPath" :label="pageText.shared.preferNfsv4">
               <el-switch v-model="form.preferNfsv4" />
             </el-form-item>
           </div>
@@ -2788,6 +3025,363 @@ onMounted(async () => {
             </el-button>
           </div>
         </el-form>
+
+        <div v-else-if="activeCategory === 'users'" class="settings-form">
+          <div class="settings-config-card settings-user-card">
+            <div class="settings-page-notice">
+              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+              <span class="settings-page-notice-text">{{ pageText.users.notice }}</span>
+            </div>
+
+            <div class="settings-user-toolbar">
+              <div>
+                <div class="settings-config-card-title">{{ pageText.users.title }}</div>
+                <span class="setting-source">{{ pageText.users.summary }}</span>
+              </div>
+              <div class="settings-actions settings-user-actions">
+                <el-button :icon="Refresh" :loading="usersLoading" @click="loadUsers">
+                  {{ messages.common.refresh }}
+                </el-button>
+                <el-button
+                  type="primary"
+                  :icon="Plus"
+                  :disabled="settingsWriteDisabled"
+                  :title="settingsPermissionTitle"
+                  @click="openCreateUser"
+                >
+                  {{ pageText.users.createUser }}
+                </el-button>
+              </div>
+            </div>
+
+            <el-table
+              v-loading="usersLoading"
+              class="settings-user-table"
+              :data="users"
+              :empty-text="pageText.users.empty"
+              border
+            >
+              <el-table-column prop="username" :label="pageText.users.username" width="150" show-overflow-tooltip />
+              <el-table-column prop="displayName" :label="pageText.users.displayName" width="160" show-overflow-tooltip />
+              <el-table-column :label="pageText.users.enabled" width="110" align="center">
+                <template #default="{ row }: { row: AuthUser }">
+                  <el-tag :type="row.enabled ? 'success' : 'info'" effect="light">
+                    {{ row.enabled ? pageText.users.enabledYes : pageText.users.enabledNo }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.users.passwordStatus" width="140" align="center">
+                <template #default="{ row }: { row: AuthUser }">
+                  <el-tag :type="row.mustChangePassword ? 'warning' : 'success'" effect="light">
+                    {{ row.mustChangePassword ? pageText.users.mustChangePassword : pageText.users.passwordChanged }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.users.permissions" width="108" align="center">
+                <template #default="{ row }: { row: AuthUser }">
+                  <el-tooltip :content="pageText.users.viewPermissions" placement="top">
+                    <button
+                      type="button"
+                      class="settings-user-icon-action table-action-button action-view"
+                      :aria-label="pageText.users.viewPermissions"
+                      @click="openUserPermissions(row)"
+                    >
+                      <el-icon><Key /></el-icon>
+                    </button>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.users.lastLoginAt" width="180" show-overflow-tooltip>
+                <template #default="{ row }: { row: AuthUser }">
+                  {{ row.lastLoginAt ? formatDateTime(row.lastLoginAt) : pageText.users.neverLogin }}
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="pageText.users.actions"
+                width="138"
+                fixed="right"
+                align="center"
+              >
+                <template #default="{ row }: { row: AuthUser }">
+                  <div class="settings-user-row-actions">
+                    <el-tooltip :content="pageText.users.editUser" placement="top">
+                      <button
+                        type="button"
+                        class="settings-user-icon-action table-action-button action-edit"
+                        :disabled="settingsWriteDisabled"
+                        :title="settingsPermissionTitle"
+                        :aria-label="pageText.users.editUser"
+                        @click="openEditUser(row)"
+                      >
+                        <el-icon><Edit /></el-icon>
+                      </button>
+                    </el-tooltip>
+                    <el-tooltip :content="pageText.users.resetPassword" placement="top">
+                      <button
+                        type="button"
+                        class="settings-user-icon-action table-action-button action-sync"
+                        :disabled="settingsWriteDisabled"
+                        :title="settingsPermissionTitle"
+                        :aria-label="pageText.users.resetPassword"
+                        @click="openResetUserPassword(row)"
+                      >
+                        <el-icon><Refresh /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog
+              v-model="userDialogVisible"
+              :title="userDialogMode === 'create' ? pageText.users.createUser : pageText.users.editUser"
+              width="min(640px, calc(100vw - 2rem))"
+              align-center
+            >
+              <el-form label-position="top" class="settings-user-dialog-form">
+                <div class="settings-grid settings-user-form-grid">
+                  <el-form-item :label="pageText.users.username">
+                    <el-input
+                      v-model="userForm.username"
+                      :disabled="userDialogMode === 'edit'"
+                      :placeholder="pageText.users.usernamePlaceholder"
+                    />
+                  </el-form-item>
+                  <el-form-item :label="pageText.users.displayName">
+                    <el-input v-model="userForm.displayName" :placeholder="pageText.users.displayNamePlaceholder" />
+                  </el-form-item>
+                  <el-form-item v-if="userDialogMode === 'create'" :label="pageText.users.password">
+                    <el-input
+                      v-model="userForm.password"
+                      :placeholder="pageText.users.passwordPlaceholder"
+                      show-password
+                      type="password"
+                    />
+                  </el-form-item>
+                  <el-form-item :label="pageText.users.enabled">
+                    <el-switch
+                      v-model="userForm.enabled"
+                      :active-text="pageText.users.enabledYes"
+                      :inactive-text="pageText.users.enabledNo"
+                    />
+                  </el-form-item>
+                </div>
+                <el-form-item :label="pageText.users.permissions">
+                  <el-checkbox-group v-model="userForm.permissions" class="settings-user-permission-grid">
+                    <el-checkbox
+                      v-for="permission in availableUserPermissions"
+                      :key="permission"
+                      :label="permission"
+                    >
+                      {{ userPermissionLabel(permission) }}
+                    </el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="userDialogVisible = false">{{ messages.common.cancel }}</el-button>
+                <el-button type="primary" :loading="usersLoading" @click="saveUser">
+                  {{ messages.common.save }}
+                </el-button>
+              </template>
+            </el-dialog>
+
+            <el-dialog
+              v-model="passwordDialogVisible"
+              :title="pageText.users.resetPassword"
+              width="min(460px, calc(100vw - 2rem))"
+              align-center
+            >
+              <p class="settings-user-reset-hint">
+                {{ formatMessage(pageText.users.resetPasswordHint, { name: passwordResetUser?.username || "" }) }}
+              </p>
+              <el-form label-position="top">
+                <el-form-item :label="pageText.users.newPassword">
+                  <el-input
+                    v-model="passwordResetForm.password"
+                    :placeholder="pageText.users.passwordPlaceholder"
+                    show-password
+                    type="password"
+                    @keyup.enter="submitResetUserPassword"
+                  />
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="passwordDialogVisible = false">{{ messages.common.cancel }}</el-button>
+                <el-button type="primary" :loading="usersLoading" @click="submitResetUserPassword">
+                  {{ pageText.users.resetPassword }}
+                </el-button>
+              </template>
+            </el-dialog>
+
+            <el-dialog
+              v-model="permissionDialogVisible"
+              :title="pageText.users.permissionDetailTitle"
+              width="min(640px, calc(100vw - 2rem))"
+              align-center
+            >
+              <div v-if="permissionDetailUser" class="settings-user-permission-detail">
+                <div class="settings-user-permission-user">
+                  <span>{{ pageText.users.username }}</span>
+                  <strong>{{ permissionDetailUser.username }}</strong>
+                </div>
+                <div class="settings-user-permission-grid settings-user-permission-readonly-grid">
+                  <el-checkbox
+                    v-for="permission in availableUserPermissions"
+                    :key="permission"
+                    :model-value="permissionDetailUser.permissions.includes(permission)"
+                    :class="{ 'is-owned': permissionDetailUser.permissions.includes(permission) }"
+                    disabled
+                  >
+                    {{ userPermissionLabel(permission) }}
+                  </el-checkbox>
+                </div>
+              </div>
+              <template #footer>
+                <el-button @click="permissionDialogVisible = false">{{ messages.common.close }}</el-button>
+              </template>
+            </el-dialog>
+          </div>
+        </div>
+
+        <div v-else-if="activeCategory === 'audit'" class="settings-form">
+          <div class="settings-config-card settings-audit-card">
+            <div class="settings-page-notice">
+              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+              <span class="settings-page-notice-text">{{ pageText.audit.notice }}</span>
+            </div>
+
+            <div class="settings-user-toolbar">
+              <div>
+                <div class="settings-config-card-title">{{ pageText.audit.title }}</div>
+                <span class="setting-source">{{ pageText.audit.summary }}</span>
+              </div>
+              <div class="settings-actions settings-user-actions">
+                <el-button :icon="Refresh" :loading="auditLoading" @click="loadAuditEvents">
+                  {{ pageText.audit.refresh }}
+                </el-button>
+              </div>
+            </div>
+
+            <div class="settings-audit-filters">
+              <el-select v-model="auditFilters.eventType" class="settings-audit-filter-control" @change="applyAuditFilters">
+                <el-option :label="pageText.audit.allTypes" value="" />
+                <el-option
+                  v-for="(_, type) in pageText.audit.eventTypeLabels"
+                  :key="type"
+                  :label="auditEventTypeLabel(String(type))"
+                  :value="String(type)"
+                />
+              </el-select>
+              <el-select v-model="auditFilters.result" class="settings-audit-filter-control" @change="applyAuditFilters">
+                <el-option :label="pageText.audit.allResults" value="" />
+                <el-option
+                  v-for="(_, result) in pageText.audit.resultLabels"
+                  :key="result"
+                  :label="auditResultLabel(String(result))"
+                  :value="String(result)"
+                />
+              </el-select>
+              <el-input
+                v-model="auditFilters.actorName"
+                class="settings-audit-filter-control"
+                :placeholder="pageText.audit.actorPlaceholder"
+                clearable
+                @clear="applyAuditFilters"
+                @keyup.enter="applyAuditFilters"
+              />
+              <el-button :loading="auditLoading" @click="applyAuditFilters">
+                {{ messages.common.query }}
+              </el-button>
+            </div>
+
+            <el-table
+              v-loading="auditLoading"
+              class="settings-user-table"
+              :data="auditEvents"
+              :empty-text="pageText.audit.empty"
+              border
+            >
+              <el-table-column :label="pageText.audit.eventType" width="150" show-overflow-tooltip>
+                <template #default="{ row }: { row: AuditEvent }">
+                  {{ auditEventTypeLabel(row.eventType) }}
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.audit.actorName" width="130" show-overflow-tooltip>
+                <template #default="{ row }: { row: AuditEvent }">
+                  {{ row.actorName || pageText.audit.unknownActor }}
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.audit.targetType" width="140" show-overflow-tooltip>
+                <template #default="{ row }: { row: AuditEvent }">
+                  {{ auditTargetTypeLabel(row.targetType) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="summary" :label="pageText.audit.summaryColumn" min-width="220" show-overflow-tooltip />
+              <el-table-column :label="pageText.audit.result" width="90" align="center">
+                <template #default="{ row }: { row: AuditEvent }">
+                  <el-tag :type="auditResultTagType(row.result)" effect="light">
+                    {{ auditResultLabel(row.result) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.audit.createdAt" width="180" show-overflow-tooltip>
+                <template #default="{ row }: { row: AuditEvent }">
+                  {{ formatDateTime(row.createdAt) }}
+                </template>
+              </el-table-column>
+              <el-table-column :label="pageText.audit.detail" width="92" fixed="right" align="center">
+                <template #default="{ row }: { row: AuditEvent }">
+                  <el-tooltip :content="pageText.audit.viewDetail" placement="top">
+                    <button
+                      type="button"
+                      class="settings-user-icon-action table-action-button action-view"
+                      :aria-label="pageText.audit.viewDetail"
+                      @click="openAuditDetail(row)"
+                    >
+                      <el-icon><InfoFilled /></el-icon>
+                    </button>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-pagination
+              class="settings-audit-pagination"
+              background
+              layout="prev, pager, next, total"
+              :total="auditTotal"
+              :page-size="auditFilters.pageSize"
+              :current-page="auditFilters.page"
+              @current-change="handleAuditPageChange"
+            />
+
+            <el-dialog
+              v-model="auditDetailVisible"
+              :title="pageText.audit.detailTitle"
+              width="min(720px, calc(100vw - 2rem))"
+              align-center
+            >
+              <div v-if="auditDetailEvent" class="settings-audit-detail">
+                <div class="settings-audit-detail-grid">
+                  <span>{{ pageText.audit.eventType }}</span>
+                  <strong>{{ auditEventTypeLabel(auditDetailEvent.eventType) }}</strong>
+                  <span>{{ pageText.audit.actorName }}</span>
+                  <strong>{{ auditDetailEvent.actorName || pageText.audit.unknownActor }}</strong>
+                  <span>{{ pageText.audit.result }}</span>
+                  <strong>{{ auditResultLabel(auditDetailEvent.result) }}</strong>
+                  <span>{{ pageText.audit.createdAt }}</span>
+                  <strong>{{ formatDateTime(auditDetailEvent.createdAt) }}</strong>
+                </div>
+                <pre class="settings-audit-detail-json">{{ auditDetailText(auditDetailEvent) }}</pre>
+              </div>
+              <template #footer>
+                <el-button @click="auditDetailVisible = false">{{ messages.common.close }}</el-button>
+              </template>
+            </el-dialog>
+          </div>
+        </div>
       </section>
     </div>
   </ListPageLayout>
@@ -2938,5 +3532,198 @@ onMounted(async () => {
   white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.settings-user-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-user-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-user-actions {
+  margin-left: auto;
+}
+
+.settings-user-table {
+  width: 100%;
+}
+
+.settings-user-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-user-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  transition:
+    color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.settings-user-icon-action:hover {
+  color: var(--el-color-primary);
+  transform: translateY(-1px);
+}
+
+.settings-user-icon-action:disabled {
+  color: var(--el-text-color-disabled);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.settings-user-icon-action:disabled:hover {
+  color: var(--el-text-color-disabled);
+  transform: none;
+}
+
+.settings-user-icon-action:focus-visible {
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 2px;
+}
+
+.settings-user-icon-action .el-icon {
+  font-size: 16px;
+}
+
+.settings-user-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-user-form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.settings-user-permission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.settings-user-permission-grid :deep(.el-checkbox) {
+  margin-right: 0;
+  min-width: 0;
+}
+
+.settings-user-permission-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-user-permission-user {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.settings-user-permission-user strong {
+  color: var(--el-text-color-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-user-permission-readonly-grid :deep(.el-checkbox.is-disabled.is-owned .el-checkbox__label) {
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.settings-user-permission-readonly-grid :deep(.el-checkbox.is-disabled:not(.is-owned) .el-checkbox__label) {
+  color: var(--el-text-color-regular);
+}
+
+.settings-user-permission-readonly-grid :deep(.el-checkbox.is-disabled .el-checkbox__input.is-checked .el-checkbox__inner) {
+  border-color: var(--el-color-primary);
+  background-color: var(--el-color-primary);
+}
+
+.settings-user-reset-hint {
+  margin: 0 0 14px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-audit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-audit-filter-control {
+  width: min(210px, 100%);
+}
+
+.settings-audit-pagination {
+  justify-content: flex-end;
+}
+
+.settings-audit-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-audit-detail-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 12px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.settings-audit-detail-grid strong {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.settings-audit-detail-json {
+  max-height: 360px;
+  margin: 0;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

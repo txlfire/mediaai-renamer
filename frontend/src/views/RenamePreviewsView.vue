@@ -16,6 +16,7 @@ import type {
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import ListStatItem from "../components/ListStatItem.vue";
+import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
@@ -53,11 +54,18 @@ const tableSortStore = useTableSortStore();
 const route = useRoute();
 const canSubmitMetadata = computed(() => authStore.hasPermission("metadata:submit"));
 const canExecuteRename = computed(() => authStore.hasPermission("rename:execute"));
+const canExecuteRollback = computed(() => authStore.hasPermission("rollback:execute"));
 const metadataPermissionTitle = computed(() => (canSubmitMetadata.value ? "" : messages.auth.permissionDenied));
 const renamePermissionTitle = computed(() => (canExecuteRename.value ? "" : messages.auth.permissionDenied));
+const rollbackPermissionTitle = computed(() =>
+  canExecuteRollback.value ? "" : messages.renamePreviews.operationDialog.rollbackPermissionDenied,
+);
 
 const editDialogVisible = ref(false);
 const operationDialogVisible = ref(false);
+const operationLogVisible = ref(false);
+const selectedOperationLogTaskId = ref<number | null>(null);
+const selectedOperationLogTaskType = ref<"rename_operation" | "rollback_plan">("rename_operation");
 const emptyTargetDialogVisible = ref(false);
 const detailDialogVisible = ref(false);
 const metadataDialogVisible = ref(false);
@@ -221,16 +229,34 @@ function operationStatusLabel(value: string) {
     ready: messages.status.ready,
     conflict: messages.status.conflict,
     renamed: messages.status.renamed,
+    rolled_back: messages.status.rolledBack,
     failed: messages.status.failed,
   };
   return labels[value] ?? value;
 }
 
 function operationStatusTagType(value: string) {
-  if (value === "ready" || value === "renamed") {
+  if (value === "ready" || value === "renamed" || value === "rolled_back") {
     return "success";
   }
   if (value === "conflict") {
+    return "warning";
+  }
+  if (value === "failed") {
+    return "danger";
+  }
+  return "info";
+}
+
+function rollbackStatusLabel(value: string) {
+  return messages.renamePreviews.operationDialog.rollbackStatuses[value] ?? value;
+}
+
+function rollbackStatusTagType(value: string) {
+  if (value === "ready" || value === "executed" || value === "rolled_back") {
+    return "success";
+  }
+  if (value === "checked" || value === "conflict" || value === "partial_failed") {
     return "warning";
   }
   if (value === "failed") {
@@ -404,6 +430,20 @@ const operationResultAlert = computed(() => {
     description: summary,
   };
 });
+const rollbackPlan = computed(() => renameOperationStore.currentRollbackPlan);
+const canCreateRollbackPlan = computed(() =>
+  Boolean(operationHasExecuted.value && renameOperationStore.currentOperation?.renamed_count && !rollbackPlan.value),
+);
+const canDryRunRollbackPlan = computed(() =>
+  Boolean(
+    rollbackPlan.value &&
+      !["executed", "partial_failed", "failed"].includes(rollbackPlan.value.status) &&
+      canExecuteRollback.value,
+  ),
+);
+const canExecuteRollbackPlan = computed(() =>
+  Boolean(rollbackPlan.value?.status === "checked" && rollbackPlan.value.executable_count > 0 && canExecuteRollback.value),
+);
 
 async function refreshPreviews() {
   if (!previewStore.filters.scan_job_id) {
@@ -626,6 +666,7 @@ async function runRenameDryRun() {
     return;
   }
   await renameOperationStore.runDryRun(selectedPreviewIds.value);
+  selectedOperationLogTaskId.value = renameOperationStore.currentOperation?.id ?? null;
   operationDialogVisible.value = true;
 }
 
@@ -1098,6 +1139,63 @@ async function executeRenameOperation() {
     });
     finishOperationProgress(operation.total_count, operation.renamed_count, operation.failed_count);
   }
+  await refreshPreviews();
+}
+
+function openRenameOperationLog() {
+  const operationId = renameOperationStore.currentOperation?.id;
+  if (!operationId) {
+    return;
+  }
+  selectedOperationLogTaskId.value = operationId;
+  selectedOperationLogTaskType.value = "rename_operation";
+  operationLogVisible.value = true;
+}
+
+function openRollbackOperationLog() {
+  const planId = renameOperationStore.currentRollbackPlan?.id;
+  if (!planId) {
+    return;
+  }
+  selectedOperationLogTaskId.value = planId;
+  selectedOperationLogTaskType.value = "rollback_plan";
+  operationLogVisible.value = true;
+}
+
+async function createRollbackPlan() {
+  await renameOperationStore.createRollbackPlan();
+  if (renameOperationStore.rollbackErrorMessage) {
+    ElMessage.error(renameOperationStore.rollbackErrorMessage);
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.operationDialog.rollbackCreateSuccess);
+}
+
+async function dryRunRollbackPlan() {
+  await renameOperationStore.dryRunRollbackPlan();
+  if (renameOperationStore.rollbackErrorMessage) {
+    ElMessage.error(renameOperationStore.rollbackErrorMessage);
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.operationDialog.rollbackDryRunSuccess);
+}
+
+async function executeRollbackPlan() {
+  await ElMessageBox.confirm(
+    messages.renamePreviews.operationDialog.rollbackExecuteConfirm,
+    messages.renamePreviews.operationDialog.rollbackTitle,
+    {
+      type: "warning",
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+    },
+  );
+  await renameOperationStore.executeRollbackPlan();
+  if (renameOperationStore.rollbackErrorMessage) {
+    ElMessage.error(renameOperationStore.rollbackErrorMessage);
+    return;
+  }
+  ElMessage.success(messages.renamePreviews.operationDialog.rollbackExecuteSuccess);
   await refreshPreviews();
 }
 
@@ -1968,8 +2066,108 @@ onMounted(async () => {
             </template>
           </el-table-column>
         </el-table>
+        <el-divider v-if="operationHasExecuted && renameOperationStore.currentOperation?.renamed_count" />
+        <div v-if="operationHasExecuted && renameOperationStore.currentOperation?.renamed_count" class="rename-operation-dialog">
+          <div class="settings-config-card-title">{{ messages.renamePreviews.operationDialog.rollbackTitle }}</div>
+          <el-alert
+            v-if="renameOperationStore.rollbackErrorMessage"
+            :title="renameOperationStore.rollbackErrorMessage"
+            type="error"
+            show-icon
+          />
+          <div v-if="rollbackPlan" class="preview-stats operation-stats">
+            <div>
+              <span>{{ messages.common.status }}</span>
+              <strong>{{ rollbackStatusLabel(rollbackPlan.status) }}</strong>
+            </div>
+            <div>
+              <span>{{ messages.common.total }}</span>
+              <strong>{{ rollbackPlan.item_count }}</strong>
+            </div>
+            <div class="stat-generated">
+              <span>{{ messages.status.ready }}</span>
+              <strong>{{ rollbackPlan.executable_count }}</strong>
+            </div>
+            <div class="stat-review">
+              <span>{{ messages.status.conflict }}</span>
+              <strong>{{ rollbackPlan.conflict_count }}</strong>
+            </div>
+          </div>
+          <el-empty
+            v-else
+            :description="messages.renamePreviews.operationDialog.rollbackEmpty"
+          />
+          <el-table
+            v-if="rollbackPlan"
+            :data="rollbackPlan.items"
+            class="data-table"
+            table-layout="auto"
+          >
+            <el-table-column :label="messages.common.status" width="110" align="center" header-align="center">
+              <template #default="{ row }">
+                <el-tag :type="rollbackStatusTagType(row.status)" effect="light">
+                  {{ rollbackStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="messages.renamePreviews.columns.sourcePath" min-width="220" align="left" header-align="left">
+              <template #default="{ row }">
+                <TextCell :value="row.current_path" :max-length="tableDisplayConfig.pathMaxLength" />
+              </template>
+            </el-table-column>
+            <el-table-column :label="messages.renamePreviews.columns.targetPath" min-width="220" align="left" header-align="left">
+              <template #default="{ row }">
+                <TextCell :value="row.rollback_path" :max-length="tableDisplayConfig.pathMaxLength" />
+              </template>
+            </el-table-column>
+            <el-table-column :label="messages.renamePreviews.columns.reason" min-width="160" align="left" header-align="left">
+              <template #default="{ row }">
+                <TextCell :value="row.message || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="settings-actions">
+            <el-button
+              v-if="canCreateRollbackPlan"
+              :loading="renameOperationStore.rollbackLoading"
+              :disabled="!canExecuteRollback"
+              :title="rollbackPermissionTitle"
+              @click="createRollbackPlan"
+            >
+              {{ messages.renamePreviews.operationDialog.rollbackCreate }}
+            </el-button>
+            <el-button
+              v-if="rollbackPlan"
+              :loading="renameOperationStore.rollbackLoading"
+              :disabled="!canDryRunRollbackPlan"
+              :title="rollbackPermissionTitle"
+              @click="dryRunRollbackPlan"
+            >
+              {{ messages.renamePreviews.operationDialog.rollbackDryRun }}
+            </el-button>
+            <el-button
+              v-if="rollbackPlan"
+              type="danger"
+              :loading="renameOperationStore.rollbackLoading"
+              :disabled="!canExecuteRollbackPlan"
+              :title="rollbackPermissionTitle"
+              @click="executeRollbackPlan"
+            >
+              {{ messages.renamePreviews.operationDialog.rollbackExecute }}
+            </el-button>
+            <el-button v-if="rollbackPlan" @click="openRollbackOperationLog">
+              {{ messages.renamePreviews.operationDialog.rollbackLog }}
+            </el-button>
+          </div>
+        </div>
       </div>
       <template #footer>
+        <el-button
+          v-if="renameOperationStore.currentOperation"
+          @click="openRenameOperationLog"
+        >
+          {{ messages.scanJobs.viewLogs }}
+        </el-button>
         <el-button @click="operationDialogVisible = false">{{ messages.common.close }}</el-button>
         <el-button
           v-if="!operationHasExecuted"
@@ -1983,5 +2181,11 @@ onMounted(async () => {
         </el-button>
       </template>
     </el-dialog>
+    <OperationLogDrawer
+      v-model:visible="operationLogVisible"
+      :task-type="selectedOperationLogTaskType"
+      :task-id="selectedOperationLogTaskId"
+      :title="selectedOperationLogTaskType === 'rollback_plan' ? messages.operationLogs.rollbackTitle : messages.operationLogs.renameTitle"
+    />
   </ListPageLayout>
 </template>

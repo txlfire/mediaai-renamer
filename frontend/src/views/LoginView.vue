@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Lock, User } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
-import { reactive, ref } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { computed, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
@@ -16,6 +16,13 @@ const form = reactive({
   displayName: messages.auth.defaultDisplayName,
   password: "",
 });
+const passwordDialogVisible = ref(false);
+const pendingCurrentPassword = ref("");
+const passwordForm = reactive({
+  newPassword: "",
+  confirmPassword: "",
+});
+const showResetAdmin = computed(() => route.query.resetAdmin === "1");
 
 const redirectPath = () => {
   const redirect = route.query.redirect;
@@ -25,7 +32,7 @@ const redirectPath = () => {
 async function submitLogin() {
   try {
     await authStore.login(form.username, form.password);
-    await router.replace(redirectPath());
+    await handlePostLogin(form.password);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : messages.auth.loginFailed);
   }
@@ -34,9 +41,65 @@ async function submitLogin() {
 async function submitBootstrap() {
   try {
     await authStore.bootstrapAndLogin(form.username, form.displayName, form.password);
-    await router.replace(redirectPath());
+    await handlePostLogin(form.password);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : messages.auth.bootstrapFailed);
+  }
+}
+
+async function handlePostLogin(currentPassword: string) {
+  if (authStore.currentUser?.mustChangePassword) {
+    pendingCurrentPassword.value = currentPassword;
+    passwordDialogVisible.value = true;
+    return;
+  }
+  await router.replace(redirectPath());
+}
+
+async function submitChangePassword() {
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.error(messages.auth.passwordMismatch);
+    return;
+  }
+  try {
+    await authStore.changePassword(pendingCurrentPassword.value, passwordForm.newPassword);
+    ElMessage.success(messages.auth.changePasswordSuccess);
+    passwordDialogVisible.value = false;
+    form.password = "";
+    pendingCurrentPassword.value = "";
+    passwordForm.newPassword = "";
+    passwordForm.confirmPassword = "";
+    await router.replace(redirectPath());
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : messages.auth.changePasswordFailed);
+  }
+}
+
+async function continueWithoutChange() {
+  passwordDialogVisible.value = false;
+  passwordForm.newPassword = "";
+  passwordForm.confirmPassword = "";
+  await router.replace(redirectPath());
+}
+
+async function resetAdminPassword() {
+  try {
+    await ElMessageBox.confirm(
+      messages.auth.resetAdminPasswordConfirm,
+      messages.auth.resetAdminPassword,
+      {
+        confirmButtonText: messages.common.confirm,
+        cancelButtonText: messages.common.cancel,
+        type: "warning",
+      },
+    );
+    await authStore.resetAdminPassword();
+    ElMessage.success(messages.auth.resetAdminPasswordSuccess);
+  } catch (error) {
+    if (error === "cancel" || error === "close") {
+      return;
+    }
+    ElMessage.error(error instanceof Error ? error.message : messages.auth.resetAdminPasswordFailed);
   }
 }
 </script>
@@ -71,6 +134,15 @@ async function submitBootstrap() {
             <el-button class="login-submit" type="primary" :loading="authStore.loading" @click="submitLogin">
               {{ messages.auth.loginButton }}
             </el-button>
+            <el-button
+              v-if="showResetAdmin"
+              class="login-reset"
+              text
+              :loading="authStore.loading"
+              @click="resetAdminPassword"
+            >
+              {{ messages.auth.resetAdminPassword }}
+            </el-button>
           </el-form>
         </el-tab-pane>
 
@@ -99,6 +171,41 @@ async function submitBootstrap() {
         </el-tab-pane>
       </el-tabs>
     </section>
+
+    <el-dialog
+      v-model="passwordDialogVisible"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :title="messages.auth.changePasswordTitle"
+      width="420px"
+    >
+      <p class="password-dialog-message">{{ messages.auth.changePasswordMessage }}</p>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item :label="messages.auth.newPassword">
+          <el-input
+            v-model="passwordForm.newPassword"
+            :placeholder="messages.auth.newPasswordPlaceholder"
+            show-password
+            type="password"
+          />
+        </el-form-item>
+        <el-form-item :label="messages.auth.confirmPassword">
+          <el-input
+            v-model="passwordForm.confirmPassword"
+            :placeholder="messages.auth.confirmPasswordPlaceholder"
+            show-password
+            type="password"
+            @keyup.enter="submitChangePassword"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="continueWithoutChange">{{ messages.auth.changePasswordLater }}</el-button>
+        <el-button type="primary" :loading="authStore.loading" @click="submitChangePassword">
+          {{ messages.auth.changePasswordNow }}
+        </el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
 
@@ -148,5 +255,17 @@ async function submitBootstrap() {
 
 .login-submit {
   width: 100%;
+}
+
+.login-reset {
+  width: 100%;
+  margin: 10px 0 0;
+}
+
+.password-dialog-message {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 </style>

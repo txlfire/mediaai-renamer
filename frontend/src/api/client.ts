@@ -14,6 +14,8 @@ export type AuthUser = {
   displayName: string;
   enabled: boolean;
   permissions: string[];
+  mustChangePassword: boolean;
+  passwordChangedAt: string | null;
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -30,11 +32,73 @@ export type LoginPayload = {
   password: string;
 };
 
+export type ChangePasswordPayload = {
+  currentPassword: string;
+  newPassword: string;
+};
+
 export type LoginResult = {
   accessToken: string;
   tokenType: "bearer" | string;
   expiresAt: string;
   user: AuthUser;
+};
+
+export type UserListResult = {
+  items: AuthUser[];
+  permissions: string[];
+};
+
+export type UserCreatePayload = {
+  username: string;
+  displayName: string;
+  password: string;
+  permissions: string[];
+  enabled: boolean;
+};
+
+export type UserUpdatePayload = {
+  displayName: string;
+  permissions: string[];
+  enabled: boolean;
+};
+
+export type UserPasswordResetPayload = {
+  password: string;
+};
+
+export type AuditEvent = {
+  id: number;
+  eventType: string;
+  actorId: number | null;
+  actorName: string | null;
+  targetType: string;
+  targetId: string | null;
+  action: string;
+  result: string;
+  summary: string;
+  detail: Record<string, unknown> | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: string;
+};
+
+export type AuditEventFilters = {
+  event_type?: string;
+  result?: string;
+  actor_name?: string;
+  target_type?: string;
+  start_at?: string;
+  end_at?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export type AuditEventPage = {
+  items: AuditEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
 };
 
 export type ApiHttpClient = {
@@ -215,6 +279,76 @@ export type LogCleanupSummary = {
   archive_dir: string;
 };
 
+export type OperationLogLevel = "debug" | "info" | "warning" | "error" | "success" | string;
+
+export type OperationLogItem = {
+  id: number;
+  task_type: string;
+  task_id: number;
+  level: OperationLogLevel;
+  stage: string;
+  message: string;
+  progress_current: number | null;
+  progress_total: number | null;
+  detail: Record<string, unknown> | unknown[] | null;
+  approx_bytes: number;
+  created_at: string;
+};
+
+export type OperationLogPage = {
+  items: OperationLogItem[];
+  latest_id: number;
+  total: number;
+  log_available: boolean;
+  cleared: boolean;
+  running: boolean;
+  message: string | null;
+};
+
+export type OperationLogFilters = {
+  task_type: string;
+  task_id: number;
+  after_id?: number;
+  limit?: number;
+};
+
+export type OperationLogCleanupSummary = {
+  deleted: number;
+  bytes_deleted: number;
+};
+
+export type TaskGovernanceItem = {
+  id: string;
+  task_type: "scan_job" | "rename_operation" | "rollback_plan" | string;
+  task_id: number;
+  status: string;
+  title: string;
+  summary: string;
+  media_source_id: number | null;
+  media_source_name: string | null;
+  related_id: number | null;
+  related_type: string | null;
+  total_count: number;
+  success_count: number;
+  failed_count: number;
+  warning_count: number;
+  created_at: string;
+  updated_at: string;
+  log_task_type: string;
+  log_task_id: number;
+  target_route: string | null;
+  target_query: Record<string, string>;
+};
+
+export type TaskGovernanceFilters = {
+  task_type?: string;
+  status?: string;
+  media_source_id?: number;
+  start_at?: string;
+  end_at?: string;
+  limit?: number;
+};
+
 export type RenamePreview = {
   id: number;
   media_file_id: number;
@@ -378,6 +512,32 @@ export type RenameOperation = {
   created_at?: string;
   updated_at?: string;
   items: RenameOperationItem[];
+};
+
+export type RenameRollbackItem = {
+  id: number;
+  plan_id: number;
+  operation_item_id: number;
+  current_path: string;
+  rollback_path: string;
+  status: "pending" | "ready" | "conflict" | "rolled_back" | "failed" | string;
+  message: string | null;
+  executed_at: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type RenameRollbackPlan = {
+  id: number;
+  operation_id: number;
+  status: "draft" | "checked" | "executed" | "partial_failed" | "failed" | string;
+  item_count: number;
+  executable_count: number;
+  conflict_count: number;
+  created_by: string | null;
+  created_at?: string;
+  updated_at?: string;
+  items: RenameRollbackItem[];
 };
 
 export type SystemSetting = {
@@ -676,6 +836,29 @@ export async function login(
   }
 }
 
+export async function changePassword(
+  payload: ChangePasswordPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuthUser> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AuthUser>("/auth/change-password", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function resetAdminPassword(httpClient: ApiHttpClient = apiClient): Promise<AuthUser> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AuthUser>("/auth/reset-admin-password", {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
 export async function logout(httpClient: ApiHttpClient = apiClient): Promise<void> {
   const post = requirePost(httpClient);
   try {
@@ -690,6 +873,77 @@ export async function logout(httpClient: ApiHttpClient = apiClient): Promise<voi
 export async function fetchCurrentUser(httpClient: ApiHttpClient = apiClient): Promise<AuthUser> {
   try {
     const response = await httpClient.get<AuthUser>("/auth/me");
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function fetchUsers(httpClient: ApiHttpClient = apiClient): Promise<UserListResult> {
+  try {
+    const response = await httpClient.get<UserListResult>("/users");
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function createUser(
+  payload: UserCreatePayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuthUser> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AuthUser>("/users", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function updateUser(
+  userId: number,
+  payload: UserUpdatePayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuthUser> {
+  const put = requirePut(httpClient);
+  try {
+    const response = await put<AuthUser>(`/users/${userId}`, payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function resetUserPassword(
+  userId: number,
+  payload: UserPasswordResetPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuthUser> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<AuthUser>(`/users/${userId}/reset-password`, payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
+export async function fetchAuditEvents(
+  filters: AuditEventFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuditEventPage> {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  });
+  const query = params.toString();
+  try {
+    const response = await httpClient.get<AuditEventPage>(
+      query ? `/audit-events?${query}` : "/audit-events",
+    );
     return response.data;
   } catch (error) {
     throw new Error(apiErrorMessage(error));
@@ -899,6 +1153,40 @@ export async function cleanupLogs(httpClient: ApiHttpClient = apiClient): Promis
   return response.data;
 }
 
+export async function fetchOperationLogs(
+  filters: OperationLogFilters,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<OperationLogPage> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<OperationLogPage>(`/operation-logs?${query}`);
+  return response.data;
+}
+
+export async function cleanupOperationLogs(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<OperationLogCleanupSummary> {
+  const post = requirePost(httpClient);
+  const response = await post<OperationLogCleanupSummary>("/operation-logs/cleanup", {});
+  return response.data;
+}
+
+export async function exportOperationLogs(filters: OperationLogFilters): Promise<string> {
+  const query = buildQueryString(filters);
+  const response = await apiClient.get<string>(`/operation-logs/export?${query}`, {
+    responseType: "text",
+  });
+  return response.data;
+}
+
+export async function fetchTasks(
+  filters: TaskGovernanceFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TaskGovernanceItem[]> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<{ items: TaskGovernanceItem[] }>(query ? `/tasks?${query}` : "/tasks");
+  return response.data.items;
+}
+
 export async function generateRenamePreviews(
   payload: GenerateRenamePreviewsPayload,
   httpClient: ApiHttpClient = apiClient,
@@ -979,6 +1267,50 @@ export async function executeRenameOperation(
 ): Promise<RenameOperation> {
   const post = requirePost(httpClient);
   const response = await post<RenameOperation>(`/rename-operations/${operationId}/execute`, {});
+  return response.data;
+}
+
+export async function createRenameRollbackPlan(
+  operationId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameRollbackPlan> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameRollbackPlan>(`/rename-operations/${operationId}/rollback-plan`, {});
+  return response.data;
+}
+
+export async function fetchRenameRollbackPlan(
+  planId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameRollbackPlan> {
+  const response = await httpClient.get<RenameRollbackPlan>(`/rename-rollback-plans/${planId}`);
+  return response.data;
+}
+
+export async function fetchRenameRollbackPlans(
+  operationId?: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameRollbackPlan[]> {
+  const query = operationId ? `?operation_id=${encodeURIComponent(String(operationId))}` : "";
+  const response = await httpClient.get<RenameRollbackPlan[]>(`/rename-rollback-plans${query}`);
+  return response.data;
+}
+
+export async function dryRunRenameRollbackPlan(
+  planId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameRollbackPlan> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameRollbackPlan>(`/rename-rollback-plans/${planId}/dry-run`, {});
+  return response.data;
+}
+
+export async function executeRenameRollbackPlan(
+  planId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameRollbackPlan> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameRollbackPlan>(`/rename-rollback-plans/${planId}/execute`, {});
   return response.data;
 }
 

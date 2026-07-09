@@ -3,6 +3,7 @@ import {
   EditPen,
   FolderOpened,
   Moon,
+  Notebook,
   Operation,
   Search,
   Setting,
@@ -23,13 +24,16 @@ const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-const menuItems = [
-  { path: "/media-sources", label: messages.app.menu.mediaSources, icon: FolderOpened },
-  { path: "/scan-jobs", label: messages.app.menu.scanJobs, icon: Operation },
-  { path: "/scan-results", label: messages.app.menu.scanResults, icon: VideoCamera },
-  { path: "/rename-previews", label: messages.app.menu.renamePreviews, icon: EditPen },
-  { path: "/settings", label: messages.app.menu.settings, icon: Setting },
-];
+const menuItems = computed(() =>
+  [
+    { path: "/media-sources", label: messages.app.menu.mediaSources, icon: FolderOpened, visible: true },
+    { path: "/scan-jobs", label: messages.app.menu.scanJobs, icon: Operation, visible: true },
+    { path: "/scan-results", label: messages.app.menu.scanResults, icon: VideoCamera, visible: true },
+    { path: "/rename-previews", label: messages.app.menu.renamePreviews, icon: EditPen, visible: true },
+    { path: "/tasks", label: messages.app.menu.tasks, icon: Notebook, visible: authStore.hasPermission("task:manage") },
+    { path: "/settings", label: messages.app.menu.settings, icon: Setting, visible: true },
+  ].filter((item) => item.visible),
+);
 
 const isDarkTheme = computed(() => appStore.resolvedTheme === "dark");
 const isPublicPage = computed(() => Boolean(route.meta.public));
