@@ -120,6 +120,55 @@ class MetadataMultiSourceServiceTest(unittest.TestCase):
             self.assertEqual("skipped", statuses["bangumi"])
             self.assertEqual("failed", statuses["failing"])
 
+    def test_parallel_dedupes_candidates_and_keeps_more_complete_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            primary = FakeRegisteredProvider(
+                "tmdb",
+                "TMDB",
+                1,
+                [MetadataCandidate("TMDB", "603", "movie", "The Matrix", "The Matrix", 1999, None, None, "")],
+            )
+            secondary = FakeRegisteredProvider(
+                "bangumi",
+                "Bangumi",
+                30,
+                [
+                    MetadataCandidate(
+                        "Bangumi",
+                        "bgm-603",
+                        "movie",
+                        "The Matrix",
+                        "The Matrix",
+                        1999,
+                        None,
+                        None,
+                        "完整简介",
+                        genres=["科幻"],
+                    )
+                ],
+            )
+            registry = [
+                ProviderRegistryItem("tmdb", "TMDB", 1, True, True, primary),
+                ProviderRegistryItem("bangumi", "Bangumi", 30, True, True, secondary),
+            ]
+
+            result = match_multi_source_metadata_candidates(
+                settings,
+                ParsedMediaName("movie", "The Matrix", 1999, None, None),
+                mode=MULTI_MATCH_MODE_PARALLEL,
+                registry=registry,
+            )
+
+            self.assertEqual(1, len(result.summary.matches))
+            candidate = result.summary.matches[0].candidate
+            self.assertEqual("Bangumi", candidate.provider)
+            self.assertEqual("movie:thematrix:1999::", candidate.raw_data["merge_key"])
+            self.assertEqual(30, candidate.raw_data["source_priority"])
+            self.assertGreater(candidate.raw_data["field_completeness"], 4)
+            self.assertEqual("Bangumi", candidate.raw_data["field_sources"]["genres"])
+
 
 if __name__ == "__main__":
     unittest.main()

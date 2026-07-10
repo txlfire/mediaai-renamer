@@ -21,6 +21,7 @@ from app.service.preview_service import (
     update_rename_preview,
 )
 from app.service.pending_file_service import list_pending_files
+from app.service.metadata_provider_service import update_metadata_provider_config
 from app.service.settings_service import update_setting_values
 
 
@@ -655,6 +656,66 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual("The.Matrix.1999.mkv", payload["preview"]["current_target_name"])
         self.assertEqual(1, payload["preview"]["metadata_candidate_count"])
         self.assertEqual("success", payload["provider_results"][0]["status"])
+
+    def test_batch_metadata_multi_match_reports_provider_summary(self):
+        update_metadata_provider_config(
+            self.settings,
+            "bangumi",
+            {"enabled": True, "priority": 30},
+        )
+        update_setting_values(
+            self.settings,
+            {
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        previews = client.get("/api/rename-previews").json()
+        preview_ids = [item["id"] for item in previews[:2]]
+
+        class FakeTmdbClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="TMDB",
+                        provider_id="603",
+                        media_type=parsed.media_type,
+                        title=parsed.title,
+                        original_title=parsed.title,
+                        year=parsed.year,
+                        season=parsed.season,
+                        episode=parsed.episode,
+                        overview="",
+                    )
+                ]
+
+        with patch("app.service.metadata_provider_registry.TmdbClient", FakeTmdbClient):
+            response = client.post(
+                "/api/rename-previews/metadata-multi-match/batch",
+                json={
+                    "rename_preview_ids": preview_ids,
+                    "mode": "parallel",
+                    "metadata_match_source": "parsed_title",
+                },
+            )
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, payload["total_count"])
+        self.assertEqual(2, payload["success_count"])
+        self.assertEqual(2, payload["provider_success_count"])
+        self.assertEqual(2, payload["provider_skipped_count"])
+        self.assertEqual("skipped", payload["items"][0]["provider_results"][1]["status"])
 
     def test_apply_ai_parse_candidate_api(self):
         app = create_app(self.settings)

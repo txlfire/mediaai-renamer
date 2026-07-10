@@ -1141,6 +1141,10 @@ def match_rename_previews_multi_source_metadata(
     success_count = 0
     failed_count = 0
     blocked_count = 0
+    skipped_count = 0
+    provider_success_count = 0
+    provider_failed_count = 0
+    provider_skipped_count = 0
 
     for preview_id in unique_ids:
         try:
@@ -1162,6 +1166,30 @@ def match_rename_previews_multi_source_metadata(
             failed_count += 1
         else:
             success_count += 1
+        provider_results = item.get("provider_results") if isinstance(item, dict) else None
+        has_provider_success = False
+        has_provider_failed = False
+        has_provider_skipped = False
+        if isinstance(provider_results, list):
+            for provider_result in provider_results:
+                if not isinstance(provider_result, dict):
+                    continue
+                status = provider_result.get("status")
+                if status == "success":
+                    has_provider_success = True
+                    provider_success_count += 1
+                elif status == "failed":
+                    has_provider_failed = True
+                    provider_failed_count += 1
+                elif status == "skipped":
+                    has_provider_skipped = True
+                    provider_skipped_count += 1
+        if (
+            isinstance(preview, RenamePreview)
+            and preview.metadata_match_status == "failed"
+            and (not provider_results or (has_provider_skipped and not has_provider_success and not has_provider_failed))
+        ):
+            skipped_count += 1
         items.append(item)
 
     return {
@@ -1169,6 +1197,10 @@ def match_rename_previews_multi_source_metadata(
         "success_count": success_count,
         "failed_count": failed_count,
         "blocked_count": blocked_count,
+        "skipped_count": skipped_count,
+        "provider_success_count": provider_success_count,
+        "provider_failed_count": provider_failed_count,
+        "provider_skipped_count": provider_skipped_count,
         "items": items,
         "failed_items": failed,
     }

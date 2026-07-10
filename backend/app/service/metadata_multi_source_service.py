@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import re
 
 from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName
@@ -39,14 +40,137 @@ class MultiSourceMatchResult:
     provider_results: list[ProviderSearchResult]
 
 
+def _normalize_text(value: str | None) -> str:
+    """生成跨源去重用的标题片段。"""
+
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (value or "").lower())
+
+
+def _candidate_merge_key(candidate: MetadataCandidate) -> str:
+    """生成多源候选去重键。"""
+
+    external_id = candidate.tmdb_id or candidate.imdb_id
+    if external_id:
+        return f"{candidate.media_type}:external:{external_id}"
+    if candidate.provider and candidate.provider_id:
+        provider_key = f"{candidate.provider.lower()}:{candidate.provider_id}"
+    else:
+        provider_key = ""
+    title_key = _normalize_text(candidate.chinese_title or candidate.localized_title or candidate.title or candidate.original_title)
+    parts = [
+        candidate.media_type,
+        title_key,
+        str(candidate.year or ""),
+        str(candidate.season or ""),
+        str(candidate.episode or ""),
+    ]
+    if not title_key and provider_key:
+        return f"{candidate.media_type}:provider:{provider_key}"
+    return ":".join(parts)
+
+
+def _field_completeness(candidate: MetadataCandidate) -> int:
+    """计算候选字段完整度，供多源排序和前端展示。"""
+
+    scalar_fields = [
+        candidate.title,
+        candidate.original_title,
+        candidate.localized_title,
+        candidate.chinese_title,
+        candidate.english_title,
+        candidate.year,
+        candidate.season,
+        candidate.episode,
+        candidate.overview,
+        candidate.release_date,
+        candidate.vote_average,
+        candidate.poster_path,
+        candidate.original_language,
+        candidate.tmdb_id,
+        candidate.imdb_id,
+    ]
+    list_fields = [candidate.genres, candidate.cast, candidate.directors]
+    return sum(1 for value in scalar_fields if value not in (None, "", [])) + sum(1 for value in list_fields if value)
+
+
+def _field_sources(candidate: MetadataCandidate) -> dict[str, str]:
+    provider = candidate.provider or "unknown"
+    fields: dict[str, str] = {}
+    for field_name in (
+        "title",
+        "original_title",
+        "localized_title",
+        "chinese_title",
+        "english_title",
+        "year",
+        "season",
+        "episode",
+        "overview",
+        "release_date",
+        "vote_average",
+        "poster_path",
+        "original_language",
+        "genres",
+        "cast",
+        "directors",
+        "tmdb_id",
+        "imdb_id",
+    ):
+        value = getattr(candidate, field_name)
+        if value not in (None, "", []):
+            fields[field_name] = provider
+    return fields
+
+
+def _enrich_candidate(candidate: MetadataCandidate, item: ProviderRegistryItem) -> MetadataCandidate:
+    mergeKey = _candidate_merge_key(candidate)
+    completeness = _field_completeness(candidate)
+    rawData = dict(candidate.raw_data or {})
+    rawData.update(
+        {
+            "source_provider": item.provider,
+            "source_label": item.label,
+            "source_priority": item.priority,
+            "field_completeness": completeness,
+            "merge_key": mergeKey,
+            "field_sources": _field_sources(candidate),
+        }
+    )
+    return replace(candidate, raw_data=rawData)
+
+
+def _dedupe_candidates(candidates: list[MetadataCandidate]) -> list[MetadataCandidate]:
+    """按 merge_key 去重，同分时保留字段更完整、优先级更高的候选。"""
+
+    bestByKey: dict[str, MetadataCandidate] = {}
+    for candidate in candidates:
+        mergeKey = str(candidate.raw_data.get("merge_key") or _candidate_merge_key(candidate))
+        current = bestByKey.get(mergeKey)
+        if current is None:
+            bestByKey[mergeKey] = candidate
+            continue
+        candidateCompleteness = int(candidate.raw_data.get("field_completeness") or 0)
+        currentCompleteness = int(current.raw_data.get("field_completeness") or 0)
+        candidatePriority = int(candidate.raw_data.get("source_priority") or 1000)
+        currentPriority = int(current.raw_data.get("source_priority") or 1000)
+        if (candidateCompleteness, -candidatePriority) > (currentCompleteness, -currentPriority):
+            bestByKey[mergeKey] = candidate
+    return list(bestByKey.values())
+
+
 def _summary_from_candidates(
     parsed: ParsedMediaName,
     candidates: list[MetadataCandidate],
     source_label: str,
 ) -> MetadataMatchSummary:
+    candidates = _dedupe_candidates(candidates)
     matches = sorted(
         (score_metadata_candidate(parsed, candidate) for candidate in candidates),
-        key=lambda item: item.score,
+        key=lambda item: (
+            item.score,
+            int(item.candidate.raw_data.get("field_completeness") or 0),
+            -int(item.candidate.raw_data.get("source_priority") or 1000),
+        ),
         reverse=True,
     )
     if not matches:
@@ -114,7 +238,7 @@ def match_multi_source_metadata_candidates(
             continue
 
         try:
-            providerCandidates = item.searcher.search(parsed)
+            providerCandidates = [_enrich_candidate(candidate, item) for candidate in item.searcher.search(parsed)]
         except Exception as exc:
             providerResults.append(
                 ProviderSearchResult(item.provider, item.label, "failed", f"{item.label} 搜索失败: {exc}", 0)
