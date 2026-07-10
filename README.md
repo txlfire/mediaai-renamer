@@ -213,6 +213,7 @@ npm run release:publish
 - M10 设计手册：[docs/design/M10-design-manual.md](docs/design/M10-design-manual.md)
 - M10 开发计划：[docs/development/m10/M10-多站点元数据源开发计划.md](docs/development/m10/M10-%E5%A4%9A%E7%AB%99%E7%82%B9%E5%85%83%E6%95%B0%E6%8D%AE%E6%BA%90%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)
 - M10 验收清单：[docs/development/m10/M10-多站点元数据源验收清单.md](docs/development/m10/M10-%E5%A4%9A%E7%AB%99%E7%82%B9%E5%85%83%E6%95%B0%E6%8D%AE%E6%BA%90%E9%AA%8C%E6%94%B6%E6%B8%85%E5%8D%95.md)
+- M10 用户手册：[docs/manuals/M10-user-manual-cn.md](docs/manuals/M10-user-manual-cn.md)
 - M5 开发计划：[docs/development/m5/M5-NAS-SMB共享目录开发计划.md](docs/development/m5/M5-NAS-SMB共享目录开发计划.md)
 - M5 验收清单：[docs/development/m5/M5-NAS-SMB共享目录验收清单.md](docs/development/m5/M5-NAS-SMB共享目录验收清单.md)
 - M5 设计手册：[docs/design/M5-design-manual.md](docs/design/M5-design-manual.md)
