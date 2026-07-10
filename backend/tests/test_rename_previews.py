@@ -607,6 +607,55 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual("黑客帝国", payload["ai"]["items"][0]["result"]["candidates"][0]["title"])
         self.assertNotIn("sk-secret123456", str(payload))
 
+    def test_metadata_multi_match_api_caches_candidates_without_backfilling(self):
+        update_setting_values(
+            self.settings,
+            {
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        preview = client.get("/api/rename-previews").json()[0]
+
+        class FakeTmdbClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="TMDB",
+                        provider_id="603",
+                        media_type="movie",
+                        title="黑客帝国",
+                        original_title="The Matrix",
+                        year=1999,
+                        season=None,
+                        episode=None,
+                        overview="",
+                    )
+                ]
+
+        with patch("app.service.metadata_provider_registry.TmdbClient", FakeTmdbClient):
+            response = client.post(
+                f"/api/rename-previews/{preview['id']}/metadata-multi-match",
+                json={"mode": "parallel", "metadata_match_source": "parsed_title"},
+            )
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("high_confidence", payload["preview"]["metadata_match_status"])
+        self.assertEqual("The.Matrix.1999.mkv", payload["preview"]["current_target_name"])
+        self.assertEqual(1, payload["preview"]["metadata_candidate_count"])
+        self.assertEqual("success", payload["provider_results"][0]["status"])
+
     def test_apply_ai_parse_candidate_api(self):
         app = create_app(self.settings)
         client = TestClient(app)

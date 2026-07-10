@@ -18,7 +18,9 @@ from app.service.preview_service import (
     list_rename_previews,
     match_all_unmatched_metadata,
     match_all_unmatched_metadata_with_ai_fallback,
+    match_rename_preview_multi_source_metadata,
     match_rename_preview_metadata,
+    match_rename_previews_multi_source_metadata,
     match_rename_previews_metadata,
     match_rename_previews_metadata_with_ai_fallback,
     parse_rename_preview_with_ai,
@@ -71,6 +73,19 @@ class BatchMetadataMatchRequest(BaseModel):
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
 
 
+class MultiSourceMetadataMatchRequest(BaseModel):
+    """多源元数据匹配请求。"""
+
+    mode: str = "fallback"
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE
+
+
+class BatchMultiSourceMetadataMatchRequest(MultiSourceMetadataMatchRequest):
+    """批量多源元数据匹配请求。"""
+
+    rename_preview_ids: list[int]
+
+
 class BatchAiParseRequest(BaseModel):
     """Batch AI structured parse request."""
 
@@ -96,6 +111,12 @@ class AllMetadataMatchRequest(BaseModel):
 def _validate_metadata_match_source(value: str) -> str:
     if value not in METADATA_MATCH_SOURCES:
         raise HTTPException(status_code=400, detail="不支持的 TMDB 匹配来源")
+    return value
+
+
+def _validate_multi_source_mode(value: str) -> str:
+    if value not in {"primary_only", "fallback", "parallel"}:
+        raise HTTPException(status_code=400, detail="不支持的多源匹配模式")
     return value
 
 
@@ -249,6 +270,42 @@ def match_all_metadata_with_ai_fallback(
         request.app.state.settings,
         media_source_id=payload.media_source_id,
         scan_job_id=payload.scan_job_id,
+        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+    )
+
+
+@router.post("/{preview_id}/metadata-multi-match")
+def match_preview_multi_source_metadata(
+    preview_id: int,
+    payload: MultiSourceMetadataMatchRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
+    """Run M10 multi-source metadata matching for one preview."""
+
+    try:
+        return match_rename_preview_multi_source_metadata(
+            request.app.state.settings,
+            preview_id,
+            mode=_validate_multi_source_mode(payload.mode),
+            metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/metadata-multi-match/batch")
+def match_previews_multi_source_metadata(
+    payload: BatchMultiSourceMetadataMatchRequest,
+    request: Request,
+    _current_user=Depends(require_permission("metadata:submit")),
+):
+    """Run M10 multi-source metadata matching for selected previews."""
+
+    return match_rename_previews_multi_source_metadata(
+        request.app.state.settings,
+        payload.rename_preview_ids,
+        mode=_validate_multi_source_mode(payload.mode),
         metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
     )
 
