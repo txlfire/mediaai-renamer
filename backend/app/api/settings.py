@@ -25,6 +25,12 @@ from app.service.settings_service import (
     test_tmdb_connection,
     update_setting_values,
 )
+from app.service.metadata_provider_service import (
+    list_metadata_provider_configs,
+    metadata_provider_config_to_dict,
+    test_metadata_provider_config,
+    update_metadata_provider_config,
+)
 from app.service.naming_settings_service import (
     build_naming_template_diff,
     build_naming_template_preview,
@@ -85,6 +91,17 @@ class NamingTemplateImportRequest(BaseModel):
     """Naming template import payload."""
 
     raw_text: str
+
+
+class MetadataProviderConfigRequest(BaseModel):
+    """Metadata provider configuration payload."""
+
+    enabled: bool | None = None
+    priority: int | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    timeout_seconds: int | None = None
+    max_retries: int | None = None
 
 
 def _model_payload(model: BaseModel) -> dict[str, object]:
@@ -271,6 +288,77 @@ def test_ai_settings(request: Request):
     """Validate current AI provider settings."""
 
     return test_ai_connection(request.app.state.settings)
+
+
+@router.get("/metadata-providers")
+def get_metadata_providers(request: Request):
+    """List M10 metadata provider configs."""
+
+    return [
+        metadata_provider_config_to_dict(item)
+        for item in list_metadata_provider_configs(request.app.state.settings)
+    ]
+
+
+@router.put("/metadata-providers/{provider}")
+def update_metadata_provider(
+    provider: str,
+    payload: MetadataProviderConfigRequest,
+    request: Request,
+    current_user=Depends(require_permission("settings:write")),
+):
+    """Update one metadata provider config."""
+
+    try:
+        config = update_metadata_provider_config(
+            request.app.state.settings,
+            provider,
+            _model_payload(payload),
+        )
+    except ValueError as exc:
+        record_audit_event(
+            request.app.state.settings,
+            event_type="settings.update",
+            action="update_metadata_provider",
+            result="failed",
+            summary=f"元数据源配置保存失败：{provider}",
+            target_type="metadata_provider",
+            target_id=provider,
+            actor=current_user,
+            detail={
+                "provider": provider,
+                "values": sanitize_audit_detail(_model_payload(payload)),
+                "reason": str(exc),
+            },
+            **_audit_request_context(request),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        request.app.state.settings,
+        event_type="settings.update",
+        action="update_metadata_provider",
+        result="success",
+        summary=f"保存元数据源配置：{provider}",
+        target_type="metadata_provider",
+        target_id=provider,
+        actor=current_user,
+        detail={
+            "provider": provider,
+            "values": sanitize_audit_detail(_model_payload(payload)),
+        },
+        **_audit_request_context(request),
+    )
+    return metadata_provider_config_to_dict(config)
+
+
+@router.post("/metadata-providers/{provider}/test")
+def test_metadata_provider(provider: str, request: Request):
+    """Run M10-0A metadata provider config validation."""
+
+    try:
+        return test_metadata_provider_config(request.app.state.settings, provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/naming/export")
