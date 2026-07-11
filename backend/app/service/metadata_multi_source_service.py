@@ -180,9 +180,10 @@ def _summary_from_candidates(
             matches=[],
             metadata_source=source_label,
         )
+    matchReason = str(matches[0].candidate.raw_data.get("match_reason") or "").strip() or None
     return MetadataMatchSummary(
         status=matches[0].status,
-        message=None,
+        message=matchReason,
         matches=matches,
         metadata_source=source_label,
     )

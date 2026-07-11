@@ -699,7 +699,35 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
                     )
                 ]
 
-        with patch("app.service.metadata_provider_registry.TmdbClient", FakeTmdbClient):
+        class FakeBangumiClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.provider = "bangumi"
+                self.label = "Bangumi"
+                self.priority = int(kwargs.get("priority") or 30)
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="Bangumi",
+                        provider_id=f"bgm-{parsed.title}",
+                        media_type=parsed.media_type,
+                        title=parsed.title,
+                        original_title=parsed.title,
+                        year=parsed.year,
+                        season=None,
+                        episode=None,
+                        overview="",
+                        raw_data={"match_reason": "Bangumi 动画条目命中，依据：中文标题。"},
+                    )
+                ]
+
+        with (
+            patch("app.service.metadata_provider_registry.TmdbClient", FakeTmdbClient),
+            patch("app.service.metadata_provider_registry.BangumiClient", FakeBangumiClient),
+        ):
             response = client.post(
                 "/api/rename-previews/metadata-multi-match/batch",
                 json={
@@ -713,9 +741,9 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(2, payload["total_count"])
         self.assertEqual(2, payload["success_count"])
-        self.assertEqual(2, payload["provider_success_count"])
-        self.assertEqual(2, payload["provider_skipped_count"])
-        self.assertEqual("skipped", payload["items"][0]["provider_results"][1]["status"])
+        self.assertEqual(4, payload["provider_success_count"])
+        self.assertEqual(0, payload["provider_skipped_count"])
+        self.assertEqual("success", payload["items"][0]["provider_results"][1]["status"])
 
     def test_apply_ai_parse_candidate_api(self):
         app = create_app(self.settings)

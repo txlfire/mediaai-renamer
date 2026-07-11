@@ -100,6 +100,7 @@ class MetadataProviderConfigRequest(BaseModel):
     priority: int | None = None
     base_url: str | None = None
     api_key: str | None = None
+    clear_api_key: bool | None = None
     timeout_seconds: int | None = None
     max_retries: int | None = None
 
@@ -352,8 +353,12 @@ def update_metadata_provider(
 
 
 @router.post("/metadata-providers/{provider}/test")
-def test_metadata_provider(provider: str, request: Request):
-    """Run M10-0A metadata provider config validation."""
+def test_metadata_provider(
+    provider: str,
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
+    """Validate provider configuration and test an available real connection."""
 
     try:
         return test_metadata_provider_config(request.app.state.settings, provider)

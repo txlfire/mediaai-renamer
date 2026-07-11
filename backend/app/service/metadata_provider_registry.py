@@ -8,6 +8,7 @@ from typing import Protocol
 from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate
+from app.service.bangumi_client import BangumiClient
 from app.service.metadata_provider_service import (
     MetadataProviderConfig,
     PROVIDER_BANGUMI,
@@ -15,6 +16,7 @@ from app.service.metadata_provider_service import (
     PROVIDER_IMDB,
     PROVIDER_TMDB,
     PROVIDER_TVDB,
+    get_metadata_provider_api_key,
     list_metadata_provider_configs,
 )
 from app.service.settings_service import get_effective_settings
@@ -138,14 +140,31 @@ def build_metadata_provider_registry(settings: AppSettings) -> list[ProviderRegi
         if config is None:
             continue
         enabled = bool(config.enabled)
+        if provider == PROVIDER_BANGUMI and enabled:
+            searcher: RegisteredMetadataProvider | None = BangumiClient(
+                base_url=config.base_url,
+                access_token=get_metadata_provider_api_key(settings, provider),
+                timeout_seconds=config.timeout_seconds,
+                max_retries=config.max_retries,
+                priority=config.priority,
+                app_version=settings.version,
+            )
+            realSearchAvailable = True
+        else:
+            searcher = (
+                PlaceholderMetadataProvider(provider, PROVIDER_LABELS[provider], config.priority)
+                if enabled
+                else None
+            )
+            realSearchAvailable = False
         items.append(
             ProviderRegistryItem(
                 provider=provider,
                 label=PROVIDER_LABELS[provider],
                 priority=config.priority,
                 enabled=enabled,
-                real_search_available=False,
-                searcher=PlaceholderMetadataProvider(provider, PROVIDER_LABELS[provider], config.priority) if enabled else None,
+                real_search_available=realSearchAvailable,
+                searcher=searcher,
                 disabled_reason="" if enabled else "元数据源未启用",
             )
         )

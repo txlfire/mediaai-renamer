@@ -290,6 +290,31 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual("failed", data["status"])
             self.assertIn("Base URL", data["message"])
 
+    def test_metadata_provider_api_key_can_be_cleared_explicitly(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            saved_response = client.put(
+                "/api/settings/metadata-providers/bangumi",
+                json={"api_key": "bangumi-token"},
+            )
+            cleared_response = client.put(
+                "/api/settings/metadata-providers/bangumi",
+                json={"clear_api_key": True},
+            )
+
+            self.assertEqual(200, saved_response.status_code)
+            self.assertTrue(saved_response.json()["has_api_key"])
+            self.assertEqual(200, cleared_response.status_code)
+            self.assertFalse(cleared_response.json()["has_api_key"])
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                encrypted = connection.execute(
+                    "SELECT api_key_encrypted FROM metadata_provider_configs WHERE provider = 'bangumi'"
+                ).fetchone()[0]
+            self.assertEqual("", encrypted)
+
     def test_metadata_provider_rejects_invalid_provider(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             settings = self.build_settings(Path(temp_dir))

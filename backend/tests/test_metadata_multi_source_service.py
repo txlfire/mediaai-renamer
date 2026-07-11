@@ -169,6 +169,43 @@ class MetadataMultiSourceServiceTest(unittest.TestCase):
             self.assertGreater(candidate.raw_data["field_completeness"], 4)
             self.assertEqual("Bangumi", candidate.raw_data["field_sources"]["genres"])
 
+    def test_bangumi_match_reason_is_exposed_in_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            reason = "Bangumi 动画条目命中，依据：中文标题、原始标题。"
+            provider = FakeRegisteredProvider(
+                "bangumi",
+                "Bangumi",
+                30,
+                [
+                    MetadataCandidate(
+                        "Bangumi",
+                        "400602",
+                        "episode",
+                        "葬送的芙莉莲",
+                        "葬送のフリーレン",
+                        2023,
+                        None,
+                        None,
+                        "",
+                        raw_data={"match_reason": reason},
+                    )
+                ],
+            )
+            registry = [
+                ProviderRegistryItem("bangumi", "Bangumi", 30, True, True, provider),
+            ]
+
+            result = match_multi_source_metadata_candidates(
+                settings,
+                ParsedMediaName("episode", "葬送的芙莉莲", 2023, 1, 1),
+                mode=MULTI_MATCH_MODE_PARALLEL,
+                registry=registry,
+            )
+
+            self.assertEqual(reason, result.summary.message)
+
 
 if __name__ == "__main__":
     unittest.main()

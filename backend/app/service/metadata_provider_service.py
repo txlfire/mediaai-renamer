@@ -6,10 +6,12 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import sqlite3
+from time import perf_counter
 from urllib.parse import urlparse
 
 from app.core.config import AppSettings
-from app.service.media_source_secret import encrypt_secret, has_secret
+from app.service.bangumi_client import BANGUMI_API_BASE_URL, BangumiClient
+from app.service.media_source_secret import decrypt_secret, encrypt_secret, has_secret
 
 PROVIDER_TMDB = "tmdb"
 PROVIDER_IMDB = "imdb"
@@ -97,6 +99,20 @@ def _validate_base_url(provider: str, base_url: object) -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("元数据源 Base URL 必须是有效的 http 或 https 地址")
+    if provider == PROVIDER_BANGUMI:
+        isOfficialUrl = (
+            parsed.scheme == "https"
+            and (parsed.hostname or "").lower() == "api.bgm.tv"
+            and parsed.port in {None, 443}
+            and not parsed.username
+            and not parsed.password
+            and parsed.path in {"", "/"}
+            and not parsed.query
+            and not parsed.fragment
+        )
+        if not isOfficialUrl:
+            raise ValueError(f"Bangumi Base URL 仅支持官方地址 {BANGUMI_API_BASE_URL}")
+        return BANGUMI_API_BASE_URL
     return value
 
 
@@ -134,6 +150,20 @@ def get_metadata_provider_config(settings: AppSettings, provider: str) -> Metada
     return _row_to_config(row)
 
 
+def get_metadata_provider_api_key(settings: AppSettings, provider: str) -> str:
+    """仅供后端 Provider 使用，读取并解密元数据源密钥。"""
+
+    provider = _validate_provider(provider)
+    with closing(_connect(settings)) as connection:
+        row = connection.execute(
+            "SELECT api_key_encrypted FROM metadata_provider_configs WHERE provider = ?",
+            (provider,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("元数据源配置不存在")
+    return decrypt_secret(settings, row["api_key_encrypted"]) or ""
+
+
 def update_metadata_provider_config(
     settings: AppSettings,
     provider: str,
@@ -149,7 +179,13 @@ def update_metadata_provider_config(
     timeout_seconds = _validate_int(payload.get("timeout_seconds", current.timeout_seconds), "超时时间", 3, 60)
     max_retries = _validate_int(payload.get("max_retries", current.max_retries), "最大重试次数", 0, 5)
     api_key = str(payload.get("api_key") or "").strip()
-    encrypted_api_key = encrypt_secret(settings, api_key) if api_key and not api_key.startswith("********") else None
+    clearApiKey = bool(payload.get("clear_api_key", False))
+    if clearApiKey:
+        encrypted_api_key = ""
+    elif api_key and not api_key.startswith("********"):
+        encrypted_api_key = encrypt_secret(settings, api_key)
+    else:
+        encrypted_api_key = None
     now = _utc_now_text()
     with closing(_connect(settings)) as connection:
         connection.execute(
@@ -188,9 +224,33 @@ def update_metadata_provider_config(
 
 
 def test_metadata_provider_config(settings: AppSettings, provider: str) -> dict[str, object]:
-    """执行 M10-0A 配置级测试；真实外部连接在具体 Provider 接入阶段实现。"""
+    """执行 Provider 配置测试；已接入的 Provider 同时验证真实连接。"""
 
     config = get_metadata_provider_config(settings, provider)
+    if config.provider == PROVIDER_BANGUMI:
+        startedAt = perf_counter()
+        client = BangumiClient(
+            base_url=config.base_url,
+            access_token=get_metadata_provider_api_key(settings, provider),
+            timeout_seconds=config.timeout_seconds,
+            max_retries=config.max_retries,
+            priority=config.priority,
+            app_version=settings.version,
+        )
+        try:
+            client.test_connection()
+            status = "success"
+            message = "Bangumi 连接成功"
+        except Exception as exc:
+            status = "failed"
+            message = str(exc) or "Bangumi 连接失败，请检查网络或 Access Token"
+        return {
+            "provider": config.provider,
+            "status": status,
+            "message": message,
+            "response_ms": int((perf_counter() - startedAt) * 1000),
+            "checked_at": _utc_now_text(),
+        }
     if config.provider == PROVIDER_DOUBAN_PROXY and not config.base_url:
         return {
             "provider": config.provider,
