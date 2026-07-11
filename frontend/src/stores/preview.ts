@@ -10,7 +10,9 @@ import {
   generateRenamePreviews,
   matchAllUnmatchedMetadataWithAiFallback,
   matchAllUnmatchedMetadata,
+  matchRenamePreviewMultiSource,
   matchRenamePreviewMetadata,
+  matchRenamePreviewsMultiSource,
   matchRenamePreviewsMetadataWithAiFallback,
   matchRenamePreviewsMetadata,
   parseRenamePreviewWithAi,
@@ -20,10 +22,13 @@ import {
   type AiParseResult,
   type BatchAiParseResult,
   type BatchMetadataMatchResult,
+  type BatchMultiSourceMatchResult,
   type BatchRenamePreviewExcludeResult,
   type GenerateRenamePreviewsPayload,
   type MetadataMatchSource,
   type MetadataMatchResult,
+  type MultiSourceMatchMode,
+  type MultiSourceMatchResponse,
   type PreviewGenerationSummary,
   type RenamePreview,
   type RenamePreviewFilters,
@@ -152,6 +157,44 @@ export const usePreviewStore = defineStore("preview", {
           metadataMatchSource,
         );
         result.items.forEach((item) => this.replacePreview(item));
+        return result;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async matchMultiSource(
+      previewId: number,
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+      mode: MultiSourceMatchMode = "fallback",
+    ): Promise<MultiSourceMatchResponse> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await matchRenamePreviewMultiSource(previewId, metadataMatchSource, mode);
+        this.replacePreview(result.preview);
+        return result;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async matchMultiSourceBatch(
+      previewIds: number[],
+      metadataMatchSource: MetadataMatchSource = "parsed_title",
+      mode: MultiSourceMatchMode = "fallback",
+    ): Promise<BatchMultiSourceMatchResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const result = await matchRenamePreviewsMultiSource(previewIds, metadataMatchSource, mode);
+        result.items.forEach((item) => this.replacePreview(item.preview));
         return result;
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;

@@ -1,22 +1,29 @@
 import { defineStore } from "pinia";
 
 import {
+  fetchMetadataProviderConfigs,
   fetchAiTestResult,
   fetchImdbTestResult,
   fetchTmdbTestResult,
   fetchSettings,
   saveImdbTestResult,
   saveTmdbTestResult,
+  testMetadataProviderConfig,
   testAiSettings,
   testImdbSettings,
   testTmdbSettingsChannel,
   testTmdbSettings,
+  updateMetadataProviderConfig,
   updateSettings,
   type AiConnectionTestHistory,
   type AiConnectionTestResult,
   type ImdbConnectionTestHistory,
   type ImdbConnectionTestResult,
   type ImdbStoredConnectionTestResult,
+  type MetadataProviderConfig,
+  type MetadataProviderConfigPayload,
+  type MetadataProviderKey,
+  type MetadataProviderTestResult,
   type SystemSetting,
   type TmdbChannelTestResult,
   type TmdbConnectionTestHistory,
@@ -27,6 +34,7 @@ import { zhCnMessages as messages } from "../locales/zh-CN";
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     settings: [] as SystemSetting[],
+    metadataProviders: [] as MetadataProviderConfig[],
     loading: false,
     errorMessage: "",
   }),
@@ -55,6 +63,56 @@ export const useSettingsStore = defineStore("settings", {
         this.settings = await updateSettings(values);
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.settings.saveFailed;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadMetadataProviders() {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        this.metadataProviders = await fetchMetadataProviderConfigs();
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.metadataProviders.loadFailed;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async saveMetadataProvider(
+      provider: MetadataProviderKey,
+      payload: MetadataProviderConfigPayload,
+    ): Promise<MetadataProviderConfig> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        const updated = await updateMetadataProviderConfig(provider, payload);
+        const index = this.metadataProviders.findIndex((item) => item.provider === updated.provider);
+        if (index >= 0) {
+          this.metadataProviders[index] = updated;
+        } else {
+          this.metadataProviders.push(updated);
+        }
+        this.metadataProviders.sort((a, b) => a.priority - b.priority || a.provider.localeCompare(b.provider));
+        return updated;
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.metadataProviders.saveFailed;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async testMetadataProvider(provider: MetadataProviderKey): Promise<MetadataProviderTestResult> {
+      this.loading = true;
+      this.errorMessage = "";
+      try {
+        return await testMetadataProviderConfig(provider);
+      } catch (error) {
+        this.errorMessage = error instanceof Error ? error.message : messages.settings.metadataProviders.testFailed;
         throw error;
       } finally {
         this.loading = false;

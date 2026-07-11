@@ -20,6 +20,7 @@ import {
   executeRenameOperation,
   executeRenameRollbackPlan,
   fetchAuditEvents,
+  fetchMetadataProviderConfigs,
   fetchSettings,
   fetchLocalDirectories,
   fetchLogs,
@@ -41,7 +42,9 @@ import {
   getHealth,
   login,
   logout,
+  matchRenamePreviewMultiSource,
   matchRenamePreviewMetadata,
+  matchRenamePreviewsMultiSource,
   matchRenamePreviewsMetadataWithAiFallback,
   matchAllUnmatchedMetadataWithAiFallback,
   movePendingFiles,
@@ -60,7 +63,9 @@ import {
   testMediaSourceConnection,
   testNamingTemplate,
   testMediaSourceConnectionPayload,
+  testMetadataProviderConfig,
   testTmdbSettings,
+  updateMetadataProviderConfig,
   updateSettings,
   updateMediaSource,
   updateRenamePreview,
@@ -471,6 +476,8 @@ describe("rename preview API client", () => {
     await fetchRenamePreviews({ status: "generated", keyword: "Matrix" }, httpClient);
     await updateRenamePreview(1, "Matrix.Custom", httpClient);
     await matchRenamePreviewMetadata(1, "parent_folder_title", httpClient);
+    await matchRenamePreviewMultiSource(1, "parent_folder_title", "parallel", httpClient);
+    await matchRenamePreviewsMultiSource([1, 2], "parent_folder_title", "fallback", httpClient);
     await matchRenamePreviewsMetadataWithAiFallback([1, 2], "parsed_title", httpClient);
     await matchAllUnmatchedMetadataWithAiFallback({ media_source_id: 1, scan_job_id: 2 }, "parsed_title", httpClient);
     await fetchRenamePreviewMetadataCandidates(1, "parent_folder_title", httpClient);
@@ -515,6 +522,8 @@ describe("rename preview API client", () => {
       "GET /rename-previews?status=generated&keyword=Matrix",
       'PUT /rename-previews/1:{"target_name":"Matrix.Custom"}',
       "POST /rename-previews/1/metadata-match?metadata_match_source=parent_folder_title:{}",
+      'POST /rename-previews/1/metadata-multi-match:{"metadata_match_source":"parent_folder_title","mode":"parallel"}',
+      'POST /rename-previews/metadata-multi-match/batch:{"rename_preview_ids":[1,2],"metadata_match_source":"parent_folder_title","mode":"fallback"}',
       'POST /rename-previews/metadata-match/ai-fallback:{"rename_preview_ids":[1,2],"metadata_match_source":"parsed_title"}',
       'POST /rename-previews/metadata-match/all/ai-fallback:{"media_source_id":1,"scan_job_id":2,"metadata_match_source":"parsed_title"}',
       "GET /rename-previews/1/metadata-candidates?metadata_match_source=parent_folder_title",
@@ -581,15 +590,32 @@ describe("settings API client", () => {
     };
 
     await fetchSettings(httpClient);
+    await fetchMetadataProviderConfigs(httpClient);
     await updateSettings({ "tmdb.timeout_ms": 12000 }, httpClient);
     await updateSettings({ "privacy.custom_sensitive_words": ["自定义"] }, httpClient);
+    await updateMetadataProviderConfig(
+      "bangumi",
+      {
+        enabled: true,
+        priority: 30,
+        base_url: "https://api.bgm.tv",
+        api_key: "token",
+        timeout_seconds: 10,
+        max_retries: 1,
+      },
+      httpClient,
+    );
     await testTmdbSettings(httpClient);
+    await testMetadataProviderConfig("bangumi", httpClient);
 
     expect(calls).toEqual([
       "GET /settings",
+      "GET /settings/metadata-providers",
       'PUT /settings:{"values":{"tmdb.timeout_ms":12000}}',
       'PUT /settings:{"values":{"privacy.custom_sensitive_words":["自定义"]}}',
+      'PUT /settings/metadata-providers/bangumi:{"enabled":true,"priority":30,"base_url":"https://api.bgm.tv","api_key":"token","timeout_seconds":10,"max_retries":1}',
       "POST /settings/tmdb/test:{}",
+      "POST /settings/metadata-providers/bangumi/test:{}",
     ]);
   });
 

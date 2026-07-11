@@ -9,8 +9,11 @@ import type {
   AiParseCandidate,
   AiParseResult,
   BatchAiParseResult,
+  BatchMultiSourceMatchResult,
   MetadataMatchResult,
   MetadataMatchSource,
+  MultiSourceMatchMode,
+  ProviderSearchResult,
   RenamePreview,
 } from "../api/client";
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
@@ -100,6 +103,8 @@ const operationResultFailed = ref(0);
 const operationResultSkipped = ref(0);
 const operationResultLogs = ref<string[]>([]);
 const metadataMatchSource = ref<MetadataMatchSource>("parsed_title");
+const multiSourceMatchMode = ref<MultiSourceMatchMode>("fallback");
+const multiSourceProviderResults = ref<Record<number, ProviderSearchResult[]>>({});
 const aiConnectionHistory = ref<AiConnectionTestHistory | null>(null);
 const defaultSort = { prop: "id", order: "ascending" as const };
 const pagedPreviews = computed(() =>
@@ -291,6 +296,13 @@ function metadataStatusTagType(value: string | null) {
   return "info";
 }
 
+function providerSearchStatusLabel(value: string) {
+  if (value === "success") return messages.settings.metadataProviders.statusSuccess;
+  if (value === "failed") return messages.settings.metadataProviders.statusFailed;
+  if (value === "skipped") return messages.settings.metadataProviders.statusSkipped;
+  return value || "-";
+}
+
 function aiParseStatusLabel(value: string | null | undefined) {
   const labels: Record<string, string> = messages.renamePreviews.aiParse.statuses;
   return value ? (labels[value] ?? value) : "-";
@@ -339,6 +351,34 @@ function candidateValue(value: unknown) {
     return joinCandidateValues(value.filter((item): item is string => typeof item === "string"));
   }
   return value === undefined || value === null || value === "" ? "-" : String(value);
+}
+
+function candidateSourceLabel(row: MetadataMatchResult) {
+  const rawData = row.candidate.raw_data ?? {};
+  const sourceLabel = rawData.source_label;
+  return typeof sourceLabel === "string" && sourceLabel.trim()
+    ? sourceLabel
+    : row.candidate.provider;
+}
+
+function metadataFieldLabel(field: string) {
+  const labels = messages.renamePreviews.metadataDialog.fields as Record<string, string>;
+  return labels[field] ?? field;
+}
+
+function candidateFieldSources(row: MetadataMatchResult) {
+  const rawData = row.candidate.raw_data ?? {};
+  const fieldSources = rawData.field_sources;
+  if (!fieldSources || typeof fieldSources !== "object" || Array.isArray(fieldSources)) {
+    return [];
+  }
+  return Object.entries(fieldSources as Record<string, unknown>)
+    .filter(([, value]) => typeof value === "string" && value.trim())
+    .map(([field, source]) => ({
+      field,
+      label: metadataFieldLabel(field),
+      source: String(source),
+    }));
 }
 
 function seasonEpisode(row: { season: number | null; episode: number | null }) {
@@ -749,6 +789,120 @@ function appendMetadataLogs(result: { items: RenamePreview[]; failed_items: Arra
   });
 }
 
+function cacheMultiSourceProviderResults(result: BatchMultiSourceMatchResult) {
+  const next = { ...multiSourceProviderResults.value };
+  result.items.forEach((item) => {
+    next[item.preview.id] = item.provider_results;
+  });
+  multiSourceProviderResults.value = next;
+}
+
+function appendMultiSourceLogs(result: BatchMultiSourceMatchResult) {
+  operationProgressLogs.value.push(
+    formatMessage(messages.renamePreviews.multiSourceSummaryLog, {
+      success: result.success_count,
+      failed: result.failed_count,
+      skipped: result.blocked_count + result.skipped_count,
+    }),
+  );
+  result.items.forEach((item) => {
+    item.provider_results.forEach((providerResult) => {
+      operationProgressLogs.value.push(
+        formatMessage(messages.renamePreviews.multiSourceProviderLog, {
+          provider: providerResult.label || providerResult.provider,
+          status: providerSearchStatusLabel(providerResult.status),
+          count: providerResult.candidate_count,
+          message: providerResult.message,
+        }),
+      );
+    });
+  });
+  result.failed_items.forEach((item) => {
+    operationProgressLogs.value.push(
+      formatMessage(messages.renamePreviews.metadataDialog.matchFailedLog, {
+        id: item.id,
+        reason: item.message,
+      }),
+    );
+  });
+}
+
+function multiSourceTargetPreviews() {
+  return previewStore.previews.filter((preview) => preview.status !== "renamed" && preview.status !== "excluded");
+}
+
+async function confirmMultiSourceOperation(count: number) {
+  await ElMessageBox.confirm(
+    formatMessage(messages.renamePreviews.multiSourceConfirm, { count }),
+    messages.renamePreviews.confirmOperationTitle,
+    {
+      confirmButtonText: messages.common.confirm,
+      cancelButtonText: messages.common.cancel,
+      type: "warning",
+    },
+  );
+}
+
+async function matchMultiSource(row: RenamePreview) {
+  await confirmMultiSourceOperation(1);
+  metadataPreviewId.value = row.id;
+  const result = await previewStore.matchMultiSource(row.id, metadataMatchSource.value, multiSourceMatchMode.value);
+  multiSourceProviderResults.value = {
+    ...multiSourceProviderResults.value,
+    [result.preview.id]: result.provider_results,
+  };
+  metadataCandidates.value = await previewStore.loadMetadataCandidates(row.id, metadataMatchSource.value);
+  if (!metadataCandidates.value.length) {
+    ElMessage.warning(result.preview.metadata_message || messages.renamePreviews.metadataDialog.empty);
+  } else {
+    metadataDialogVisible.value = true;
+  }
+}
+
+async function matchSelectedMultiSource() {
+  if (selectedPreviewIds.value.length === 0) {
+    return;
+  }
+  await confirmMultiSourceOperation(selectedPreviewIds.value.length);
+  resetOperationProgress(selectedPreviewIds.value.length, messages.renamePreviews.multiSourceMatch);
+  const result = await previewStore.matchMultiSourceBatch(
+    selectedPreviewIds.value,
+    metadataMatchSource.value,
+    multiSourceMatchMode.value,
+  );
+  cacheMultiSourceProviderResults(result);
+  appendMultiSourceLogs(result);
+  finishOperationProgress(
+    result.total_count,
+    result.success_count,
+    result.failed_count,
+    result.blocked_count + result.skipped_count,
+  );
+}
+
+async function matchAllCurrentMultiSource() {
+  const targets = multiSourceTargetPreviews();
+  if (targets.length === 0) {
+    ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
+    return;
+  }
+  await confirmMultiSourceOperation(targets.length);
+  resetOperationProgress(targets.length, messages.renamePreviews.multiSourceMatchAll);
+  const result = await previewStore.matchMultiSourceBatch(
+    targets.map((item) => item.id),
+    metadataMatchSource.value,
+    multiSourceMatchMode.value,
+  );
+  cacheMultiSourceProviderResults(result);
+  appendMultiSourceLogs(result);
+  finishOperationProgress(
+    result.total_count,
+    result.success_count,
+    result.failed_count,
+    result.blocked_count + result.skipped_count,
+  );
+}
+
 function shouldRunAiBatch(preview: RenamePreview) {
   return (
     preview.status !== "renamed" &&
@@ -930,6 +1084,12 @@ async function handleTmdbDropdownCommand(command: string) {
 async function handleAiDropdownCommand(command: string) {
   if (command === "all_ai") {
     await parseAllWithAi();
+  }
+}
+
+async function handleMultiSourceDropdownCommand(command: string) {
+  if (command === "all_multi_source") {
+    await matchAllCurrentMultiSource();
   }
 }
 
@@ -1296,6 +1456,15 @@ onMounted(async () => {
               <el-option :label="messages.renamePreviews.metadataSourceOriginalFileName" value="original_file_name" />
               <el-option :label="messages.renamePreviews.metadataSourceParentFolderTitle" value="parent_folder_title" />
             </el-select>
+            <el-select
+              v-model="multiSourceMatchMode"
+              class="metadata-source-select"
+              :placeholder="messages.renamePreviews.metadataMatchMode"
+              :disabled="previewStore.loading"
+            >
+              <el-option :label="messages.renamePreviews.multiSourceModes.fallback" value="fallback" />
+              <el-option :label="messages.renamePreviews.multiSourceModes.parallel" value="parallel" />
+            </el-select>
             <div class="action-split-button">
               <el-button
                 :icon="Connection"
@@ -1320,6 +1489,34 @@ onMounted(async () => {
                     <el-dropdown-item command="all_tmdb" :disabled="!canSubmitMetadata">{{ messages.renamePreviews.tmdbMatchAll }}</el-dropdown-item>
                     <el-dropdown-item command="selected_tmdb_ai" :disabled="!aiBatchReady || !canSubmitMetadata">{{ messages.renamePreviews.tmdbAiFallbackSelected }}</el-dropdown-item>
                     <el-dropdown-item command="all_tmdb_ai" :disabled="!aiBatchReady || !canSubmitMetadata">{{ messages.renamePreviews.tmdbAiFallbackAll }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+            <div class="action-split-button">
+              <el-button
+                :icon="Connection"
+                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !canSubmitMetadata"
+                :title="metadataPermissionTitle"
+                :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.multiSourceMatch"
+                class="action-split-main"
+                @click="matchSelectedMultiSource"
+              >
+                {{ operationButtonLabel(messages.renamePreviews.multiSourceMatch, messages.renamePreviews.operationResultDialog.runningMatch) }}
+              </el-button>
+              <el-dropdown
+                trigger="click"
+                :disabled="previewStore.loading || !canSubmitMetadata"
+                @command="handleMultiSourceDropdownCommand"
+              >
+                <el-button class="action-split-caret">
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="all_multi_source" :disabled="previewStore.previews.length === 0 || !canSubmitMetadata">
+                      {{ messages.renamePreviews.multiSourceMatchAll }}
+                    </el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1581,7 +1778,7 @@ onMounted(async () => {
           >
           <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column :label="messages.common.actions" width="164" align="center" header-align="center" fixed="right">
+          <el-table-column :label="messages.common.actions" width="190" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
           <div class="table-actions">
           <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
@@ -1592,6 +1789,16 @@ onMounted(async () => {
           circle
           :disabled="!canSubmitMetadata"
           @click.stop="matchMetadata(row)"
+          />
+          </el-tooltip>
+          <el-tooltip :content="messages.renamePreviews.actions.multiSourceMatch" placement="top">
+          <el-button
+          class="table-action-button action-sync"
+          :icon="Connection"
+          text
+          circle
+          :disabled="!canSubmitMetadata"
+          @click.stop="matchMultiSource(row)"
           />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.aiParse" placement="top">
@@ -1891,7 +2098,25 @@ onMounted(async () => {
       <el-table v-else :data="pagedMetadataCandidates" class="data-table" table-layout="auto">
         <el-table-column type="expand" width="48">
           <template #default="{ row }">
-            <pre class="metadata-raw-json">{{ JSON.stringify(row.candidate.raw_data ?? {}, null, 2) }}</pre>
+            <div class="metadata-candidate-expanded">
+              <div v-if="candidateFieldSources(row).length" class="metadata-field-source-list">
+                <span class="metadata-field-source-title">{{ messages.renamePreviews.metadataDialog.fieldSources }}</span>
+                <el-tag
+                  v-for="fieldSource in candidateFieldSources(row)"
+                  :key="fieldSource.field"
+                  size="small"
+                  effect="light"
+                >
+                  {{ fieldSource.label }}：{{ fieldSource.source }}
+                </el-tag>
+              </div>
+              <pre class="metadata-raw-json">{{ JSON.stringify(row.candidate.raw_data ?? {}, null, 2) }}</pre>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.metadataDialog.source" width="118" align="center" header-align="center">
+          <template #default="{ row }">
+            <el-tag effect="light">{{ candidateSourceLabel(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column :label="messages.renamePreviews.columns.metadataScore" width="96" align="center" header-align="center">
@@ -2189,3 +2414,23 @@ onMounted(async () => {
     />
   </ListPageLayout>
 </template>
+
+<style scoped>
+.metadata-candidate-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.metadata-field-source-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.metadata-field-source-title {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+</style>
