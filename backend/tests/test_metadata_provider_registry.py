@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
+from app.service.douban_proxy_client import DoubanProxyClient
 from app.service.metadata_provider_registry import build_metadata_provider_registry
 from app.service.metadata_provider_service import update_metadata_provider_config
 
@@ -79,6 +80,37 @@ class MetadataProviderRegistryTest(unittest.TestCase):
             self.assertEqual("tvdb-key", item.searcher.api_key)
             self.assertEqual(14, item.searcher.timeout_seconds)
             self.assertEqual(1, item.searcher.max_retries)
+
+    def test_enabled_douban_proxy_uses_real_provider_and_decrypted_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_metadata_provider_config(
+                settings,
+                "douban_proxy",
+                {
+                    "enabled": True,
+                    "priority": 45,
+                    "base_url": "https://douban.example.test/api",
+                    "api_key": "proxy-token",
+                    "timeout_seconds": 13,
+                    "max_retries": 2,
+                },
+            )
+
+            registry = build_metadata_provider_registry(settings)
+            item = next(entry for entry in registry if entry.provider == "douban_proxy")
+
+            self.assertTrue(item.enabled)
+            self.assertTrue(item.real_search_available)
+            self.assertIsNotNone(item.searcher)
+            self.assertIsInstance(item.searcher, DoubanProxyClient)
+            self.assertEqual("豆瓣代理", item.searcher.label)
+            self.assertEqual(45, item.searcher.priority)
+            self.assertEqual("https://douban.example.test/api", item.searcher.base_url)
+            self.assertEqual("proxy-token", item.searcher.api_key)
+            self.assertEqual(13, item.searcher.timeout_seconds)
+            self.assertEqual(2, item.searcher.max_retries)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
 from app.service.bangumi_client import BangumiClient
+from app.service.douban_proxy_client import DoubanProxyClient
 from app.service.metadata_provider_service import (
     test_metadata_provider_config,
     update_metadata_provider_config,
@@ -139,6 +140,41 @@ class MetadataProviderServiceTest(unittest.TestCase):
                         "api_key": "must-not-leak",
                     },
                 )
+
+    def test_douban_proxy_connection_test_uses_saved_config_and_decrypted_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_metadata_provider_config(
+                settings,
+                "douban_proxy",
+                {
+                    "enabled": True,
+                    "base_url": "https://douban.example.test/api",
+                    "api_key": "proxy-token",
+                    "timeout_seconds": 10,
+                    "max_retries": 1,
+                },
+            )
+            captured: dict[str, object] = {}
+
+            def fake_test_connection(client):
+                captured["base_url"] = client.base_url
+                captured["api_key"] = client.api_key
+                captured["timeout_seconds"] = client.timeout_seconds
+                captured["max_retries"] = client.max_retries
+                return True
+
+            with patch.object(DoubanProxyClient, "test_connection", fake_test_connection, create=True):
+                result = test_metadata_provider_config(settings, "douban_proxy")
+
+            self.assertEqual("success", result["status"])
+            self.assertEqual("豆瓣代理连接成功", result["message"])
+            self.assertIsInstance(result["response_ms"], int)
+            self.assertEqual("https://douban.example.test/api", captured["base_url"])
+            self.assertEqual("proxy-token", captured["api_key"])
+            self.assertEqual(10, captured["timeout_seconds"])
+            self.assertEqual(1, captured["max_retries"])
 
 
 if __name__ == "__main__":

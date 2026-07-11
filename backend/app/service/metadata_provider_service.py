@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from app.core.config import AppSettings
 from app.service.bangumi_client import BANGUMI_API_BASE_URL, BangumiClient
+from app.service.douban_proxy_client import DoubanProxyClient
 from app.service.media_source_secret import decrypt_secret, encrypt_secret, has_secret
 from app.service.tvdb_client import TVDB_API_BASE_URL, TvdbClient
 
@@ -295,6 +296,29 @@ def test_metadata_provider_config(settings: AppSettings, provider: str) -> dict[
             "status": "failed",
             "message": "豆瓣代理未配置 Base URL，未发起连接测试",
             "response_ms": None,
+            "checked_at": _utc_now_text(),
+        }
+    if config.provider == PROVIDER_DOUBAN_PROXY:
+        startedAt = perf_counter()
+        client = DoubanProxyClient(
+            base_url=config.base_url,
+            api_key=get_metadata_provider_api_key(settings, provider),
+            timeout_seconds=config.timeout_seconds,
+            max_retries=config.max_retries,
+            priority=config.priority,
+        )
+        try:
+            client.test_connection()
+            status = "success"
+            message = "豆瓣代理连接成功"
+        except Exception as exc:
+            status = "failed"
+            message = str(exc) or "豆瓣代理连接失败，请检查网络、Base URL 或 API Key"
+        return {
+            "provider": config.provider,
+            "status": status,
+            "message": message,
+            "response_ms": int((perf_counter() - startedAt) * 1000),
             "checked_at": _utc_now_text(),
         }
     if config.base_url:

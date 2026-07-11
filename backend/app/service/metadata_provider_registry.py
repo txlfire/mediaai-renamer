@@ -9,6 +9,7 @@ from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate
 from app.service.bangumi_client import BangumiClient
+from app.service.douban_proxy_client import DoubanProxyClient
 from app.service.metadata_provider_service import (
     MetadataProviderConfig,
     PROVIDER_BANGUMI,
@@ -153,6 +154,15 @@ def build_metadata_provider_registry(settings: AppSettings) -> list[ProviderRegi
             realSearchAvailable = True
         elif provider == PROVIDER_TVDB and enabled:
             searcher = TvdbClient(
+                base_url=config.base_url,
+                api_key=get_metadata_provider_api_key(settings, provider),
+                timeout_seconds=config.timeout_seconds,
+                max_retries=config.max_retries,
+                priority=config.priority,
+            )
+            realSearchAvailable = True
+        elif provider == PROVIDER_DOUBAN_PROXY and enabled:
+            searcher = DoubanProxyClient(
                 base_url=config.base_url,
                 api_key=get_metadata_provider_api_key(settings, provider),
                 timeout_seconds=config.timeout_seconds,

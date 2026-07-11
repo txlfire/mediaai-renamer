@@ -5,11 +5,13 @@ import unittest
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
+from app.service.douban_proxy_client import DoubanProxyClient
 from app.main import create_app
 from app.api import settings as settings_api
 
@@ -266,7 +268,8 @@ class SettingsApiTest(unittest.TestCase):
                 ).fetchone()[0]
             self.assertNotEqual("proxy-secret-123456", encrypted)
 
-            test_response = client.post("/api/settings/metadata-providers/douban_proxy/test")
+            with patch.object(DoubanProxyClient, "test_connection", lambda client: True, create=True):
+                test_response = client.post("/api/settings/metadata-providers/douban_proxy/test")
             self.assertEqual(200, test_response.status_code)
             self.assertEqual("success", test_response.json()["status"])
 
