@@ -12,6 +12,7 @@ from app.service.metadata_provider_service import (
     test_metadata_provider_config,
     update_metadata_provider_config,
 )
+from app.service.tvdb_client import TvdbClient
 
 
 class MetadataProviderServiceTest(unittest.TestCase):
@@ -86,6 +87,55 @@ class MetadataProviderServiceTest(unittest.TestCase):
                     "bangumi",
                     {
                         "base_url": "https://metadata.example.test/bangumi",
+                        "api_key": "must-not-leak",
+                    },
+                )
+
+    def test_tvdb_connection_test_uses_saved_config_and_decrypted_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_metadata_provider_config(
+                settings,
+                "tvdb",
+                {
+                    "enabled": True,
+                    "api_key": "tvdb-key",
+                    "timeout_seconds": 11,
+                    "max_retries": 1,
+                },
+            )
+            captured: dict[str, object] = {}
+
+            def fake_test_connection(client):
+                captured["base_url"] = client.base_url
+                captured["api_key"] = client.api_key
+                captured["timeout_seconds"] = client.timeout_seconds
+                captured["max_retries"] = client.max_retries
+                return True
+
+            with patch.object(TvdbClient, "test_connection", fake_test_connection, create=True):
+                result = test_metadata_provider_config(settings, "tvdb")
+
+            self.assertEqual("success", result["status"])
+            self.assertEqual("TVDB 连接成功", result["message"])
+            self.assertIsInstance(result["response_ms"], int)
+            self.assertEqual("https://api4.thetvdb.com/v4", captured["base_url"])
+            self.assertEqual("tvdb-key", captured["api_key"])
+            self.assertEqual(11, captured["timeout_seconds"])
+            self.assertEqual(1, captured["max_retries"])
+
+    def test_tvdb_rejects_non_official_base_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            with self.assertRaisesRegex(ValueError, "TVDB Base URL 仅支持官方地址"):
+                update_metadata_provider_config(
+                    settings,
+                    "tvdb",
+                    {
+                        "base_url": "https://metadata.example.test/tvdb",
                         "api_key": "must-not-leak",
                     },
                 )

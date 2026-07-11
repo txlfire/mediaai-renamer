@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Document, Notebook, Refresh, Search } from "@element-plus/icons-vue";
+import { Box, Document, Notebook, Refresh, RefreshLeft, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -239,13 +239,12 @@ onMounted(async () => {
               </el-tooltip>
               <el-tooltip :content="row.archived ? pageText.restoreTask : pageText.archiveTask" placement="top">
                 <el-button
-                  class="table-action-button action-edit"
+                  :class="['table-action-button', row.archived ? 'action-sync' : 'action-edit']"
+                  :icon="row.archived ? RefreshLeft : Box"
                   text
                   circle
                   @click="toggleTaskArchive(row)"
-                >
-                  {{ row.archived ? "↩" : "□" }}
-                </el-button>
+                />
               </el-tooltip>
             </div>
           </template>

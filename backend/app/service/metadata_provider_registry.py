@@ -21,6 +21,7 @@ from app.service.metadata_provider_service import (
 )
 from app.service.settings_service import get_effective_settings
 from app.service.tmdb_client import TmdbClient
+from app.service.tvdb_client import TvdbClient
 
 
 class RegisteredMetadataProvider(Protocol):
@@ -148,6 +149,15 @@ def build_metadata_provider_registry(settings: AppSettings) -> list[ProviderRegi
                 max_retries=config.max_retries,
                 priority=config.priority,
                 app_version=settings.version,
+            )
+            realSearchAvailable = True
+        elif provider == PROVIDER_TVDB and enabled:
+            searcher = TvdbClient(
+                base_url=config.base_url,
+                api_key=get_metadata_provider_api_key(settings, provider),
+                timeout_seconds=config.timeout_seconds,
+                max_retries=config.max_retries,
+                priority=config.priority,
             )
             realSearchAvailable = True
         else:

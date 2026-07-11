@@ -50,6 +50,36 @@ class MetadataProviderRegistryTest(unittest.TestCase):
             self.assertEqual(12, item.searcher.timeout_seconds)
             self.assertEqual(2, item.searcher.max_retries)
 
+    def test_enabled_tvdb_uses_real_provider_and_decrypted_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_metadata_provider_config(
+                settings,
+                "tvdb",
+                {
+                    "enabled": True,
+                    "priority": 35,
+                    "base_url": "https://api4.thetvdb.com/v4",
+                    "api_key": "tvdb-key",
+                    "timeout_seconds": 14,
+                    "max_retries": 1,
+                },
+            )
+
+            registry = build_metadata_provider_registry(settings)
+            item = next(entry for entry in registry if entry.provider == "tvdb")
+
+            self.assertTrue(item.enabled)
+            self.assertTrue(item.real_search_available)
+            self.assertIsNotNone(item.searcher)
+            self.assertEqual("TVDB", item.searcher.label)
+            self.assertEqual(35, item.searcher.priority)
+            self.assertEqual("https://api4.thetvdb.com/v4", item.searcher.base_url)
+            self.assertEqual("tvdb-key", item.searcher.api_key)
+            self.assertEqual(14, item.searcher.timeout_seconds)
+            self.assertEqual(1, item.searcher.max_retries)
+
 
 if __name__ == "__main__":
     unittest.main()
