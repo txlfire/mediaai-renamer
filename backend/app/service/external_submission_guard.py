@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from datetime import datetime, timezone
+import re
 import sqlite3
 
 from app.core.config import AppSettings
@@ -191,9 +192,17 @@ def _save_block_record(
         return _get_block_record(connection, int(cursor.lastrowid))
 
 
+def _matches_sensitive_word(combined_text: str, word: str) -> bool:
+    normalizedWord = word.casefold()
+    if normalizedWord.isascii() and normalizedWord.isalnum() and len(normalizedWord) <= 3:
+        pattern = rf"(?<![a-z0-9]){re.escape(normalizedWord)}(?![a-z0-9])"
+        return re.search(pattern, combined_text) is not None
+    return normalizedWord in combined_text
+
+
 def _match_sensitive_words(settings: AppSettings, values: list[str | None]) -> list[str]:
     combined_text = "\n".join(str(value or "") for value in values).casefold()
-    return [word for word in get_sensitive_words(settings) if word.casefold() in combined_text]
+    return [word for word in get_sensitive_words(settings) if _matches_sensitive_word(combined_text, word)]
 
 
 def check_external_submission(

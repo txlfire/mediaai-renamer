@@ -15,7 +15,7 @@ from app.main import create_app
 from app.service.preview_service import generate_rename_previews, list_rename_previews, update_rename_preview
 from app.service.rename_operation_service import create_rename_dry_run, execute_rename_operation
 from app.service.rename_rollback_service import create_rename_rollback_plan, dry_run_rename_rollback_plan
-from app.service.task_governance_service import list_task_governance_items
+from app.service.task_governance_service import list_task_governance_items, set_task_archived
 
 
 class TaskGovernanceTest(unittest.TestCase):
@@ -106,6 +106,40 @@ class TaskGovernanceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             list_task_governance_items(self.settings, task_type="unknown")
 
+    def test_archive_hides_task_without_deleting_source_rows(self):
+        archived = set_task_archived(
+            self.settings,
+            task_type="scan_job",
+            task_id=1,
+            archived=True,
+            archived_by="tester",
+            reason="已处理",
+        )
+
+        self.assertTrue(archived.archived)
+        self.assertEqual("tester", archived.archived_by)
+        self.assertEqual("已处理", archived.archive_reason)
+        visible_items = list_task_governance_items(self.settings)
+        self.assertNotIn("scan_job:1", {item.id for item in visible_items})
+        archived_items = list_task_governance_items(self.settings, include_archived=True)
+        self.assertIn("scan_job:1", {item.id for item in archived_items})
+        restored = set_task_archived(
+            self.settings,
+            task_type="scan_job",
+            task_id=1,
+            archived=False,
+        )
+        self.assertFalse(restored.archived)
+        visible_items = list_task_governance_items(self.settings)
+        self.assertIn("scan_job:1", {item.id for item in visible_items})
+
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            scan_count = connection.execute("SELECT COUNT(*) FROM scan_jobs WHERE id = 1").fetchone()[0]
+            file_count = connection.execute("SELECT COUNT(*) FROM media_files WHERE scan_job_id = 1").fetchone()[0]
+
+        self.assertEqual(1, scan_count)
+        self.assertEqual(1, file_count)
+
     def test_tasks_api_returns_items(self):
         self._create_operation_and_rollback()
         app = create_app(self.settings)
@@ -118,6 +152,29 @@ class TaskGovernanceTest(unittest.TestCase):
         self.assertEqual(1, len(data["items"]))
         self.assertEqual("rollback_plan", data["items"][0]["task_type"])
         self.assertEqual("rollback_plan", data["items"][0]["log_task_type"])
+
+    def test_tasks_api_archives_and_restores_task(self):
+        app = create_app(self.settings)
+        client = TestClient(app)
+
+        archive_response = client.patch(
+            "/api/tasks/scan_job/1/archive",
+            json={"archived": True, "reason": "已处理"},
+        )
+        self.assertEqual(200, archive_response.status_code)
+        self.assertTrue(archive_response.json()["archived"])
+
+        hidden_response = client.get("/api/tasks?task_type=scan_job")
+        self.assertEqual([], hidden_response.json()["items"])
+        visible_response = client.get("/api/tasks?task_type=scan_job&include_archived=true")
+        self.assertEqual(1, len(visible_response.json()["items"]))
+
+        restore_response = client.patch(
+            "/api/tasks/scan_job/1/archive",
+            json={"archived": False},
+        )
+        self.assertEqual(200, restore_response.status_code)
+        self.assertFalse(restore_response.json()["archived"])
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from app.service.preview_service import (
     update_rename_preview,
 )
 from app.service.pending_file_service import list_pending_files
+from app.service.metadata_provider_service import update_metadata_provider_config
 from app.service.settings_service import update_setting_values
 
 
@@ -606,6 +607,143 @@ class RenamePreviewApiTest(RenamePreviewTestCase):
         self.assertEqual(70, payload["ai"]["usage"]["total_tokens"])
         self.assertEqual("黑客帝国", payload["ai"]["items"][0]["result"]["candidates"][0]["title"])
         self.assertNotIn("sk-secret123456", str(payload))
+
+    def test_metadata_multi_match_api_caches_candidates_without_backfilling(self):
+        update_setting_values(
+            self.settings,
+            {
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        preview = client.get("/api/rename-previews").json()[0]
+
+        class FakeTmdbClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="TMDB",
+                        provider_id="603",
+                        media_type="movie",
+                        title="黑客帝国",
+                        original_title="The Matrix",
+                        year=1999,
+                        season=None,
+                        episode=None,
+                        overview="",
+                    )
+                ]
+
+        with patch("app.service.metadata_provider_registry.TmdbClient", FakeTmdbClient):
+            response = client.post(
+                f"/api/rename-previews/{preview['id']}/metadata-multi-match",
+                json={"mode": "parallel", "metadata_match_source": "parsed_title"},
+            )
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("high_confidence", payload["preview"]["metadata_match_status"])
+        self.assertEqual("The.Matrix.1999.mkv", payload["preview"]["current_target_name"])
+        self.assertEqual(1, payload["preview"]["metadata_candidate_count"])
+        self.assertEqual("success", payload["provider_results"][0]["status"])
+
+    def test_batch_metadata_multi_match_reports_provider_summary(self):
+        update_metadata_provider_config(
+            self.settings,
+            "bangumi",
+            {"enabled": True, "priority": 30},
+        )
+        update_setting_values(
+            self.settings,
+            {
+                "tmdb.enabled": "true",
+                "tmdb.v4_token": "tmdb-token",
+                "privacy.default_sensitive_words_enabled": "false",
+            },
+            operator="admin",
+        )
+        app = create_app(self.settings)
+        client = TestClient(app)
+        client.post("/api/rename-previews/generate", json={})
+        previews = client.get("/api/rename-previews").json()
+        preview_ids = [item["id"] for item in previews[:2]]
+
+        class FakeTmdbClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="TMDB",
+                        provider_id="603",
+                        media_type=parsed.media_type,
+                        title=parsed.title,
+                        original_title=parsed.title,
+                        year=parsed.year,
+                        season=parsed.season,
+                        episode=parsed.episode,
+                        overview="",
+                    )
+                ]
+
+        class FakeBangumiClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.provider = "bangumi"
+                self.label = "Bangumi"
+                self.priority = int(kwargs.get("priority") or 30)
+
+            def search(self, parsed):
+                from app.schema.metadata import MetadataCandidate
+
+                return [
+                    MetadataCandidate(
+                        provider="Bangumi",
+                        provider_id=f"bgm-{parsed.title}",
+                        media_type=parsed.media_type,
+                        title=parsed.title,
+                        original_title=parsed.title,
+                        year=parsed.year,
+                        season=None,
+                        episode=None,
+                        overview="",
+                        raw_data={"match_reason": "Bangumi 动画条目命中，依据：中文标题。"},
+                    )
+                ]
+
+        with (
+            patch("app.service.metadata_provider_registry.TmdbClient", FakeTmdbClient),
+            patch("app.service.metadata_provider_registry.BangumiClient", FakeBangumiClient),
+        ):
+            response = client.post(
+                "/api/rename-previews/metadata-multi-match/batch",
+                json={
+                    "rename_preview_ids": preview_ids,
+                    "mode": "parallel",
+                    "metadata_match_source": "parsed_title",
+                },
+            )
+
+        payload = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, payload["total_count"])
+        self.assertEqual(2, payload["success_count"])
+        self.assertEqual(4, payload["provider_success_count"])
+        self.assertEqual(0, payload["provider_skipped_count"])
+        self.assertEqual("success", payload["items"][0]["provider_results"][1]["status"])
 
     def test_apply_ai_parse_candidate_api(self):
         app = create_app(self.settings)

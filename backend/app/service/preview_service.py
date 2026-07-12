@@ -16,6 +16,12 @@ from app.service.ai_provider import AiProvider
 from app.service.ai_parse_service import parse_media_with_ai
 from app.service.external_submission_guard import check_external_submission
 from app.service.metadata_matcher import MATCH_STATUS_HIGH
+from app.service.metadata_multi_source_service import (
+    MULTI_MATCH_MODE_FALLBACK,
+    MULTI_MATCH_MODES,
+    match_multi_source_metadata_candidates,
+    provider_search_results_to_dict,
+)
 from app.service.metadata_service import MetadataProvider, match_metadata_candidates
 from app.service.pending_file_service import add_pending_file
 from app.service.settings_service import get_effective_settings
@@ -962,6 +968,78 @@ def match_rename_preview_metadata(
     )
 
 
+def match_rename_preview_multi_source_metadata(
+    settings: AppSettings,
+    preview_id: int,
+    mode: str = MULTI_MATCH_MODE_FALLBACK,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
+    """执行多源元数据匹配并缓存候选，不自动回填目标文件名。"""
+
+    if mode not in MULTI_MATCH_MODES:
+        raise ValueError("不支持的多源匹配模式")
+
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _get_preview_row(connection, preview_id)
+    guard = _check_metadata_external_submission(settings, row, metadata_match_source)
+    if not guard.allowed:
+        preview = _update_preview_metadata(
+            settings,
+            preview_id,
+            None,
+            "blocked",
+            0,
+            guard.message or "已阻止外部提交，请手动处理",
+            auto_backfill=False,
+            preview_status="needs_review",
+            source_override="external_submission_guard",
+            candidate_matches=[],
+        )
+        return {"preview": preview, "provider_results": []}
+
+    result = match_multi_source_metadata_candidates(
+        settings,
+        _parsed_from_preview(row, metadata_match_source),
+        mode=mode,
+    )
+    if not result.summary.matches:
+        preview = _update_preview_metadata(
+            settings,
+            preview_id,
+            None,
+            result.summary.status,
+            0,
+            result.summary.message,
+            auto_backfill=False,
+            preview_status="needs_review",
+            source_override=result.summary.metadata_source,
+            candidate_matches=[],
+        )
+        return {
+            "preview": preview,
+            "provider_results": provider_search_results_to_dict(result.provider_results),
+        }
+
+    best = result.summary.matches[0]
+    preview = _update_preview_metadata(
+        settings,
+        preview_id,
+        best.candidate,
+        best.status,
+        best.score,
+        result.summary.message,
+        auto_backfill=False,
+        preview_status="generated",
+        source_override=result.summary.metadata_source,
+        candidate_matches=result.summary.matches,
+    )
+    return {
+        "preview": preview,
+        "provider_results": provider_search_results_to_dict(result.provider_results),
+    }
+
+
 def apply_metadata_candidate(
     settings: AppSettings,
     preview_id: int,
@@ -1045,6 +1123,85 @@ def match_rename_previews_metadata(
         "success_count": len(updated),
         "failed_count": len(failed),
         "items": updated,
+        "failed_items": failed,
+    }
+
+
+def match_rename_previews_multi_source_metadata(
+    settings: AppSettings,
+    preview_ids: list[int],
+    mode: str = MULTI_MATCH_MODE_FALLBACK,
+    metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
+) -> dict[str, object]:
+    """批量执行多源元数据匹配并保留逐条回填入口。"""
+
+    unique_ids = list(dict.fromkeys(preview_ids))
+    items: list[dict[str, object]] = []
+    failed: list[dict[str, object]] = []
+    success_count = 0
+    failed_count = 0
+    blocked_count = 0
+    skipped_count = 0
+    provider_success_count = 0
+    provider_failed_count = 0
+    provider_skipped_count = 0
+
+    for preview_id in unique_ids:
+        try:
+            item = match_rename_preview_multi_source_metadata(
+                settings,
+                preview_id,
+                mode=mode,
+                metadata_match_source=metadata_match_source,
+            )
+        except ValueError as exc:
+            failed_count += 1
+            failed.append({"id": preview_id, "message": str(exc)})
+            continue
+
+        preview = item["preview"]
+        if isinstance(preview, RenamePreview) and preview.metadata_match_status == "blocked":
+            blocked_count += 1
+        elif isinstance(preview, RenamePreview) and preview.metadata_match_status == "failed":
+            failed_count += 1
+        else:
+            success_count += 1
+        provider_results = item.get("provider_results") if isinstance(item, dict) else None
+        has_provider_success = False
+        has_provider_failed = False
+        has_provider_skipped = False
+        if isinstance(provider_results, list):
+            for provider_result in provider_results:
+                if not isinstance(provider_result, dict):
+                    continue
+                status = provider_result.get("status")
+                if status == "success":
+                    has_provider_success = True
+                    provider_success_count += 1
+                elif status == "failed":
+                    has_provider_failed = True
+                    provider_failed_count += 1
+                elif status == "skipped":
+                    has_provider_skipped = True
+                    provider_skipped_count += 1
+        if (
+            isinstance(preview, RenamePreview)
+            and preview.metadata_match_status == "failed"
+            and (not provider_results or (has_provider_skipped and not has_provider_success and not has_provider_failed))
+        ):
+            skipped_count += 1
+        items.append(item)
+
+    return {
+        "total_count": len(unique_ids),
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "blocked_count": blocked_count,
+        "skipped_count": skipped_count,
+        "provider_success_count": provider_success_count,
+        "provider_failed_count": provider_failed_count,
+        "provider_skipped_count": provider_skipped_count,
+        "items": items,
         "failed_items": failed,
     }
 

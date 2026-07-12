@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { Document, Notebook, Refresh, Search } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { Box, Document, Notebook, Refresh, RefreshLeft, Search } from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import { fetchTasks, type TaskGovernanceItem } from "../api/client";
+import { archiveTask, fetchTasks, type TaskGovernanceItem } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
@@ -32,6 +32,7 @@ const filters = reactive({
   status: "",
   mediaSourceId: undefined as number | undefined,
   dateRange: [] as string[],
+  includeArchived: false,
 });
 
 const pagedTasks = computed(() =>
@@ -51,6 +52,7 @@ function buildFilters() {
     media_source_id: filters.mediaSourceId,
     start_at: filters.dateRange?.[0],
     end_at: filters.dateRange?.[1],
+    include_archived: filters.includeArchived || undefined,
     limit: 500,
   };
 }
@@ -71,6 +73,7 @@ function resetFilters() {
   filters.status = "";
   filters.mediaSourceId = undefined;
   filters.dateRange = [];
+  filters.includeArchived = false;
   void loadTasks();
 }
 
@@ -117,6 +120,28 @@ function openTaskLog(row: TaskGovernanceItem) {
   operationLogVisible.value = true;
 }
 
+async function toggleTaskArchive(row: TaskGovernanceItem) {
+  const nextArchived = !row.archived;
+  try {
+    await ElMessageBox.confirm(
+      nextArchived ? pageText.archiveConfirmMessage : pageText.restoreConfirmMessage,
+      pageText.archiveConfirmTitle,
+      { type: nextArchived ? "warning" : "info" },
+    );
+    await archiveTask(row.task_type, row.task_id, {
+      archived: nextArchived,
+      reason: nextArchived ? pageText.archiveReason : undefined,
+    });
+    ElMessage.success(nextArchived ? pageText.archiveSuccess : pageText.restoreSuccess);
+    await loadTasks();
+  } catch (error) {
+    if (error === "cancel" || error === "close") {
+      return;
+    }
+    ElMessage.error(error instanceof Error ? error.message : pageText.archiveFailed);
+  }
+}
+
 onMounted(async () => {
   await mediaStore.loadMediaSources();
   await loadTasks();
@@ -147,6 +172,9 @@ onMounted(async () => {
         range-separator="-"
         clearable
       />
+      <el-checkbox v-model="filters.includeArchived" @change="loadTasks">
+        {{ pageText.filters.includeArchived }}
+      </el-checkbox>
       <el-button class="query-action-button" :icon="Search" :loading="loading" @click="loadTasks">{{ messages.common.query }}</el-button>
       <el-button @click="resetFilters">{{ messages.common.reset }}</el-button>
     </template>
@@ -172,7 +200,10 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column :label="messages.common.status" width="112" align="center" header-align="center" sortable="custom" prop="status">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row) }}</el-tag>
+            <div class="task-status-cell">
+              <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row) }}</el-tag>
+              <el-tag v-if="row.archived" type="info" effect="plain">{{ pageText.archivedTag }}</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column :label="pageText.columns.title" min-width="170" align="left" header-align="left">
@@ -197,7 +228,7 @@ onMounted(async () => {
         <el-table-column prop="updated_at" :label="pageText.columns.updatedAt" width="168" align="center" header-align="center" sortable="custom">
           <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column :label="messages.common.actions" width="116" align="center" header-align="center" fixed="right">
+        <el-table-column :label="messages.common.actions" width="168" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :content="pageText.openTarget" placement="top">
@@ -205,6 +236,15 @@ onMounted(async () => {
               </el-tooltip>
               <el-tooltip :content="pageText.viewLog" placement="top">
                 <el-button class="table-action-button action-view" :icon="Notebook" text circle @click="openTaskLog(row)" />
+              </el-tooltip>
+              <el-tooltip :content="row.archived ? pageText.restoreTask : pageText.archiveTask" placement="top">
+                <el-button
+                  :class="['table-action-button', row.archived ? 'action-sync' : 'action-edit']"
+                  :icon="row.archived ? RefreshLeft : Box"
+                  text
+                  circle
+                  @click="toggleTaskArchive(row)"
+                />
               </el-tooltip>
             </div>
           </template>
@@ -228,6 +268,14 @@ onMounted(async () => {
 <style scoped>
 .task-date-range {
   width: 280px;
+  max-width: 100%;
+}
+
+.task-status-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   max-width: 100%;
 }
 </style>

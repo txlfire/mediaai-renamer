@@ -338,6 +338,10 @@ export type TaskGovernanceItem = {
   log_task_id: number;
   target_route: string | null;
   target_query: Record<string, string>;
+  archived: boolean;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 };
 
 export type TaskGovernanceFilters = {
@@ -346,7 +350,13 @@ export type TaskGovernanceFilters = {
   media_source_id?: number;
   start_at?: string;
   end_at?: string;
+  include_archived?: boolean;
   limit?: number;
+};
+
+export type TaskArchivePayload = {
+  archived: boolean;
+  reason?: string;
 };
 
 export type RenamePreview = {
@@ -414,6 +424,67 @@ export type MetadataMatchResult = {
 };
 
 export type MetadataMatchSource = "parsed_title" | "original_file_name" | "parent_folder_title";
+
+export type MultiSourceMatchMode = "fallback" | "parallel";
+
+export type MetadataProviderKey = "tmdb" | "imdb" | "bangumi" | "tvdb" | "douban_proxy" | string;
+
+export type MetadataProviderConfig = {
+  id: number;
+  provider: MetadataProviderKey;
+  enabled: boolean;
+  priority: number;
+  base_url: string;
+  has_api_key: boolean;
+  timeout_seconds: number;
+  max_retries: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MetadataProviderConfigPayload = {
+  enabled?: boolean;
+  priority?: number;
+  base_url?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+  timeout_seconds?: number;
+  max_retries?: number;
+};
+
+export type MetadataProviderTestResult = {
+  provider: string;
+  status: "success" | "failed" | "skipped" | string;
+  message: string;
+  response_ms?: number | null;
+  checked_at?: string;
+};
+
+export type ProviderSearchResult = {
+  provider: string;
+  label: string;
+  status: "success" | "failed" | "skipped" | string;
+  message: string;
+  candidate_count: number;
+};
+
+export type MultiSourceMatchResponse = {
+  preview: RenamePreview;
+  provider_results: ProviderSearchResult[];
+};
+
+export type BatchMultiSourceMatchResult = {
+  total_count: number;
+  success_count: number;
+  failed_count: number;
+  blocked_count: number;
+  skipped_count: number;
+  provider_success_count: number;
+  provider_failed_count: number;
+  provider_skipped_count: number;
+  items: MultiSourceMatchResponse[];
+  failed_items: Array<{ id: number; message: string }>;
+};
 
 export type AiParseCandidate = {
   title: string;
@@ -1187,6 +1258,17 @@ export async function fetchTasks(
   return response.data.items;
 }
 
+export async function archiveTask(
+  taskType: string,
+  taskId: number,
+  payload: TaskArchivePayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<TaskGovernanceItem> {
+  const patch = requirePatch(httpClient);
+  const response = await patch<TaskGovernanceItem>(`/tasks/${taskType}/${taskId}/archive`, payload);
+  return response.data;
+}
+
 export async function generateRenamePreviews(
   payload: GenerateRenamePreviewsPayload,
   httpClient: ApiHttpClient = apiClient,
@@ -1431,6 +1513,35 @@ export async function matchAllUnmatchedMetadataWithAiFallback(
   return response.data;
 }
 
+export async function matchRenamePreviewMultiSource(
+  previewId: number,
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
+  mode: MultiSourceMatchMode = "fallback",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MultiSourceMatchResponse> {
+  const post = requirePost(httpClient);
+  const response = await post<MultiSourceMatchResponse>(`/rename-previews/${previewId}/metadata-multi-match`, {
+    metadata_match_source: metadataMatchSource,
+    mode,
+  });
+  return response.data;
+}
+
+export async function matchRenamePreviewsMultiSource(
+  renamePreviewIds: number[],
+  metadataMatchSource: MetadataMatchSource = "parsed_title",
+  mode: MultiSourceMatchMode = "fallback",
+  httpClient: ApiHttpClient = apiClient,
+): Promise<BatchMultiSourceMatchResult> {
+  const post = requirePost(httpClient);
+  const response = await post<BatchMultiSourceMatchResult>("/rename-previews/metadata-multi-match/batch", {
+    rename_preview_ids: renamePreviewIds,
+    metadata_match_source: metadataMatchSource,
+    mode,
+  });
+  return response.data;
+}
+
 export async function fetchRenamePreviewMetadataCandidates(
   previewId: number,
   metadataMatchSource: MetadataMatchSource = "parsed_title",
@@ -1535,6 +1646,36 @@ export async function updateSettings(
   const put = requirePut(httpClient);
   const response = await put<SystemSetting[]>("/settings", { values });
   return response.data;
+}
+
+export async function fetchMetadataProviderConfigs(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MetadataProviderConfig[]> {
+  const response = await httpClient.get<MetadataProviderConfig[]>("/settings/metadata-providers");
+  return response.data;
+}
+
+export async function updateMetadataProviderConfig(
+  provider: MetadataProviderKey,
+  payload: MetadataProviderConfigPayload,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MetadataProviderConfig> {
+  const put = requirePut(httpClient);
+  const response = await put<MetadataProviderConfig>(`/settings/metadata-providers/${provider}`, payload);
+  return response.data;
+}
+
+export async function testMetadataProviderConfig(
+  provider: MetadataProviderKey,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<MetadataProviderTestResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<MetadataProviderTestResult>(`/settings/metadata-providers/${provider}/test`, {});
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function testNamingTemplate(

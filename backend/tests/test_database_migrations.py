@@ -107,6 +107,8 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("rename_rollback_plans", tables)
             self.assertIn("rename_rollback_items", tables)
             self.assertIn("operation_logs", tables)
+            self.assertIn("task_archives", tables)
+            self.assertIn("metadata_provider_configs", tables)
             self.assertIn("scan_mode", scan_job_columns)
             self.assertIn("new_count", scan_job_columns)
             self.assertIn("changed_count", scan_job_columns)
@@ -260,6 +262,78 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("approx_bytes", columns)
             self.assertIn("idx_operation_logs_task", indexes)
             self.assertIn("idx_operation_logs_created", indexes)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m16_database_is_migrated_to_task_archives_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '16')")
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(task_archives)")
+                }
+                indexes = {
+                    row[1] for row in connection.execute("PRAGMA index_list(task_archives)")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("task_type", columns)
+            self.assertIn("task_id", columns)
+            self.assertIn("archived_at", columns)
+            self.assertIn("archived_by", columns)
+            self.assertIn("reason", columns)
+            self.assertIn("idx_task_archives_task", indexes)
+            self.assertIn("idx_task_archives_archived_at", indexes)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m17_database_is_migrated_to_metadata_provider_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "mediaai.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '17')")
+                connection.commit()
+            settings = AppSettings(
+                data_dir=root,
+                database_path=database_path,
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(metadata_provider_configs)")
+                }
+                providers = {
+                    row[0]
+                    for row in connection.execute("SELECT provider FROM metadata_provider_configs")
+                }
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("provider", columns)
+            self.assertIn("enabled", columns)
+            self.assertIn("priority", columns)
+            self.assertIn("base_url", columns)
+            self.assertIn("api_key_encrypted", columns)
+            self.assertEqual({"tmdb", "imdb", "bangumi", "tvdb", "douban_proxy"}, providers)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
     def test_existing_m11_database_is_migrated_to_parent_title_schema(self):

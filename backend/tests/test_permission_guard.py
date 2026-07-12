@@ -162,6 +162,29 @@ class PermissionGuardTest(unittest.TestCase):
             self.assertEqual(403, forbidden_response.status_code)
             self.assertEqual(400, allowed_response.status_code)
 
+    def test_metadata_provider_connection_test_requires_settings_permission(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            client = self.build_client(root)
+            token = self.bootstrap_and_login(client)
+            endpoint = "/api/settings/metadata-providers/douban_proxy/test"
+
+            unauthenticated_response = client.post(endpoint)
+            self.update_permissions(root, [])
+            forbidden_response = client.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.update_permissions(root, ["settings:write"])
+            allowed_response = client.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            self.assertEqual(401, unauthenticated_response.status_code)
+            self.assertEqual(403, forbidden_response.status_code)
+            self.assertEqual(200, allowed_response.status_code)
+
     def test_rename_execute_requires_rename_permission_after_bootstrap(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             root = Path(temp_dir)

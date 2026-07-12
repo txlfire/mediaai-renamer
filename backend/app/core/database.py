@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 18
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -262,6 +262,66 @@ def _ensure_operation_logs_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_task_archives_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS task_archives "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "task_type TEXT NOT NULL, "
+        "task_id INTEGER NOT NULL, "
+        "archived_at TEXT NOT NULL, "
+        "archived_by TEXT, "
+        "reason TEXT, "
+        "UNIQUE(task_type, task_id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_archives_task "
+        "ON task_archives(task_type, task_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_archives_archived_at "
+        "ON task_archives(archived_at)"
+    )
+
+
+def _ensure_metadata_provider_configs_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS metadata_provider_configs "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "provider TEXT NOT NULL UNIQUE, "
+        "enabled INTEGER NOT NULL DEFAULT 0, "
+        "priority INTEGER NOT NULL DEFAULT 100, "
+        "base_url TEXT, "
+        "api_key_encrypted TEXT, "
+        "timeout_seconds INTEGER NOT NULL DEFAULT 10, "
+        "max_retries INTEGER NOT NULL DEFAULT 1, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_metadata_provider_configs_priority "
+        "ON metadata_provider_configs(enabled, priority, provider)"
+    )
+
+
+def _seed_metadata_provider_configs(connection: sqlite3.Connection) -> None:
+    now = "1970-01-01T00:00:00+00:00"
+    defaults = [
+        ("tmdb", 1, 1, "https://api.themoviedb.org/3", 15, 1),
+        ("imdb", 0, 2, "https://www.imdb.com", 10, 1),
+        ("bangumi", 0, 30, "https://api.bgm.tv", 10, 1),
+        ("tvdb", 0, 40, "https://api4.thetvdb.com/v4", 10, 1),
+        ("douban_proxy", 0, 50, "", 10, 1),
+    ]
+    for provider, enabled, priority, base_url, timeout_seconds, max_retries in defaults:
+        connection.execute(
+            "INSERT INTO metadata_provider_configs "
+            "(provider, enabled, priority, base_url, timeout_seconds, max_retries, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider) DO NOTHING",
+            (provider, enabled, priority, base_url, timeout_seconds, max_retries, now, now),
+        )
+
+
 def _ensure_rename_rollback_tables(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS rename_rollback_plans "
@@ -450,6 +510,15 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         _ensure_operation_logs_table(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 17:
+        _ensure_task_archives_table(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 18:
+        _ensure_metadata_provider_configs_table(connection)
+        _seed_metadata_provider_configs(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -595,6 +664,9 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_rename_preview_naming_template_columns(connection)
         _ensure_m9_governance_tables(connection)
         _ensure_operation_logs_table(connection)
+        _ensure_task_archives_table(connection)
+        _ensure_metadata_provider_configs_table(connection)
+        _seed_metadata_provider_configs(connection)
         _run_migrations(connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)

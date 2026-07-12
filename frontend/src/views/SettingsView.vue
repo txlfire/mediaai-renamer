@@ -12,6 +12,9 @@ import type {
   ExternalSubmissionBlockStatus,
   ImdbConnectionTestResult,
   ImdbStoredConnectionTestResult,
+  MetadataProviderConfig,
+  MetadataProviderKey,
+  MetadataProviderTestResult,
   NamingTemplateDiffResult,
   NamingTemplatePreviewResult,
   TmdbChannelTestResult,
@@ -56,6 +59,11 @@ const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? me
 const movieNamingElements = ref<NamingTemplateElement[]>([]);
 const episodeNamingElements = ref<NamingTemplateElement[]>([]);
 const imdbCardCollapsed = ref(localStorage.getItem("settings.imdb.cardCollapsed") !== "false");
+const metadataProviderSecrets = reactive<Record<string, string>>({});
+const metadataProviderClearSecrets = reactive<Record<string, boolean>>({});
+const metadataProviderTestResults = reactive<Record<string, MetadataProviderTestResult | null>>({});
+const metadataProviderSaving = ref("");
+const metadataProviderTesting = ref("");
 const customSensitiveWordsCollapsed = ref(localStorage.getItem("settings.privacy.customWordsCollapsed") !== "false");
 const defaultSensitiveWordsDialogVisible = ref(false);
 const externalSubmissionBlocks = ref<ExternalSubmissionBlockRecord[]>([]);
@@ -207,6 +215,11 @@ const savedApiKeyDisplay = computed(() => {
 
 const v4TokenPlaceholder = computed(() => savedV4TokenDisplay.value || pageText.tmdb.v4TokenPlaceholder);
 const apiKeyPlaceholder = computed(() => savedApiKeyDisplay.value || pageText.tmdb.apiKeyPlaceholder);
+const supplementalMetadataProviders = computed(() =>
+  settingsStore.metadataProviders.filter((provider) =>
+    ["bangumi", "tvdb", "douban_proxy"].includes(provider.provider),
+  ),
+);
 const isMountedNfsSharedPath = computed(() => form.sharedDefaultPathType === "mounted_nfs");
 const sharedPathTypeHint = computed(() => {
   const hints = pageText.shared.pathTypeHints;
@@ -224,6 +237,86 @@ const savedAiApiKeyDisplay = computed(() => {
 });
 function isAiProviderProfile(value: unknown): value is AiProviderProfile {
   return typeof value === "object" && value !== null && "id" in value && "provider" in value && "model" in value;
+}
+
+function metadataProviderLabel(provider: string) {
+  return pageText.metadataProviders.providers[provider] ?? provider;
+}
+
+function metadataProviderBaseUrlDisabled(provider: string) {
+  return provider === "bangumi" || provider === "tvdb";
+}
+
+function metadataProviderNotice(provider: string) {
+  if (metadataProviderBaseUrlDisabled(provider)) {
+    return pageText.metadataProviders.officialLocked;
+  }
+  if (provider === "douban_proxy") {
+    return pageText.metadataProviders.doubanProxyNotice;
+  }
+  return "";
+}
+
+function metadataProviderStatusLabel(status: string) {
+  if (status === "success") return pageText.metadataProviders.statusSuccess;
+  if (status === "failed") return pageText.metadataProviders.statusFailed;
+  if (status === "skipped") return pageText.metadataProviders.statusSkipped;
+  return status;
+}
+
+function metadataProviderStatusType(status: string) {
+  if (status === "success") return "success";
+  if (status === "failed") return "danger";
+  return "info";
+}
+
+function metadataProviderTestTime(result: MetadataProviderTestResult | null | undefined) {
+  return result?.checked_at ? formatDateTime(result.checked_at) : "-";
+}
+
+async function refreshMetadataProviders() {
+  await settingsStore.loadMetadataProviders();
+}
+
+async function saveMetadataProvider(providerConfig: MetadataProviderConfig) {
+  const provider = providerConfig.provider as MetadataProviderKey;
+  metadataProviderSaving.value = provider;
+  try {
+    await settingsStore.saveMetadataProvider(provider, {
+      enabled: providerConfig.enabled,
+      priority: Number(providerConfig.priority || 0),
+      base_url: providerConfig.base_url,
+      api_key: metadataProviderSecrets[provider]?.trim() || undefined,
+      clear_api_key: Boolean(metadataProviderClearSecrets[provider]),
+      timeout_seconds: Number(providerConfig.timeout_seconds || 10),
+      max_retries: Number(providerConfig.max_retries || 0),
+    });
+    metadataProviderSecrets[provider] = "";
+    metadataProviderClearSecrets[provider] = false;
+    ElMessage.success(pageText.metadataProviders.saveSuccess);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.metadataProviders.saveFailed);
+  } finally {
+    metadataProviderSaving.value = "";
+  }
+}
+
+async function testMetadataProvider(providerConfig: MetadataProviderConfig) {
+  const provider = providerConfig.provider as MetadataProviderKey;
+  metadataProviderTesting.value = provider;
+  try {
+    const result = await settingsStore.testMetadataProvider(provider);
+    metadataProviderTestResults[provider] = result;
+    if (result.status === "success") {
+      ElMessage.success(result.message || pageText.metadataProviders.statusSuccess);
+    } else {
+      ElMessage.error(result.message || pageText.metadataProviders.statusFailed);
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.metadataProviders.testFailed);
+  } finally {
+    metadataProviderTesting.value = "";
+  }
 }
 
 const savedAiProfiles = computed<AiProviderProfile[]>(() => {
@@ -1951,6 +2044,11 @@ onMounted(async () => {
   await settingsStore.loadSettings();
   syncForm();
   try {
+    await settingsStore.loadMetadataProviders();
+  } catch {
+    // 补充源配置加载失败不影响基础设置编辑。
+  }
+  try {
     const history = await settingsStore.loadTmdbTestResult({ silent: true });
     savedTmdbSnapshot.value = history.current_snapshot;
     if (history.result && history.matches_current) {
@@ -2270,6 +2368,133 @@ onMounted(async () => {
             </template>
             </el-dialog>
             </template>
+          </div>
+
+          <div class="settings-config-card metadata-provider-card">
+            <div class="settings-config-card-title">
+              <span>{{ pageText.metadataProviders.title }}</span>
+              <el-button :loading="settingsStore.loading" @click="refreshMetadataProviders">
+                <el-icon><Refresh /></el-icon>
+                {{ messages.common.refresh }}
+              </el-button>
+            </div>
+            <div class="settings-page-notice">
+              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+              <span class="settings-page-notice-text">{{ pageText.metadataProviders.notice }}</span>
+            </div>
+
+            <div class="metadata-provider-list">
+              <div
+                v-for="provider in supplementalMetadataProviders"
+                :key="provider.provider"
+                class="metadata-provider-item"
+              >
+                <div class="metadata-provider-header">
+                  <div class="metadata-provider-title">
+                    <strong>{{ metadataProviderLabel(provider.provider) }}</strong>
+                    <el-tag :type="provider.has_api_key ? 'success' : 'info'" effect="light">
+                      {{ provider.has_api_key ? pageText.metadataProviders.hasSecret : pageText.metadataProviders.noSecret }}
+                    </el-tag>
+                  </div>
+                  <div class="metadata-provider-inline-controls">
+                    <span>{{ pageText.metadataProviders.enabled }}</span>
+                    <el-switch v-model="provider.enabled" />
+                    <span>{{ pageText.metadataProviders.priority }}</span>
+                    <el-input-number
+                      v-model="provider.priority"
+                      :min="1"
+                      :max="999"
+                      :step="1"
+                      controls-position="right"
+                      class="metadata-provider-priority"
+                    />
+                  </div>
+                </div>
+
+                <div class="settings-grid metadata-provider-grid">
+                  <el-form-item :label="pageText.metadataProviders.baseUrl">
+                    <el-input
+                      v-model="provider.base_url"
+                      class="settings-code-control"
+                      :disabled="metadataProviderBaseUrlDisabled(provider.provider)"
+                    />
+                    <span v-if="metadataProviderNotice(provider.provider)" class="setting-source">
+                      {{ metadataProviderNotice(provider.provider) }}
+                    </span>
+                  </el-form-item>
+                  <el-form-item :label="pageText.metadataProviders.apiKey">
+                    <el-input
+                      v-model="metadataProviderSecrets[provider.provider]"
+                      class="settings-code-control"
+                      type="password"
+                      show-password
+                      :placeholder="pageText.metadataProviders.apiKeyPlaceholder"
+                    />
+                    <el-checkbox v-model="metadataProviderClearSecrets[provider.provider]">
+                      {{ pageText.metadataProviders.clearApiKey }}
+                    </el-checkbox>
+                  </el-form-item>
+                  <el-form-item :label="pageText.metadataProviders.timeout">
+                    <el-input-number
+                      v-model="provider.timeout_seconds"
+                      :min="3"
+                      :max="60"
+                      :step="1"
+                      controls-position="right"
+                    />
+                    <span class="setting-source">{{ pageText.metadataProviders.seconds }}</span>
+                  </el-form-item>
+                  <el-form-item :label="pageText.metadataProviders.maxRetries">
+                    <el-input-number
+                      v-model="provider.max_retries"
+                      :min="0"
+                      :max="5"
+                      :step="1"
+                      controls-position="right"
+                    />
+                    <span class="setting-source">{{ pageText.metadataProviders.retryUnit }}</span>
+                  </el-form-item>
+                </div>
+
+                <div class="metadata-provider-actions">
+                  <el-button
+                    :loading="metadataProviderTesting === provider.provider"
+                    :disabled="settingsWriteDisabled"
+                    :title="settingsPermissionTitle"
+                    @click="testMetadataProvider(provider)"
+                  >
+                    {{ pageText.metadataProviders.testConnection }}
+                  </el-button>
+                  <el-button
+                    type="primary"
+                    :loading="metadataProviderSaving === provider.provider"
+                    :disabled="settingsWriteDisabled"
+                    :title="settingsPermissionTitle"
+                    @click="saveMetadataProvider(provider)"
+                  >
+                    {{ pageText.metadataProviders.saveProvider }}
+                  </el-button>
+                </div>
+
+                <div v-if="metadataProviderTestResults[provider.provider]" class="metadata-provider-test-result">
+                  <el-tag
+                    :type="metadataProviderStatusType(metadataProviderTestResults[provider.provider]?.status || '')"
+                    effect="light"
+                  >
+                    {{ metadataProviderStatusLabel(metadataProviderTestResults[provider.provider]?.status || '') }}
+                  </el-tag>
+                  <span>{{ metadataProviderTestResults[provider.provider]?.message }}</span>
+                  <span>
+                    {{ pageText.metadataProviders.responseTime }}：
+                    {{ metadataProviderTestResults[provider.provider]?.response_ms ?? "-" }} ms
+                  </span>
+                  <span>
+                    {{ pageText.metadataProviders.updatedAt }}：
+                    {{ metadataProviderTestTime(metadataProviderTestResults[provider.provider]) }}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </el-form>
 
@@ -3725,5 +3950,77 @@ onMounted(async () => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.metadata-provider-card {
+  gap: 14px;
+}
+
+.metadata-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.metadata-provider-item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--el-fill-color-blank);
+}
+
+.metadata-provider-header,
+.metadata-provider-actions,
+.metadata-provider-test-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.metadata-provider-header {
+  justify-content: space-between;
+}
+
+.metadata-provider-title,
+.metadata-provider-inline-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.metadata-provider-title strong {
+  color: var(--el-text-color-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.metadata-provider-inline-controls {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.metadata-provider-priority {
+  width: 112px;
+}
+
+.metadata-provider-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.metadata-provider-actions {
+  justify-content: flex-end;
+}
+
+.metadata-provider-test-result {
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
 }
 </style>

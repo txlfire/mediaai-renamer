@@ -72,6 +72,42 @@ class ExternalSubmissionGuardTest(unittest.TestCase):
             self.assertIn("暴*", records[0].matched_value_masked)
             self.assertIn("血*", records[0].matched_value_masked)
 
+    def test_short_ascii_sensitive_word_does_not_match_inside_safe_word(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            result = check_external_submission(
+                settings,
+                source_module="rename_preview",
+                source_record_id=12,
+                file_name="The.Matrix.1999.mkv",
+                file_path="/media/save-cache/The.Matrix.1999.mkv",
+                match_title="The Matrix",
+                target_service="tmdb",
+            )
+
+            self.assertTrue(result.allowed)
+            self.assertEqual([], result.matched_words)
+
+    def test_short_ascii_sensitive_word_still_matches_path_segment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            result = check_external_submission(
+                settings,
+                source_module="rename_preview",
+                source_record_id=13,
+                file_name="movie.mkv",
+                file_path="/media/AV/movie.mkv",
+                match_title="movie",
+                target_service="tmdb",
+            )
+
+            self.assertFalse(result.allowed)
+            self.assertEqual(["AV"], result.matched_words)
+
     def test_can_disable_default_sensitive_words(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = self.build_settings(Path(temp_dir))

@@ -2,12 +2,16 @@
 
 import tempfile
 import unittest
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
+from app.service.douban_proxy_client import DoubanProxyClient
 from app.main import create_app
 from app.api import settings as settings_api
 
@@ -223,6 +227,109 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual(200, history.status_code)
             self.assertIn("current_snapshot", history.json())
             self.assertIn("matches_current", history.json())
+
+    def test_metadata_provider_configs_can_be_listed_updated_and_tested(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            list_response = client.get("/api/settings/metadata-providers")
+            self.assertEqual(200, list_response.status_code)
+            providers = {item["provider"]: item for item in list_response.json()}
+            self.assertIn("tmdb", providers)
+            self.assertIn("bangumi", providers)
+            self.assertIn("tvdb", providers)
+            self.assertIn("douban_proxy", providers)
+            self.assertFalse(providers["douban_proxy"]["has_api_key"])
+
+            update_response = client.put(
+                "/api/settings/metadata-providers/douban_proxy",
+                json={
+                    "enabled": True,
+                    "priority": 20,
+                    "base_url": "https://douban.example.test/api/",
+                    "api_key": "proxy-secret-123456",
+                    "timeout_seconds": 12,
+                    "max_retries": 2,
+                },
+            )
+            self.assertEqual(200, update_response.status_code)
+            updated = update_response.json()
+            self.assertTrue(updated["enabled"])
+            self.assertEqual(20, updated["priority"])
+            self.assertEqual("https://douban.example.test/api", updated["base_url"])
+            self.assertTrue(updated["has_api_key"])
+            self.assertNotIn("api_key", updated)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                encrypted = connection.execute(
+                    "SELECT api_key_encrypted FROM metadata_provider_configs WHERE provider = 'douban_proxy'"
+                ).fetchone()[0]
+            self.assertNotEqual("proxy-secret-123456", encrypted)
+
+            with patch.object(DoubanProxyClient, "test_connection", lambda client: True, create=True):
+                test_response = client.post("/api/settings/metadata-providers/douban_proxy/test")
+            self.assertEqual(200, test_response.status_code)
+            self.assertEqual("success", test_response.json()["status"])
+
+            partial_response = client.put(
+                "/api/settings/metadata-providers/bangumi",
+                json={"enabled": True},
+            )
+            self.assertEqual(200, partial_response.status_code)
+            self.assertEqual("https://api.bgm.tv", partial_response.json()["base_url"])
+
+    def test_douban_proxy_test_fails_without_base_url(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.post("/api/settings/metadata-providers/douban_proxy/test")
+
+            self.assertEqual(200, response.status_code)
+            data = response.json()
+            self.assertEqual("failed", data["status"])
+            self.assertIn("Base URL", data["message"])
+
+    def test_metadata_provider_api_key_can_be_cleared_explicitly(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            saved_response = client.put(
+                "/api/settings/metadata-providers/bangumi",
+                json={"api_key": "bangumi-token"},
+            )
+            cleared_response = client.put(
+                "/api/settings/metadata-providers/bangumi",
+                json={"clear_api_key": True},
+            )
+
+            self.assertEqual(200, saved_response.status_code)
+            self.assertTrue(saved_response.json()["has_api_key"])
+            self.assertEqual(200, cleared_response.status_code)
+            self.assertFalse(cleared_response.json()["has_api_key"])
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                encrypted = connection.execute(
+                    "SELECT api_key_encrypted FROM metadata_provider_configs WHERE provider = 'bangumi'"
+                ).fetchone()[0]
+            self.assertEqual("", encrypted)
+
+    def test_metadata_provider_rejects_invalid_provider(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            response = client.put(
+                "/api/settings/metadata-providers/unknown",
+                json={"enabled": True},
+            )
+
+            self.assertEqual(400, response.status_code)
 
     def test_naming_template_export_returns_effective_bundle(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
