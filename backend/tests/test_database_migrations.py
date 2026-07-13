@@ -467,6 +467,72 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertEqual(("local", "local", None, None), row)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
+    def test_existing_database_is_migrated_to_m11_remote_protocol_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            root.mkdir(parents=True, exist_ok=True)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute(
+                    "INSERT INTO app_meta (key, value) VALUES ('schema_version', '18')"
+                )
+                connection.execute(
+                    "CREATE TABLE media_sources "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "name TEXT NOT NULL, "
+                    "path TEXT NOT NULL UNIQUE, "
+                    "path_type TEXT NOT NULL DEFAULT 'local', "
+                    "protocol TEXT NOT NULL DEFAULT 'local', "
+                    "encrypted_secret TEXT, "
+                    "enabled INTEGER NOT NULL DEFAULT 1, "
+                    "created_at TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO media_sources "
+                    "(name, path, path_type, protocol, enabled, created_at, updated_at) "
+                    "VALUES ('电影', '/data/media', 'local', 'local', 1, "
+                    "'2026-07-13T00:00:00+00:00', '2026-07-13T00:00:00+00:00')"
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                media_source_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(media_sources)")
+                }
+                table_names = {
+                    row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                lock_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(remote_operation_locks)")
+                }
+                item_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(remote_operation_items)")
+                }
+                row = connection.execute(
+                    "SELECT auth_type, credential_version, remote_root, capability_snapshot_json "
+                    "FROM media_sources WHERE name = '电影'"
+                ).fetchone()
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertIn("protocol_endpoint", media_source_columns)
+            self.assertIn("auth_type", media_source_columns)
+            self.assertIn("credential_version", media_source_columns)
+            self.assertIn("remote_root", media_source_columns)
+            self.assertIn("capability_snapshot_json", media_source_columns)
+            self.assertIn("remote_operation_locks", table_names)
+            self.assertIn("remote_operation_items", table_names)
+            self.assertIn("lease_token", lock_columns)
+            self.assertIn("idempotency_key", item_columns)
+            self.assertEqual(("none", 1, None, None), row)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
     def test_existing_m6_database_is_migrated_to_page_test_results_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

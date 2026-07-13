@@ -1,7 +1,18 @@
 """Shared path protocol interfaces and capability models."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
+
+
+class RemoteProtocolCapability(StrEnum):
+    BROWSE = "browse"
+    SCAN = "scan"
+    READ_METADATA = "read_metadata"
+    ATOMIC_RENAME = "atomic_rename"
+    COPY_DELETE_RENAME = "copy_delete_rename"
+    CONDITIONAL_WRITE = "conditional_write"
+    RESUME = "resume"
 
 
 @dataclass(frozen=True)
@@ -16,6 +27,7 @@ class ProtocolCapabilities:
     can_verify_filesystem_type: bool
     future_candidate: bool
     user_notice: str
+    remote_capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

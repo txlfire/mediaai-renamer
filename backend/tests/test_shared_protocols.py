@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.service.shared_protocols.base import RemoteProtocolCapability
 from app.service.shared_protocols.registry import get_protocol, list_protocol_capabilities
 
 
@@ -28,9 +29,18 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             self.assertTrue(capabilities[protocol].future_candidate)
             self.assertFalse(capabilities[protocol].supports_scan)
             self.assertFalse(capabilities[protocol].supports_rename)
+            self.assertIn(RemoteProtocolCapability.BROWSE.value, capabilities[protocol].remote_capabilities)
+            self.assertIn(RemoteProtocolCapability.READ_METADATA.value, capabilities[protocol].remote_capabilities)
 
         with self.assertRaises(ValueError):
             get_protocol("webdav")
+
+    def test_local_protocol_declares_atomic_rename_capability(self):
+        capabilities = get_protocol("local").capabilities()
+
+        self.assertIn(RemoteProtocolCapability.SCAN.value, capabilities.remote_capabilities)
+        self.assertIn(RemoteProtocolCapability.ATOMIC_RENAME.value, capabilities.remote_capabilities)
+        self.assertNotIn(RemoteProtocolCapability.COPY_DELETE_RENAME.value, capabilities.remote_capabilities)
 
     def test_local_connection_and_directory_listing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

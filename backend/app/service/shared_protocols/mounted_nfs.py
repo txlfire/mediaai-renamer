@@ -6,6 +6,7 @@ from app.service.shared_protocols.base import (
     ConnectionTestResult,
     DirectoryListing,
     ProtocolCapabilities,
+    RemoteProtocolCapability,
     SharedPathContext,
 )
 from app.service.shared_protocols.local import _directory_listing, _test_local_directory, _test_local_rename
@@ -53,6 +54,12 @@ class MountedNfsProtocol:
             can_verify_filesystem_type=True,
             future_candidate=False,
             user_notice="不保存账号密码；请先在系统或宿主机完成挂载并确保服务可访问。",
+            remote_capabilities=(
+                RemoteProtocolCapability.BROWSE.value,
+                RemoteProtocolCapability.SCAN.value,
+                RemoteProtocolCapability.READ_METADATA.value,
+                RemoteProtocolCapability.ATOMIC_RENAME.value,
+            ),
         )
 
     def validate_config(self, path: str, context: SharedPathContext | None = None) -> ConnectionTestResult:
