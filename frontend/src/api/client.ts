@@ -136,7 +136,7 @@ export type MediaSourceCreatePayload = {
   name: string;
   path: string;
   enabled: boolean;
-  path_type?: "local" | "unc" | "mounted_nfs";
+  path_type?: "local" | "unc" | "mounted_nfs" | "webdav";
   host?: string | null;
   share_name?: string | null;
   domain?: string | null;
@@ -207,7 +207,7 @@ export type ConnectionTestResult = {
 
 export type MediaSourceConnectionTestPayload = {
   path: string;
-  path_type?: "local" | "unc" | "mounted_nfs";
+  path_type?: "local" | "unc" | "mounted_nfs" | "webdav";
   host?: string | null;
   share_name?: string | null;
   domain?: string | null;

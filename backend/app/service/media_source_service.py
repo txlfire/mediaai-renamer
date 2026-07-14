@@ -584,6 +584,8 @@ def update_media_source(
         current = _fetch_media_source(connection, source_id)
         if current.path_type == "unc":
             source_path = _validate_unc_path(str(path))
+        elif current.path_type == "webdav":
+            source_path = _normalize_remote_protocol_path(current.path_type, path)
         else:
             source_path = _normalize_media_source_path(path)
         path_changed = str(source_path) != current.path
@@ -591,18 +593,28 @@ def update_media_source(
             raise ValueError("修改路径将清空历史数据，请确认后重试")
         if path_changed:
             cleanup_summary = _delete_related_history(connection, source_id)
-        update_username = username if current.path_type == "unc" else None
-        update_secret = encrypt_secret(settings, secret) if current.path_type == "unc" and secret else None
-        update_auth_type = "basic" if current.path_type == "unc" and (update_username or update_secret) else "none"
+        update_username = username if current.path_type in {"unc", "webdav"} else None
+        update_secret = encrypt_secret(settings, secret) if current.path_type in {"unc", "webdav"} and secret else None
+        if current.path_type in {"unc", "webdav"}:
+            update_auth_type = (
+                "basic"
+                if update_username or update_secret or current.has_secret
+                else "none"
+            )
+        else:
+            update_auth_type = "none"
         update_nfs_host = nfs_host if current.path_type == "mounted_nfs" else None
         update_nfs_export = nfs_export if current.path_type == "mounted_nfs" else None
+        update_protocol_endpoint = str(source_path) if current.path_type == "webdav" else current.protocol_endpoint
+        update_remote_root = "/" if current.path_type == "webdav" else current.remote_root
         try:
             connection.execute(
                 "UPDATE media_sources SET name = ?, path = ?, username = ?, "
                 "encrypted_secret = CASE WHEN ? IS NULL THEN encrypted_secret ELSE ? END, "
                 "credential_version = CASE WHEN ? IS NULL THEN credential_version ELSE ? END, "
                 "auth_type = ?, "
-                "nfs_host = ?, nfs_export = ?, enabled = ?, updated_at = ? "
+                "nfs_host = ?, nfs_export = ?, protocol_endpoint = ?, remote_root = ?, "
+                "enabled = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
                     source_name,
@@ -615,6 +627,8 @@ def update_media_source(
                     update_auth_type,
                     update_nfs_host,
                     update_nfs_export,
+                    update_protocol_endpoint,
+                    update_remote_root,
                     int(enabled),
                     now,
                     source_id,

@@ -221,6 +221,63 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertEqual("basic", row[1])
             self.assertEqual(2, row[2])
 
+    def test_update_webdav_media_source_keeps_protocol_and_updates_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings,
+                "WebDAV",
+                "https://nas.example/dav",
+                True,
+                path_type="webdav",
+                username="old-user",
+                secret="old-secret",
+            )
+
+            result = update_media_source(
+                settings,
+                source.id,
+                name="WebDAV 新",
+                path="https://nas.example/new-dav",
+                enabled=False,
+                username="new-user",
+                secret="new-secret",
+                clear_history_on_path_change=True,
+            )
+
+            updated = result["source"]
+            self.assertEqual("WebDAV 新", updated.name)
+            self.assertEqual("https://nas.example/new-dav", updated.path)
+            self.assertEqual("webdav", updated.path_type)
+            self.assertEqual("webdav", updated.protocol)
+            self.assertEqual("new-user", updated.username)
+            self.assertTrue(updated.has_secret)
+            self.assertFalse(updated.enabled)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT encrypted_secret, auth_type, credential_version, protocol_endpoint "
+                    "FROM media_sources WHERE id = ?",
+                    (source.id,),
+                ).fetchone()
+            self.assertEqual("new-secret", decrypt_secret(settings, row[0]))
+            self.assertEqual("basic", row[1])
+            self.assertEqual(2, row[2])
+            self.assertEqual("https://nas.example/new-dav", row[3])
+
+    def test_connection_payload_accepts_webdav_https(self):
+        result = test_media_source_connection_payload(
+            "webdav",
+            "https://nas.example/dav",
+            username="dav-user",
+            secret="dav-password",
+        )
+
+        self.assertFalse(result.success)
+        self.assertNotIn("dav-password", result.message)
+        self.assertNotIn("dav-password", result.suggestion or "")
+
     def test_database_creates_m1_tables(self):
         """数据库初始化应创建 M1 所需表。"""
 
