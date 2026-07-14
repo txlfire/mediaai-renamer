@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import sqlite3
+from urllib.parse import unquote, urlparse
 
 from app.core.config import AppSettings
 from app.schema.ai_parse import AiParseResult
@@ -47,12 +48,15 @@ def add_pending_file(
     connection: sqlite3.Connection,
     media_source_id: int,
     scan_job_id: int,
-    file_path: Path,
+    file_path: str | Path,
     file_size: int,
     reason: str,
 ) -> None:
     """Insert one file into the pending queue using the caller's transaction."""
 
+    file_path_text = str(file_path)
+    parsed_path = urlparse(file_path_text).path if "://" in file_path_text else file_path_text
+    file_name = Path(unquote(parsed_path)).name
     connection.execute(
         "INSERT INTO pending_files "
         "(media_source_id, scan_job_id, file_path, file_name, extension, file_size, reason, status, created_at) "
@@ -60,9 +64,9 @@ def add_pending_file(
         (
             media_source_id,
             scan_job_id,
-            str(file_path),
-            file_path.name,
-            file_path.suffix.lower(),
+            file_path_text,
+            file_name,
+            Path(file_name).suffix.lower(),
             file_size,
             reason,
             "pending",

@@ -75,6 +75,16 @@ class DirectoryListing:
     entries: list[DirectoryEntry]
 
 
+@dataclass(frozen=True)
+class RemoteFileEntry:
+    path: str
+    name: str
+    extension: str
+    file_size: int
+    modified_at: str
+    version: str | None = None
+
+
 class SharedProtocol(Protocol):
     def capabilities(self) -> ProtocolCapabilities:
         ...
@@ -86,6 +96,14 @@ class SharedProtocol(Protocol):
         ...
 
     def list_directories(self, path: str, context: SharedPathContext | None = None) -> DirectoryListing:
+        ...
+
+    def list_files(
+        self,
+        path: str,
+        context: SharedPathContext | None = None,
+        recursive: bool = True,
+    ) -> list[RemoteFileEntry]:
         ...
 
     def check_scan_ready(self, path: str, context: SharedPathContext | None = None) -> ConnectionTestResult:

@@ -44,7 +44,7 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         self.assertFalse(capabilities["webdav"].future_candidate)
         self.assertTrue(capabilities["webdav"].supports_credentials)
         self.assertTrue(capabilities["webdav"].supports_directory_browse)
-        self.assertFalse(capabilities["webdav"].supports_scan)
+        self.assertTrue(capabilities["webdav"].supports_scan)
         self.assertFalse(protocol.validate_config("http://nas.example/dav").success)
         self.assertTrue(protocol.validate_config("https://nas.example/dav").success)
 
@@ -93,6 +93,75 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(["Movies"], [entry.name for entry in listing.entries])
         self.assertEqual("https://nas.example/dav/Movies/", listing.entries[0].path)
+
+    def test_webdav_protocol_lists_files_with_etag_metadata(self):
+        protocol = get_protocol("webdav")
+
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        root_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/Movies/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/root.mp4</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>2048</d:getcontentlength>
+              <d:getlastmodified>Tue, 14 Jul 2026 01:02:03 GMT</d:getlastmodified>
+              <d:getetag>"root-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+        movies_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/Movies/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/Movies/电影.mkv</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>4096</d:getcontentlength>
+              <d:getlastmodified>Tue, 14 Jul 2026 02:03:04 GMT</d:getlastmodified>
+              <d:getetag>"movie-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+
+        def fake_urlopen(request, timeout=5):
+            if request.full_url.endswith("/Movies/"):
+                return FakeResponse(movies_xml)
+            return FakeResponse(root_xml)
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=fake_urlopen):
+            files = protocol.list_files("https://nas.example/dav/")
+
+        self.assertEqual(["电影.mkv", "root.mp4"], [item.name for item in files])
+        self.assertEqual([4096, 2048], [item.file_size for item in files])
+        self.assertEqual(['"movie-etag"', '"root-etag"'], [item.version for item in files])
 
     def test_local_protocol_declares_atomic_rename_capability(self):
         capabilities = get_protocol("local").capabilities()

@@ -434,6 +434,115 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(0, second_job.video_count)
             self.assertEqual([], list_pending_files(settings, scan_job_id=second_job.id))
 
+    def test_webdav_scan_persists_video_files_and_uses_etag_for_incremental_skip(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings,
+                "webdav",
+                "https://nas.example/dav/",
+                True,
+                path_type="webdav",
+                username="user",
+                secret="password",
+            )
+            update_setting_values(
+                settings,
+                {"scan.batch_interval_seconds": 0, "scan.minimum_file_size": 1024},
+                operator="test",
+            )
+
+            class FakeResponse:
+                status = 207
+
+                def __init__(self, body: str = ""):
+                    self.body = body.encode("utf-8")
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+                def read(self):
+                    return self.body
+
+            root_xml = """<?xml version="1.0" encoding="utf-8"?>
+            <d:multistatus xmlns:d="DAV:">
+              <d:response>
+                <d:href>/dav/</d:href>
+                <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+              </d:response>
+              <d:response>
+                <d:href>/dav/Show/</d:href>
+                <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+              </d:response>
+              <d:response>
+                <d:href>/dav/poster.jpg</d:href>
+                <d:propstat><d:prop>
+                  <d:resourcetype />
+                  <d:getcontentlength>2048</d:getcontentlength>
+                  <d:getlastmodified>Tue, 14 Jul 2026 01:02:03 GMT</d:getlastmodified>
+                  <d:getetag>"poster-etag"</d:getetag>
+                </d:prop></d:propstat>
+              </d:response>
+            </d:multistatus>
+            """
+            show_xml = """<?xml version="1.0" encoding="utf-8"?>
+            <d:multistatus xmlns:d="DAV:">
+              <d:response>
+                <d:href>/dav/Show/</d:href>
+                <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+              </d:response>
+              <d:response>
+                <d:href>/dav/Show/S01E01.mkv</d:href>
+                <d:propstat><d:prop>
+                  <d:resourcetype />
+                  <d:getcontentlength>4096</d:getcontentlength>
+                  <d:getlastmodified>Tue, 14 Jul 2026 02:03:04 GMT</d:getlastmodified>
+                  <d:getetag>"episode-etag"</d:getetag>
+                </d:prop></d:propstat>
+              </d:response>
+              <d:response>
+                <d:href>/dav/Show/tiny.mp4</d:href>
+                <d:propstat><d:prop>
+                  <d:resourcetype />
+                  <d:getcontentlength>10</d:getcontentlength>
+                  <d:getlastmodified>Tue, 14 Jul 2026 02:03:05 GMT</d:getlastmodified>
+                  <d:getetag>"tiny-etag"</d:getetag>
+                </d:prop></d:propstat>
+              </d:response>
+            </d:multistatus>
+            """
+
+            def fake_urlopen(request, timeout=5):
+                if request.method == "OPTIONS":
+                    return FakeResponse()
+                if request.full_url.endswith("/Show/"):
+                    return FakeResponse(show_xml)
+                return FakeResponse(root_xml)
+
+            with patch("app.service.shared_protocols.webdav.urlopen", side_effect=fake_urlopen):
+                first_job = run_full_scan(settings, source.id)
+                second_job = run_full_scan(settings, source.id, scan_mode="incremental")
+
+            first_files = list_media_files(settings, scan_job_id=first_job.id)
+            second_files = list_media_files(settings, scan_job_id=second_job.id)
+            pending_files = list_pending_files(settings, scan_job_id=first_job.id)
+
+            self.assertEqual("partial_completed", first_job.status)
+            self.assertEqual(3, first_job.scanned_count)
+            self.assertEqual(1, first_job.video_count)
+            self.assertEqual(1, first_job.warning_count)
+            self.assertEqual(["S01E01.mkv"], [file.file_name for file in first_files])
+            self.assertEqual(["tiny.mp4"], [file.file_name for file in pending_files])
+            self.assertEqual("completed", second_job.status)
+            self.assertEqual(0, second_job.video_count)
+            self.assertEqual(2, second_job.skipped_count)
+            self.assertEqual([], second_files)
+
     def test_recover_interrupted_scan_jobs_marks_running_jobs_failed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

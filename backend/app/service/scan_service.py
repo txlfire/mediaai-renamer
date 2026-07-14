@@ -4,11 +4,13 @@
 """
 
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
 from pathlib import Path
 import sqlite3
 import time
+from urllib.parse import unquote, urlparse
 
 from app.core.config import AppSettings
 from app.schema.media import MediaFile, ScanJob, ScanModeSuggestion
@@ -31,6 +33,17 @@ from app.utils.media_file import is_video_file
 SCAN_MODE_FULL = "full"
 SCAN_MODE_INCREMENTAL = "incremental"
 SCAN_MODES = {SCAN_MODE_FULL, SCAN_MODE_INCREMENTAL}
+
+
+@dataclass(frozen=True)
+class _ScanFileEntry:
+    file_path: str
+    file_name: str
+    extension: str
+    file_size: int
+    modified_at: str
+    normalized_path: str
+    version: str | None = None
 
 
 def _utc_now() -> str:
@@ -230,8 +243,43 @@ def _file_modified_at(stat: object) -> str:
     return datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
 
 
-def _file_fingerprint(normalized_path: str, file_size: int, modified_at: str, extension: str) -> str:
-    return f"{normalized_path}|{file_size}|{modified_at}|{extension.lower()}"
+def _file_fingerprint(
+    normalized_path: str,
+    file_size: int,
+    modified_at: str,
+    extension: str,
+    version: str | None = None,
+) -> str:
+    version_part = version or ""
+    return f"{normalized_path}|{file_size}|{modified_at}|{extension.lower()}|{version_part}"
+
+
+def _remote_normalized_index_path(file_path: str, source_path: str) -> str:
+    file_url = urlparse(file_path)
+    source_url = urlparse(source_path)
+    file_url_path = unquote(file_url.path).strip("/")
+    source_url_path = unquote(source_url.path).strip("/")
+    if source_url_path and file_url_path.startswith(source_url_path.rstrip("/") + "/"):
+        normalized = file_url_path[len(source_url_path.rstrip("/")) + 1 :]
+    else:
+        normalized = file_url_path or unquote(file_path)
+    return normalized.replace("\\", "/").lower()
+
+
+def _local_scan_entry(
+    file_path: Path,
+    source_path: Path,
+    stat: object,
+) -> _ScanFileEntry:
+    normalized_path = _normalized_index_path(file_path, source_path)
+    return _ScanFileEntry(
+        file_path=str(file_path),
+        file_name=file_path.name,
+        extension=file_path.suffix.lower(),
+        file_size=int(stat.st_size),
+        modified_at=_file_modified_at(stat),
+        normalized_path=normalized_path,
+    )
 
 
 def _get_index_row(
@@ -250,16 +298,24 @@ def _upsert_scan_file_index(
     connection: sqlite3.Connection,
     media_source_id: int,
     job_id: int,
-    file_path: Path,
-    source_path: Path,
+    file_path: Path | str,
+    source_path: Path | str,
     file_size: int,
     modified_at: str,
     status: str,
     now: str,
+    normalized_path: str | None = None,
+    file_name: str | None = None,
+    extension: str | None = None,
+    version: str | None = None,
 ) -> tuple[str, str]:
-    normalized_path = _normalized_index_path(file_path, source_path)
-    extension = file_path.suffix.lower()
-    fingerprint = _file_fingerprint(normalized_path, file_size, modified_at, extension)
+    if normalized_path is None:
+        normalized_path = _normalized_index_path(Path(file_path), Path(source_path))
+    if file_name is None:
+        file_name = Path(str(file_path)).name
+    if extension is None:
+        extension = Path(file_name).suffix.lower()
+    fingerprint = _file_fingerprint(normalized_path, file_size, modified_at, extension, version)
     connection.execute(
         "INSERT INTO scan_file_index "
         "(media_source_id, file_path, normalized_path, file_name, extension, file_size, "
@@ -280,7 +336,7 @@ def _upsert_scan_file_index(
             media_source_id,
             str(file_path),
             normalized_path,
-            file_path.name,
+            file_name,
             extension,
             file_size,
             modified_at,
@@ -293,6 +349,32 @@ def _upsert_scan_file_index(
         ),
     )
     return normalized_path, fingerprint
+
+
+def _upsert_scan_file_index_entry(
+    connection: sqlite3.Connection,
+    media_source_id: int,
+    job_id: int,
+    entry: _ScanFileEntry,
+    source_path: Path | str,
+    status: str,
+    now: str,
+) -> tuple[str, str]:
+    return _upsert_scan_file_index(
+        connection,
+        media_source_id,
+        job_id,
+        entry.file_path,
+        source_path,
+        entry.file_size,
+        entry.modified_at,
+        status,
+        now,
+        normalized_path=entry.normalized_path,
+        file_name=entry.file_name,
+        extension=entry.extension,
+        version=entry.version,
+    )
 
 
 def _mark_missing_scan_indexes(
@@ -332,7 +414,9 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
     )
     if not scan_ready.success:
         raise ValueError(scan_ready.message)
-    source_path = Path(protocol.normalize_path(source.path))
+    protocol_context = get_media_source_protocol_context(settings, source.id)
+    normalized_source_path = protocol.normalize_path(source.path)
+    source_path = Path(normalized_source_path) if source.path_type != "webdav" else normalized_source_path
     created_at = _utc_now()
     effective_settings = get_effective_settings(settings)
     minimum_file_size = int(effective_settings.get("scan.minimum_file_size") or 0)
@@ -393,20 +477,34 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
         scan_savepoint = "scan_job_processing"
         try:
             connection.execute(f"SAVEPOINT {scan_savepoint}")
-            path_iterator = source_path.rglob("*") if recursive else source_path.iterdir()
-            for file_path in sorted(path_iterator):
-                if skip_hidden_files and _is_hidden_path(file_path, source_path):
-                    continue
-                try:
-                    if not file_path.is_file():
+            if source.path_type == "webdav":
+                remote_entries = protocol.list_files(normalized_source_path, protocol_context, recursive=recursive)
+                scan_entries = [
+                    _ScanFileEntry(
+                        file_path=entry.path,
+                        file_name=entry.name,
+                        extension=entry.extension,
+                        file_size=entry.file_size,
+                        modified_at=entry.modified_at,
+                        normalized_path=_remote_normalized_index_path(entry.path, normalized_source_path),
+                        version=entry.version,
+                    )
+                    for entry in remote_entries
+                ]
+            else:
+                local_source_path = Path(source_path)
+                path_iterator = local_source_path.rglob("*") if recursive else local_source_path.iterdir()
+                scan_entries = []
+                for file_path in sorted(path_iterator):
+                    if skip_hidden_files and _is_hidden_path(file_path, local_source_path):
                         continue
-                except OSError as exc:
-                    warning_count += 1
-                    warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
-                    continue
-
-                scanned_count += 1
-                if is_video_file(file_path):
+                    try:
+                        if not file_path.is_file():
+                            continue
+                    except OSError as exc:
+                        warning_count += 1
+                        warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
+                        continue
                     try:
                         stat = _stat_with_nfs_retry(file_path, nfs_retry_count, nfs_operation_timeout_seconds)
                     except (OSError, TimeoutError) as exc:
@@ -419,12 +517,20 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                             warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
                             continue
                         raise
+                    scan_entries.append(_local_scan_entry(file_path, local_source_path, stat))
 
+            for entry in scan_entries:
+                scanned_count += 1
+                if is_video_file(entry.file_name):
                     now = _utc_now()
-                    modified_at = _file_modified_at(stat)
-                    normalized_path = _normalized_index_path(file_path, source_path)
-                    extension = file_path.suffix.lower()
-                    fingerprint = _file_fingerprint(normalized_path, stat.st_size, modified_at, extension)
+                    normalized_path = entry.normalized_path
+                    fingerprint = _file_fingerprint(
+                        normalized_path,
+                        entry.file_size,
+                        entry.modified_at,
+                        entry.extension,
+                        entry.version,
+                    )
                     index_row = _get_index_row(connection, media_source_id, normalized_path)
                     seen_index_paths.add(normalized_path)
 
@@ -438,12 +544,16 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                             connection,
                             media_source_id,
                             job_id,
-                            file_path,
+                            entry.file_path,
                             source_path,
-                            stat.st_size,
-                            modified_at,
+                            entry.file_size,
+                            entry.modified_at,
                             str(index_row["status"]),
                             now,
+                            normalized_path=entry.normalized_path,
+                            file_name=entry.file_name,
+                            extension=entry.extension,
+                            version=entry.version,
                         )
                         skipped_count += 1
                         indexed_count += 1
@@ -454,29 +564,27 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                     elif str(index_row["fingerprint"]) != fingerprint or str(index_row["status"]) == "missing":
                         changed_count += 1
 
-                    if stat.st_size < minimum_file_size:
+                    if entry.file_size < minimum_file_size:
                         add_pending_file(
                             connection,
                             media_source_id,
                             job_id,
-                            file_path,
-                            stat.st_size,
+                            entry.file_path,
+                            entry.file_size,
                             "size_filtered",
                         )
-                        _upsert_scan_file_index(
+                        _upsert_scan_file_index_entry(
                             connection,
                             media_source_id,
                             job_id,
-                            file_path,
+                            entry,
                             source_path,
-                            stat.st_size,
-                            modified_at,
                             "ignored",
                             now,
                         )
                         indexed_count += 1
                         warning_count += 1
-                        warning_details.append(f"{file_path.name}: 文件小于最小扫描大小")
+                        warning_details.append(f"{entry.file_name}: 文件小于最小扫描大小")
                         continue
 
                     connection.execute(
@@ -487,22 +595,20 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                         (
                             media_source_id,
                             job_id,
-                            str(file_path),
-                            file_path.name,
-                            extension,
-                            stat.st_size,
-                            modified_at,
+                            entry.file_path,
+                            entry.file_name,
+                            entry.extension,
+                            entry.file_size,
+                            entry.modified_at,
                             now,
                         ),
                     )
-                    _upsert_scan_file_index(
+                    _upsert_scan_file_index_entry(
                         connection,
                         media_source_id,
                         job_id,
-                        file_path,
+                        entry,
                         source_path,
-                        stat.st_size,
-                        modified_at,
                         "active",
                         now,
                     )
