@@ -10,7 +10,7 @@ import string
 from app.core.config import AppSettings
 from app.core.logger import get_batch_logger
 from app.schema.media import LocalDirectoryEntry, LocalDirectoryListing, MediaSource
-from app.service.media_source_secret import encrypt_secret, has_secret
+from app.service.media_source_secret import CURRENT_CREDENTIAL_VERSION, encrypt_secret, has_secret
 from app.service.shared_protocols.base import ConnectionTestResult, SharedPathContext
 from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
@@ -449,11 +449,15 @@ def create_media_source(
     if source_path_type == "unc":
         source_path = _validate_unc_path(str(path))
         encrypted_secret = encrypt_secret(settings, secret)
+        auth_type = "password" if username or secret else "none"
+        credential_version = CURRENT_CREDENTIAL_VERSION if encrypted_secret else 1
     else:
         source_path = _normalize_media_source_path(path)
         username = None
         domain = None
         encrypted_secret = None
+        auth_type = "none"
+        credential_version = 1
     protocol = _protocol_for_path_type(source_path_type)
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -463,8 +467,9 @@ def create_media_source(
                 "INSERT INTO media_sources "
                 "(name, path, path_type, protocol, host, share_name, domain, username, "
                 "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, "
-                "nfs_options, local_mount_path, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "nfs_options, local_mount_path, auth_type, credential_version, enabled, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source_name,
                     str(source_path),
@@ -482,6 +487,8 @@ def create_media_source(
                     nfs_version,
                     nfs_options,
                     local_mount_path,
+                    auth_type,
+                    credential_version,
                     int(enabled),
                     now,
                     now,
@@ -548,12 +555,15 @@ def update_media_source(
             cleanup_summary = _delete_related_history(connection, source_id)
         update_username = username if current.path_type == "unc" else None
         update_secret = encrypt_secret(settings, secret) if current.path_type == "unc" and secret else None
+        update_auth_type = "password" if current.path_type == "unc" and (update_username or update_secret) else "none"
         update_nfs_host = nfs_host if current.path_type == "mounted_nfs" else None
         update_nfs_export = nfs_export if current.path_type == "mounted_nfs" else None
         try:
             connection.execute(
                 "UPDATE media_sources SET name = ?, path = ?, username = ?, "
                 "encrypted_secret = CASE WHEN ? IS NULL THEN encrypted_secret ELSE ? END, "
+                "credential_version = CASE WHEN ? IS NULL THEN credential_version ELSE ? END, "
+                "auth_type = ?, "
                 "nfs_host = ?, nfs_export = ?, enabled = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
@@ -562,6 +572,9 @@ def update_media_source(
                     update_username,
                     update_secret,
                     update_secret,
+                    update_secret,
+                    CURRENT_CREDENTIAL_VERSION,
+                    update_auth_type,
                     update_nfs_host,
                     update_nfs_export,
                     int(enabled),

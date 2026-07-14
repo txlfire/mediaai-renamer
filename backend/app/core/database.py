@@ -9,10 +9,16 @@ import sqlite3
 
 from app.core.config import AppSettings
 from app.core.logger import get_logger
+from app.service.media_source_secret import (
+    CURRENT_CREDENTIAL_VERSION,
+    LEGACY_CREDENTIAL_VERSION,
+    credential_version_for_secret,
+    migrate_secret,
+)
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 19
+CURRENT_SCHEMA_VERSION = 20
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -494,7 +500,37 @@ def _ensure_media_source_remote_protocol_columns(connection: sqlite3.Connection)
     _ensure_column(connection, "media_sources", "trusted_certificate_fingerprint", "TEXT")
 
 
-def _run_migrations(connection: sqlite3.Connection) -> None:
+def _migrate_media_source_secrets(settings: AppSettings, connection: sqlite3.Connection) -> None:
+    if "media_sources" not in _table_names(connection):
+        return
+    columns = _column_names(connection, "media_sources")
+    if "encrypted_secret" not in columns or "credential_version" not in columns:
+        return
+
+    rows = connection.execute(
+        "SELECT id, encrypted_secret FROM media_sources WHERE encrypted_secret IS NOT NULL "
+        "AND encrypted_secret <> ''"
+    ).fetchall()
+    for source_id, encrypted_secret in rows:
+        try:
+            migrated_secret = migrate_secret(settings, str(encrypted_secret))
+            credential_version = credential_version_for_secret(migrated_secret)
+        except Exception as exc:  # pragma: no cover - 防御历史坏数据，避免阻断启动
+            logger.warning("媒体源凭据迁移失败 source_id=%s error=%s", source_id, exc)
+            migrated_secret = encrypted_secret
+            credential_version = LEGACY_CREDENTIAL_VERSION
+        connection.execute(
+            "UPDATE media_sources SET encrypted_secret = ?, credential_version = ? WHERE id = ?",
+            (migrated_secret, credential_version, source_id),
+        )
+    connection.execute(
+        "UPDATE media_sources SET credential_version = ? "
+        "WHERE encrypted_secret IS NULL OR encrypted_secret = ''",
+        (LEGACY_CREDENTIAL_VERSION,),
+    )
+
+
+def _run_migrations(settings: AppSettings, connection: sqlite3.Connection) -> None:
     version = _schema_version(connection)
 
     if version < 4:
@@ -583,6 +619,11 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
             "WHERE credential_version IS NULL OR credential_version < 1"
         )
         _ensure_remote_operation_tables(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 20:
+        _ensure_media_source_remote_protocol_columns(connection)
+        _migrate_media_source_secrets(settings, connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 
@@ -740,7 +781,7 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_metadata_provider_configs_table(connection)
         _seed_metadata_provider_configs(connection)
         _ensure_remote_operation_tables(connection)
-        _run_migrations(connection)
+        _run_migrations(settings, connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
     return settings.database_path

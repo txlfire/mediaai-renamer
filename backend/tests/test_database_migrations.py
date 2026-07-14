@@ -3,11 +3,14 @@
 import sqlite3
 import tempfile
 import unittest
+import base64
+import hashlib
 from contextlib import closing
 from pathlib import Path
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import CURRENT_SCHEMA_VERSION, ensure_database
+from app.service.media_source_secret import decrypt_secret
 
 
 class DatabaseMigrationTest(unittest.TestCase):
@@ -19,6 +22,12 @@ class DatabaseMigrationTest(unittest.TestCase):
             database_path=root / "mediaai.sqlite3",
             logging=LoggingSettings(log_dir=root / "logs", console_output=False),
         )
+
+    def legacy_encrypt_secret(self, settings: AppSettings, secret: str) -> str:
+        raw = secret.encode("utf-8")
+        key = hashlib.sha256(str(settings.database_path).encode("utf-8")).digest()
+        encrypted = bytes(value ^ key[index % len(key)] for index, value in enumerate(raw))
+        return base64.urlsafe_b64encode(encrypted).decode("ascii")
 
     def test_existing_m3_database_is_migrated_to_current_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -531,6 +540,60 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("lease_token", lock_columns)
             self.assertIn("idempotency_key", item_columns)
             self.assertEqual(("none", 1, None, None), row)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_existing_m11_remote_schema_migrates_legacy_media_source_secret_to_v2(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            root.mkdir(parents=True, exist_ok=True)
+            legacy_secret = self.legacy_encrypt_secret(settings, "old-smb-password")
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute(
+                    "INSERT INTO app_meta (key, value) VALUES ('schema_version', '19')"
+                )
+                connection.execute(
+                    "CREATE TABLE media_sources "
+                    "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "name TEXT NOT NULL, "
+                    "path TEXT NOT NULL UNIQUE, "
+                    "path_type TEXT NOT NULL DEFAULT 'local', "
+                    "protocol TEXT NOT NULL DEFAULT 'local', "
+                    "username TEXT, "
+                    "encrypted_secret TEXT, "
+                    "auth_type TEXT NOT NULL DEFAULT 'none', "
+                    "credential_version INTEGER NOT NULL DEFAULT 1, "
+                    "enabled INTEGER NOT NULL DEFAULT 1, "
+                    "created_at TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO media_sources "
+                    "(name, path, path_type, protocol, username, encrypted_secret, auth_type, "
+                    "credential_version, enabled, created_at, updated_at) "
+                    "VALUES ('共享', '\\\\nas\\media', 'unc', 'smb', 'media-user', ?, "
+                    "'password', 1, 1, '2026-07-14T00:00:00+00:00', "
+                    "'2026-07-14T00:00:00+00:00')",
+                    (legacy_secret,),
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT encrypted_secret, credential_version FROM media_sources WHERE name = '共享'"
+                ).fetchone()
+                schema_version = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertNotEqual(legacy_secret, row[0])
+            self.assertEqual(2, row[1])
+            self.assertEqual("old-smb-password", decrypt_secret(settings, row[0]))
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
     def test_existing_m6_database_is_migrated_to_page_test_results_schema(self):

@@ -20,6 +20,7 @@ from app.service.media_source_service import (
     test_media_source_connection_payload,
     update_media_source,
 )
+from app.service.media_source_secret import decrypt_secret
 from app.service.settings_service import update_setting_values
 
 
@@ -111,11 +112,14 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertIsNone(created.secret)
             with closing(sqlite3.connect(settings.database_path)) as connection:
                 row = connection.execute(
-                    "SELECT encrypted_secret FROM media_sources WHERE id = ?",
+                    "SELECT encrypted_secret, credential_version FROM media_sources WHERE id = ?",
                     (created.id,),
                 ).fetchone()
             self.assertIsNotNone(row[0])
             self.assertNotEqual("plain-password", row[0])
+            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertEqual(2, row[1])
+            self.assertEqual("plain-password", decrypt_secret(settings, row[0]))
 
     def test_create_media_source_rejects_invalid_port(self):
         with tempfile.TemporaryDirectory() as temp_dir:
