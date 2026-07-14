@@ -28,6 +28,12 @@ class MediaSource:
     nfs_version: str | None = None
     nfs_options: str | None = None
     local_mount_path: str | None = None
+    protocol_endpoint: str | None = None
+    auth_type: str = "none"
+    credential_version: int = 1
+    remote_root: str | None = None
+    capability_snapshot_json: str | None = None
+    trusted_certificate_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)

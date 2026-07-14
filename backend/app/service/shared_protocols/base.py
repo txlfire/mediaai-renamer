@@ -44,6 +44,7 @@ class ConnectionTestResult:
 class SharedPathContext:
     path_type: str
     username: str | None = None
+    secret: str | None = None
     has_secret: bool = False
     host: str | None = None
     share_name: str | None = None

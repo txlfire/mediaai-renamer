@@ -3,8 +3,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app.service.shared_protocols.base import RemoteProtocolCapability
+from app.service.shared_protocols.base import RemoteProtocolCapability, SharedPathContext
 from app.service.shared_protocols.registry import get_protocol, list_protocol_capabilities
 
 
@@ -24,7 +25,7 @@ class SharedProtocolRegistryTest(unittest.TestCase):
     def test_future_protocols_are_listed_as_candidates_only(self):
         capabilities = {item.protocol: item for item in list_protocol_capabilities()}
 
-        for protocol in ("webdav", "ftp", "sftp", "s3"):
+        for protocol in ("ftp", "sftp", "s3"):
             self.assertIn(protocol, capabilities)
             self.assertTrue(capabilities[protocol].future_candidate)
             self.assertFalse(capabilities[protocol].supports_scan)
@@ -33,7 +34,65 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             self.assertIn(RemoteProtocolCapability.READ_METADATA.value, capabilities[protocol].remote_capabilities)
 
         with self.assertRaises(ValueError):
-            get_protocol("webdav")
+            get_protocol("ftp")
+
+    def test_webdav_protocol_validates_https_and_lists_directories(self):
+        capabilities = {item.protocol: item for item in list_protocol_capabilities()}
+        protocol = get_protocol("webdav")
+
+        self.assertIn("webdav", capabilities)
+        self.assertFalse(capabilities["webdav"].future_candidate)
+        self.assertTrue(capabilities["webdav"].supports_credentials)
+        self.assertTrue(capabilities["webdav"].supports_directory_browse)
+        self.assertFalse(capabilities["webdav"].supports_scan)
+        self.assertFalse(protocol.validate_config("http://nas.example/dav").success)
+        self.assertTrue(protocol.validate_config("https://nas.example/dav").success)
+
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        propfind_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/Movies/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/poster.jpg</d:href>
+            <d:propstat><d:prop><d:resourcetype /></d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+
+        with patch("app.service.shared_protocols.webdav.urlopen", return_value=FakeResponse(propfind_xml)):
+            result = protocol.test_connection(
+                "https://nas.example/dav/",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+            listing = protocol.list_directories(
+                "https://nas.example/dav/",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(["Movies"], [entry.name for entry in listing.entries])
+        self.assertEqual("https://nas.example/dav/Movies/", listing.entries[0].path)
 
     def test_local_protocol_declares_atomic_rename_capability(self):
         capabilities = get_protocol("local").capabilities()

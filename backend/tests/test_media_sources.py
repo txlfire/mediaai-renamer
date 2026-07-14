@@ -191,6 +191,36 @@ class MediaSourceServiceTest(unittest.TestCase):
                 ).fetchone()
             self.assertEqual((None, None), row)
 
+    def test_create_webdav_media_source_encrypts_secret_and_preserves_protocol(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+
+            created = create_media_source(
+                settings,
+                "WebDAV",
+                "https://nas.example/dav",
+                True,
+                path_type="webdav",
+                username="dav-user",
+                secret="dav-password",
+            )
+
+            self.assertEqual("webdav", created.path_type)
+            self.assertEqual("webdav", created.protocol)
+            self.assertEqual("dav-user", created.username)
+            self.assertTrue(created.has_secret)
+            self.assertIsNone(created.secret)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT encrypted_secret, auth_type, credential_version FROM media_sources WHERE id = ?",
+                    (created.id,),
+                ).fetchone()
+            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertEqual("basic", row[1])
+            self.assertEqual(2, row[2])
+
     def test_database_creates_m1_tables(self):
         """数据库初始化应创建 M1 所需表。"""
 
