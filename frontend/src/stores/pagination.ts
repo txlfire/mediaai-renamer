@@ -10,6 +10,7 @@ export type PaginationKey =
   | "scan-results"
   | "rename-previews"
   | "metadata-candidates"
+  | "audit-events"
   | "task-governance";
 
 type PaginationState = {

@@ -36,11 +36,18 @@ import {
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
+import TablePagination from "../components/TablePagination.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
+import { usePaginationStore } from "../stores/pagination";
 import { useSettingsStore } from "../stores/settings";
 import { getAiProviderDefaults } from "../utils/aiProviderDefaults";
+import { resolveStoredCollapsedState } from "../utils/collapsibleSettings";
 import { formatDateTime } from "../utils/displayFormat";
+import {
+  resolveSupplementalMetadataProviderTabs,
+  type SupplementalMetadataProviderKey,
+} from "../utils/metadataProviderTabs";
 import {
   detectNamingSemanticWarnings,
   parseNamingTemplate,
@@ -52,19 +59,25 @@ import { formatSensitiveWordsInput, parseSensitiveWordsInput } from "../utils/se
 
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
+const paginationStore = usePaginationStore();
 const activeCategory = ref("tmdb");
 const pageText = messages.settings;
 const settingsWriteDisabled = computed(() => !authStore.hasPermission("settings:write"));
 const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? messages.auth.permissionDenied : ""));
 const movieNamingElements = ref<NamingTemplateElement[]>([]);
 const episodeNamingElements = ref<NamingTemplateElement[]>([]);
-const imdbCardCollapsed = ref(localStorage.getItem("settings.imdb.cardCollapsed") !== "false");
+const activeSupplementalMetadataProviderTab = ref<SupplementalMetadataProviderKey>("imdb");
 const metadataProviderSecrets = reactive<Record<string, string>>({});
 const metadataProviderClearSecrets = reactive<Record<string, boolean>>({});
 const metadataProviderTestResults = reactive<Record<string, MetadataProviderTestResult | null>>({});
 const metadataProviderSaving = ref("");
 const metadataProviderTesting = ref("");
-const customSensitiveWordsCollapsed = ref(localStorage.getItem("settings.privacy.customWordsCollapsed") !== "false");
+const metadataProvidersCollapsed = ref(
+  resolveStoredCollapsedState(localStorage.getItem("settings.metadataProviders.collapsed"), true),
+);
+const customSensitiveWordsCollapsed = ref(
+  resolveStoredCollapsedState(localStorage.getItem("settings.privacy.customWordsCollapsed"), true),
+);
 const defaultSensitiveWordsDialogVisible = ref(false);
 const externalSubmissionBlocks = ref<ExternalSubmissionBlockRecord[]>([]);
 const externalSubmissionBlockTotal = ref(0);
@@ -165,8 +178,6 @@ const auditFilters = reactive({
   eventType: "",
   result: "",
   actorName: "",
-  page: 1,
-  pageSize: 20,
 });
 const namingWorkbenchForm = reactive({
   mediaType: "movie" as "movie" | "episode",
@@ -215,10 +226,9 @@ const savedApiKeyDisplay = computed(() => {
 
 const v4TokenPlaceholder = computed(() => savedV4TokenDisplay.value || pageText.tmdb.v4TokenPlaceholder);
 const apiKeyPlaceholder = computed(() => savedApiKeyDisplay.value || pageText.tmdb.apiKeyPlaceholder);
-const supplementalMetadataProviders = computed(() =>
-  settingsStore.metadataProviders.filter((provider) =>
-    ["bangumi", "tvdb", "douban_proxy"].includes(provider.provider),
-  ),
+const auditPagination = computed(() => paginationStore.getState("audit-events"));
+const supplementalMetadataProviderTabs = computed(() =>
+  resolveSupplementalMetadataProviderTabs(settingsStore.metadataProviders),
 );
 const isMountedNfsSharedPath = computed(() => form.sharedDefaultPathType === "mounted_nfs");
 const sharedPathTypeHint = computed(() => {
@@ -241,6 +251,10 @@ function isAiProviderProfile(value: unknown): value is AiProviderProfile {
 
 function metadataProviderLabel(provider: string) {
   return pageText.metadataProviders.providers[provider] ?? provider;
+}
+
+function supplementalMetadataProviderTabLabel(provider: string) {
+  return provider === "imdb" ? pageText.imdb.title : metadataProviderLabel(provider);
 }
 
 function metadataProviderBaseUrlDisabled(provider: string) {
@@ -291,6 +305,14 @@ async function saveMetadataProvider(providerConfig: MetadataProviderConfig) {
       timeout_seconds: Number(providerConfig.timeout_seconds || 10),
       max_retries: Number(providerConfig.max_retries || 0),
     });
+    if (provider === "imdb") {
+      form.imdbEnabled = Boolean(providerConfig.enabled);
+      form.imdbTimeoutSeconds = String(Number(providerConfig.timeout_seconds || 10));
+      await settingsStore.saveSettings({
+        "imdb.enabled": providerConfig.enabled,
+        "imdb.timeout_ms": Number(providerConfig.timeout_seconds || 10) * 1000,
+      });
+    }
     metadataProviderSecrets[provider] = "";
     metadataProviderClearSecrets[provider] = false;
     ElMessage.success(pageText.metadataProviders.saveSuccess);
@@ -373,6 +395,10 @@ watch(customSensitiveWordsCollapsed, (collapsed) => {
   localStorage.setItem("settings.privacy.customWordsCollapsed", String(collapsed));
 });
 
+watch(metadataProvidersCollapsed, (collapsed) => {
+  localStorage.setItem("settings.metadataProviders.collapsed", String(collapsed));
+});
+
 watch(activeCategory, (category) => {
   if (category === "privacy") {
     void loadExternalSubmissionBlocks();
@@ -436,13 +462,12 @@ async function loadAuditEvents() {
       event_type: auditFilters.eventType || undefined,
       result: auditFilters.result || undefined,
       actor_name: auditFilters.actorName.trim() || undefined,
-      page: auditFilters.page,
-      page_size: auditFilters.pageSize,
+      page: auditPagination.value.currentPage,
+      page_size: auditPagination.value.pageSize,
     });
     auditEvents.value = result.items;
     auditTotal.value = result.total;
-    auditFilters.page = result.page;
-    auditFilters.pageSize = result.pageSize;
+    paginationStore.setPage("audit-events", result.page);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : pageText.audit.loadFailed);
   } finally {
@@ -451,12 +476,11 @@ async function loadAuditEvents() {
 }
 
 function applyAuditFilters() {
-  auditFilters.page = 1;
+  paginationStore.setPage("audit-events", 1);
   void loadAuditEvents();
 }
 
-function handleAuditPageChange(page: number) {
-  auditFilters.page = page;
+function handleAuditPaginationChange() {
   void loadAuditEvents();
 }
 
@@ -1392,10 +1416,6 @@ function buildTmdbFormSnapshot(): Record<string, unknown> {
   };
 }
 
-watch(imdbCardCollapsed, (value) => {
-  localStorage.setItem("settings.imdb.cardCollapsed", value ? "true" : "false");
-});
-
 function resetTmdbTestState() {
   testResult.value = null;
   testResultSnapshot.value = null;
@@ -2263,238 +2283,154 @@ onMounted(async () => {
             </el-dialog>
           </div>
 
-          <div class="settings-config-card" :class="{ 'is-collapsed': imdbCardCollapsed }">
-            <div
-              class="settings-config-card-title settings-config-card-toggle"
-              role="button"
-              tabindex="0"
-              @click="imdbCardCollapsed = !imdbCardCollapsed"
-              @keydown.enter.prevent="imdbCardCollapsed = !imdbCardCollapsed"
-              @keydown.space.prevent="imdbCardCollapsed = !imdbCardCollapsed"
+          <div class="settings-config-card metadata-provider-card" :class="{ 'is-collapsed': metadataProvidersCollapsed }">
+            <button
+              type="button"
+              class="settings-config-card-title settings-config-card-toggle metadata-provider-toggle"
+              @click="metadataProvidersCollapsed = !metadataProvidersCollapsed"
             >
-              <span>{{ pageText.imdb.title }}</span>
-              <el-button text size="small" @click.stop="imdbCardCollapsed = !imdbCardCollapsed">
-                {{ imdbCardCollapsed ? messages.common.expand : messages.common.collapse }}
-              </el-button>
-            </div>
-            <template v-if="!imdbCardCollapsed">
-            <div class="settings-grid">
-              <el-form-item :label="pageText.imdb.enabled">
-                <el-switch v-model="form.imdbEnabled" />
-              </el-form-item>
-
-              <el-form-item :label="pageText.imdb.priority">
-                <el-select v-model="form.imdbPriority" class="settings-code-control">
-                  <el-option :label="pageText.imdb.priorityTmdbFirst" value="tmdb_first" />
-                  <el-option :label="pageText.imdb.priorityImdbFirst" value="imdb_first" />
-                </el-select>
-              </el-form-item>
-
-              <el-form-item :label="pageText.imdb.timeout">
-                <el-input
-                  v-model="form.imdbTimeoutSeconds"
-                  class="settings-number-control"
-                  maxlength="2"
-                  @blur="validateImdbTimeout"
-                  @input="onlyDigits('imdbTimeoutSeconds')"
-                >
-                  <template #append>{{ pageText.imdb.seconds }}</template>
-                </el-input>
-              </el-form-item>
-            </div>
-
-            <div class="settings-actions">
-              <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
-                {{ messages.common.refresh }}
-              </el-button>
-              <el-button :loading="settingsStore.loading || testingImdb" @click="testImdbConnection">
-                {{ pageText.imdb.testConnection }}
-              </el-button>
-              <el-button type="primary" :loading="settingsStore.loading" :disabled="settingsWriteDisabled" :title="settingsPermissionTitle" @click="saveImdbSettings">
-                {{ messages.common.save }}
-              </el-button>
-            </div>
-
-            <div
-              role="button"
-              class="settings-test-status-bar"
-              :class="[`is-${imdbStatusBar.tone}`, { 'is-disabled': testingImdb || imdbTestResultModalAutoOpen }]"
-              :aria-disabled="Boolean(testingImdb || imdbTestResultModalAutoOpen)"
-              @pointerdown.prevent="rememberImdbStatusPanelScroll"
-              @mousedown.prevent="rememberImdbStatusPanelScroll"
-              @click="handleImdbStatusClick"
-            >
-              <span class="settings-test-status-state">
-                <span class="settings-test-status-icon">{{ imdbStatusBar.icon }}</span>
-                <span class="settings-test-status-text">{{ imdbStatusBar.text }}</span>
-              </span>
-              <template v-if="imdbStatusBar.time">
-                <span class="settings-test-separator">·</span>
-                <span class="settings-test-status-meta">{{ imdbTestResult ? pageText.imdb.updatedAt + imdbStatusBar.time : imdbStatusBar.time }}</span>
-              </template>
-            </div>
-
-            <el-dialog
-              v-model="imdbTestResultDialogVisible"
-              :title="pageText.imdb.testDetailTitle"
-              width="min(540px, calc(100vw - 2rem))"
-              align-center
-              @closed="handleImdbTestDialogClosed"
-            >
-              <div v-if="imdbTestResult" class="settings-test-detail">
-                <div class="settings-test-detail-row">
-                  <div class="settings-test-detail-heading">
-                    <strong>IMDb</strong>
-                    <el-tag :type="channelStatusType(imdbTestResult.connection_status)" effect="light">
-                      {{ imdbTestResult.connection_status === "success" ? pageText.imdb.testSuccess : pageText.imdb.testFailed }}
-                    </el-tag>
-                  </div>
-                  <div class="settings-test-detail-item">
-                    <span>{{ pageText.imdb.responseTime }}</span>
-                    <strong>{{ imdbResponseTimeText(imdbTestResult) }}</strong>
-                  </div>
-                  <div class="settings-test-detail-item">
-                    <span>{{ pageText.imdb.detailMessage }}</span>
-                    <strong>{{ imdbTestResult.error_message || (imdbTestResult.connection_status === "success" ? pageText.imdb.testSuccess : pageText.imdb.testFailed) }}</strong>
-                  </div>
-                </div>
-                <div class="settings-test-summary">
-                  <span>{{ pageText.imdb.effectiveStatus }}</span>
-                  <strong>{{ imdbTestResult.connection_status === "success" ? pageText.imdb.testSuccess : pageText.imdb.testFailed }}</strong>
-                </div>
-              </div>
-            <template #footer>
-              <el-button @click="imdbTestResultDialogVisible = false">{{ messages.common.close }}</el-button>
-            </template>
-            </el-dialog>
-            </template>
-          </div>
-
-          <div class="settings-config-card metadata-provider-card">
-            <div class="settings-config-card-title">
               <span>{{ pageText.metadataProviders.title }}</span>
-              <el-button :loading="settingsStore.loading" @click="refreshMetadataProviders">
-                <el-icon><Refresh /></el-icon>
-                {{ messages.common.refresh }}
-              </el-button>
-            </div>
-            <div class="settings-page-notice">
-              <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
-              <span class="settings-page-notice-text">{{ pageText.metadataProviders.notice }}</span>
-            </div>
-
-            <div class="metadata-provider-list">
-              <div
-                v-for="provider in supplementalMetadataProviders"
-                :key="provider.provider"
-                class="metadata-provider-item"
-              >
-                <div class="metadata-provider-header">
-                  <div class="metadata-provider-title">
-                    <strong>{{ metadataProviderLabel(provider.provider) }}</strong>
-                    <el-tag :type="provider.has_api_key ? 'success' : 'info'" effect="light">
-                      {{ provider.has_api_key ? pageText.metadataProviders.hasSecret : pageText.metadataProviders.noSecret }}
-                    </el-tag>
-                  </div>
-                  <div class="metadata-provider-inline-controls">
-                    <span>{{ pageText.metadataProviders.enabled }}</span>
-                    <el-switch v-model="provider.enabled" />
-                    <span>{{ pageText.metadataProviders.priority }}</span>
-                    <el-input-number
-                      v-model="provider.priority"
-                      :min="1"
-                      :max="999"
-                      :step="1"
-                      controls-position="right"
-                      class="metadata-provider-priority"
-                    />
-                  </div>
-                </div>
-
-                <div class="settings-grid metadata-provider-grid">
-                  <el-form-item :label="pageText.metadataProviders.baseUrl">
-                    <el-input
-                      v-model="provider.base_url"
-                      class="settings-code-control"
-                      :disabled="metadataProviderBaseUrlDisabled(provider.provider)"
-                    />
-                    <span v-if="metadataProviderNotice(provider.provider)" class="setting-source">
-                      {{ metadataProviderNotice(provider.provider) }}
-                    </span>
-                  </el-form-item>
-                  <el-form-item :label="pageText.metadataProviders.apiKey">
-                    <el-input
-                      v-model="metadataProviderSecrets[provider.provider]"
-                      class="settings-code-control"
-                      type="password"
-                      show-password
-                      :placeholder="pageText.metadataProviders.apiKeyPlaceholder"
-                    />
-                    <el-checkbox v-model="metadataProviderClearSecrets[provider.provider]">
-                      {{ pageText.metadataProviders.clearApiKey }}
-                    </el-checkbox>
-                  </el-form-item>
-                  <el-form-item :label="pageText.metadataProviders.timeout">
-                    <el-input-number
-                      v-model="provider.timeout_seconds"
-                      :min="3"
-                      :max="60"
-                      :step="1"
-                      controls-position="right"
-                    />
-                    <span class="setting-source">{{ pageText.metadataProviders.seconds }}</span>
-                  </el-form-item>
-                  <el-form-item :label="pageText.metadataProviders.maxRetries">
-                    <el-input-number
-                      v-model="provider.max_retries"
-                      :min="0"
-                      :max="5"
-                      :step="1"
-                      controls-position="right"
-                    />
-                    <span class="setting-source">{{ pageText.metadataProviders.retryUnit }}</span>
-                  </el-form-item>
-                </div>
-
-                <div class="metadata-provider-actions">
-                  <el-button
-                    :loading="metadataProviderTesting === provider.provider"
-                    :disabled="settingsWriteDisabled"
-                    :title="settingsPermissionTitle"
-                    @click="testMetadataProvider(provider)"
-                  >
-                    {{ pageText.metadataProviders.testConnection }}
-                  </el-button>
-                  <el-button
-                    type="primary"
-                    :loading="metadataProviderSaving === provider.provider"
-                    :disabled="settingsWriteDisabled"
-                    :title="settingsPermissionTitle"
-                    @click="saveMetadataProvider(provider)"
-                  >
-                    {{ pageText.metadataProviders.saveProvider }}
-                  </el-button>
-                </div>
-
-                <div v-if="metadataProviderTestResults[provider.provider]" class="metadata-provider-test-result">
-                  <el-tag
-                    :type="metadataProviderStatusType(metadataProviderTestResults[provider.provider]?.status || '')"
-                    effect="light"
-                  >
-                    {{ metadataProviderStatusLabel(metadataProviderTestResults[provider.provider]?.status || '') }}
-                  </el-tag>
-                  <span>{{ metadataProviderTestResults[provider.provider]?.message }}</span>
-                  <span>
-                    {{ pageText.metadataProviders.responseTime }}：
-                    {{ metadataProviderTestResults[provider.provider]?.response_ms ?? "-" }} ms
-                  </span>
-                  <span>
-                    {{ pageText.metadataProviders.updatedAt }}：
-                    {{ metadataProviderTestTime(metadataProviderTestResults[provider.provider]) }}
-                  </span>
-                </div>
+              <span class="settings-collapse-icon" aria-hidden="true">
+                {{ metadataProvidersCollapsed ? "+" : "-" }}
+              </span>
+            </button>
+            <template v-if="!metadataProvidersCollapsed">
+              <div class="settings-page-notice">
+                <el-icon class="settings-page-notice-icon"><InfoFilled /></el-icon>
+                <span class="settings-page-notice-text">{{ pageText.metadataProviders.notice }}</span>
               </div>
-            </div>
+              <el-tabs v-model="activeSupplementalMetadataProviderTab" class="metadata-provider-tabs">
+                <el-tab-pane
+                  v-for="tab in supplementalMetadataProviderTabs"
+                  :key="tab.key"
+                  :label="supplementalMetadataProviderTabLabel(tab.key)"
+                  :name="tab.key"
+                >
+                  <div v-if="tab.provider" class="metadata-provider-pane">
+                    <div class="metadata-provider-form">
+                      <el-form-item :label="pageText.metadataProviders.enabled">
+                        <el-switch v-model="tab.provider.enabled" />
+                      </el-form-item>
+
+                      <el-form-item :label="pageText.metadataProviders.priority">
+                        <el-input-number
+                          v-model="tab.provider.priority"
+                          class="settings-short-control"
+                          :min="1"
+                          :max="999"
+                          :step="1"
+                          controls-position="right"
+                        />
+                      </el-form-item>
+
+                      <el-form-item :label="pageText.metadataProviders.baseUrl">
+                        <div class="metadata-provider-control-stack">
+                          <el-input
+                            v-model="tab.provider.base_url"
+                            class="metadata-provider-wide-control"
+                            :disabled="metadataProviderBaseUrlDisabled(tab.provider.provider)"
+                          />
+                          <span v-if="metadataProviderNotice(tab.provider.provider)" class="setting-source">
+                            {{ metadataProviderNotice(tab.provider.provider) }}
+                          </span>
+                        </div>
+                      </el-form-item>
+
+                      <el-form-item :label="pageText.metadataProviders.apiKey">
+                        <div class="metadata-provider-control-stack">
+                          <el-input
+                            v-model="metadataProviderSecrets[tab.provider.provider]"
+                            class="metadata-provider-wide-control"
+                            type="password"
+                            show-password
+                            :placeholder="pageText.metadataProviders.apiKeyPlaceholder"
+                          />
+                          <el-checkbox
+                            v-model="metadataProviderClearSecrets[tab.provider.provider]"
+                            class="metadata-provider-clear-key"
+                          >
+                            {{ pageText.metadataProviders.clearApiKey }}
+                          </el-checkbox>
+                        </div>
+                      </el-form-item>
+
+                      <el-form-item :label="pageText.metadataProviders.timeout">
+                        <div class="metadata-provider-inline-control">
+                          <el-input-number
+                            v-model="tab.provider.timeout_seconds"
+                            class="settings-short-control"
+                            :min="3"
+                            :max="60"
+                            :step="1"
+                            controls-position="right"
+                          />
+                          <span class="setting-source">{{ pageText.metadataProviders.seconds }}</span>
+                        </div>
+                      </el-form-item>
+
+                      <el-form-item :label="pageText.metadataProviders.maxRetries">
+                        <div class="metadata-provider-inline-control">
+                          <el-input-number
+                            v-model="tab.provider.max_retries"
+                            class="settings-short-control"
+                            :min="0"
+                            :max="5"
+                            :step="1"
+                            controls-position="right"
+                          />
+                          <span class="setting-source">{{ pageText.metadataProviders.retryUnit }}</span>
+                        </div>
+                      </el-form-item>
+                    </div>
+
+                    <div class="settings-actions metadata-provider-actions">
+                      <el-button :loading="settingsStore.loading" @click="refreshMetadataProviders">
+                        {{ messages.common.refresh }}
+                      </el-button>
+                      <el-button
+                        :loading="metadataProviderTesting === tab.provider.provider"
+                        :disabled="settingsWriteDisabled"
+                        :title="settingsPermissionTitle"
+                        @click="testMetadataProvider(tab.provider)"
+                      >
+                        {{ pageText.metadataProviders.testConnection }}
+                      </el-button>
+                      <el-button
+                        type="primary"
+                        :loading="metadataProviderSaving === tab.provider.provider"
+                        :disabled="settingsWriteDisabled"
+                        :title="settingsPermissionTitle"
+                        @click="saveMetadataProvider(tab.provider)"
+                      >
+                        {{ pageText.metadataProviders.saveProvider }}
+                      </el-button>
+                    </div>
+
+                    <div
+                      v-if="metadataProviderTestResults[tab.provider.provider]"
+                      class="settings-test-status-bar"
+                      role="status"
+                      :class="`is-${metadataProviderStatusType(metadataProviderTestResults[tab.provider.provider]?.status || '')}`"
+                    >
+                      <span class="settings-test-status-state">
+                        <span class="settings-test-status-text">
+                          {{ metadataProviderStatusLabel(metadataProviderTestResults[tab.provider.provider]?.status || '') }}：
+                          {{ metadataProviderTestResults[tab.provider.provider]?.message }}
+                        </span>
+                      </span>
+                      <span class="settings-test-separator">·</span>
+                      <span class="settings-test-status-meta">
+                        {{ pageText.metadataProviders.responseTime }} {{ metadataProviderTestResults[tab.provider.provider]?.response_ms ?? "-" }} ms
+                      </span>
+                      <span class="settings-test-separator">·</span>
+                      <span class="settings-test-status-meta">
+                        {{ pageText.metadataProviders.updatedAt }} {{ metadataProviderTestTime(metadataProviderTestResults[tab.provider.provider]) }}
+                      </span>
+                    </div>
+                  </div>
+                </el-tab-pane>
+              </el-tabs>
+            </template>
           </div>
         </el-form>
 
@@ -3572,14 +3508,13 @@ onMounted(async () => {
               </el-table-column>
             </el-table>
 
-            <el-pagination
+            <TablePagination
               class="settings-audit-pagination"
-              background
-              layout="prev, pager, next, total"
+              pagination-key="audit-events"
+              server
               :total="auditTotal"
-              :page-size="auditFilters.pageSize"
-              :current-page="auditFilters.page"
-              @current-change="handleAuditPageChange"
+              @page-change="handleAuditPaginationChange"
+              @page-size-change="handleAuditPaginationChange"
             />
 
             <el-dialog
@@ -3914,6 +3849,8 @@ onMounted(async () => {
 
 .settings-audit-pagination {
   justify-content: flex-end;
+  margin-top: -4px;
+  padding-top: 0;
 }
 
 .settings-audit-detail {
@@ -3956,71 +3893,112 @@ onMounted(async () => {
   gap: 14px;
 }
 
-.metadata-provider-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.metadata-provider-toggle {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
 }
 
-.metadata-provider-item {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 14px;
-  background: var(--el-fill-color-blank);
+.metadata-provider-tabs {
+  min-width: 0;
 }
 
-.metadata-provider-header,
-.metadata-provider-actions,
-.metadata-provider-test-result {
-  display: flex;
-  flex-wrap: wrap;
+.metadata-provider-tabs :deep(.el-tabs__header) {
+  margin: 0 0 16px;
+}
+
+.metadata-provider-tabs :deep(.el-tabs__content) {
+  overflow: visible;
+  padding-top: 0;
+}
+
+.metadata-provider-tabs :deep(.el-tab-pane) {
+  padding-top: 0;
+}
+
+.metadata-provider-pane {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.metadata-provider-form {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+}
+
+.metadata-provider-form :deep(.el-form-item) {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
   align-items: center;
-  gap: 10px 14px;
+  gap: 16px;
+  margin-bottom: 0;
 }
 
-.metadata-provider-header {
-  justify-content: space-between;
+.metadata-provider-form :deep(.el-form-item__label) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.3;
 }
 
-.metadata-provider-title,
-.metadata-provider-inline-controls {
+.metadata-provider-form :deep(.el-form-item__content) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.metadata-provider-control-stack {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 520px);
+  min-width: 0;
+}
+
+.metadata-provider-inline-control {
   display: inline-flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
-.metadata-provider-title strong {
-  color: var(--el-text-color-primary);
-  font-size: 15px;
-  font-weight: 600;
+.metadata-provider-wide-control {
+  width: min(100%, 520px);
 }
 
-.metadata-provider-inline-controls {
-  color: var(--el-text-color-regular);
-  font-size: 13px;
+.metadata-provider-clear-key {
+  width: max-content;
 }
 
-.metadata-provider-priority {
-  width: 112px;
-}
-
-.metadata-provider-grid {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+.metadata-provider-clear-key :deep(.el-checkbox__label) {
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .metadata-provider-actions {
-  justify-content: flex-end;
+  justify-self: end;
+  margin: 0;
 }
 
-.metadata-provider-test-result {
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-regular);
-  font-size: 13px;
+.metadata-provider-pane > .settings-test-status-bar {
+  margin-top: 0;
+}
+
+.metadata-provider-card .settings-test-status-bar[role="status"] {
+  cursor: default;
+}
+
+.metadata-provider-card .settings-test-status-bar[role="status"]:hover {
+  border-color: var(--border-color);
+  background: var(--panel-soft-bg);
 }
 </style>

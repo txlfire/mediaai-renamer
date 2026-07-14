@@ -272,6 +272,14 @@ export const zhCnMessages = {
       fallback: "低置信后补充",
       parallel: "并行搜索",
     },
+    multiSourceResults: {
+      title: "多源匹配结果",
+      notice: "候选已保存在当前预览记录中。可逐条查看来源结果，并选择需要回填的字段。",
+      candidateCount: "候选数",
+      providers: "来源执行结果",
+      viewResults: "查看匹配结果",
+      viewCandidates: "查看候选",
+    },
     excludeSelected: "批量排除",
     excludeSingle: "排除",
     excludeSingleSuccess: "已排除到待处理列表",
@@ -351,6 +359,7 @@ export const zhCnMessages = {
       tmdbMatch: "TMDB 匹配",
       multiSourceMatch: "多源匹配",
       metadataBackfill: "回填",
+      metadataResult: "查看匹配结果",
       aiParse: "AI 解析",
     },
     titleSources: {

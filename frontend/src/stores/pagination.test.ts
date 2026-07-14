@@ -12,6 +12,7 @@ describe("pagination state", () => {
     const store = usePaginationStore();
 
     expect(store.getState("media-sources").pageSize).toBe(10);
+    expect(store.getState("audit-events").pageSize).toBe(10);
     expect(store.paginate("media-sources", [1, 2, 3])).toEqual([1, 2, 3]);
   });
 

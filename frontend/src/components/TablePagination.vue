@@ -12,6 +12,11 @@ const props = defineProps<{
   paginationKey: PaginationKey;
   total: number;
   pagerCount?: number;
+  server?: boolean;
+}>();
+const emit = defineEmits<{
+  (event: "page-change", page: number): void;
+  (event: "page-size-change", pageSize: number): void;
 }>();
 
 const paginationStore = usePaginationStore();
@@ -45,6 +50,16 @@ const normalizedPagerCount = computed(() => {
 function setCompactPage(page: number) {
   const nextPage = Math.min(Math.max(1, page), pageCount.value);
   paginationStore.setPage(props.paginationKey, nextPage);
+  if (props.server) {
+    emit("page-change", nextPage);
+  }
+}
+
+function setPageSize(size: number) {
+  paginationStore.setPageSize(props.paginationKey, size);
+  if (props.server) {
+    emit("page-size-change", pagination.value.pageSize);
+  }
 }
 </script>
 
@@ -55,11 +70,11 @@ function setCompactPage(page: number) {
       :model-value="pagination.pageSize"
       class="page-size-select"
       size="small"
-      @change="(size: number) => paginationStore.setPageSize(paginationKey, size)"
+      @change="setPageSize"
     >
       <el-option :label="messages.common.pageSize10" :value="10" />
       <el-option :label="messages.common.pageSize50" :value="50" />
-      <el-option :label="messages.common.all" :value="PAGE_SIZE_ALL" />
+      <el-option v-if="!server" :label="messages.common.all" :value="PAGE_SIZE_ALL" />
     </el-select>
     <div
       v-if="pagination.pageSize !== PAGE_SIZE_ALL && compactPagerEnabled"
@@ -137,7 +152,7 @@ function setCompactPage(page: number) {
         :total="total"
         background
         layout="prev, pager, next, jumper"
-        @current-change="(page: number) => paginationStore.setPage(paginationKey, page)"
+        @current-change="setCompactPage"
       />
       <el-tooltip :content="messages.common.lastPage" placement="top">
         <el-button
