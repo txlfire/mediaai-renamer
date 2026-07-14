@@ -1,6 +1,7 @@
 param(
     [string]$HostName = "0.0.0.0",
     [int]$Port = 5173,
+    [string]$BackendUrl = "http://127.0.0.1:8970",
     [switch]$Background
 )
 
@@ -37,6 +38,7 @@ Set-Location $Root
 
 Normalize-ProcessPathVariable
 $env:CI = "true"
+$env:VITE_BACKEND_URL = $BackendUrl
 
 # Call the local Vite entry so the project-pinned frontend dependencies are used.
 $Node = Find-NodeExecutable
