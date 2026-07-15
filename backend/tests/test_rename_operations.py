@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
 
@@ -248,6 +250,89 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual(1, operation.conflict_count)
         self.assertEqual("conflict", operation.items[0].status)
         self.assertEqual("UNC 路径格式不正确", operation.items[0].message)
+
+    def test_webdav_dry_run_uses_remote_url_target_without_local_path_check(self):
+        self._insert_webdav_preview()
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
+            operation = create_rename_dry_run(self.settings, [3])
+
+        self.assertEqual(1, operation.ready_count)
+        self.assertEqual(0, operation.conflict_count)
+        self.assertEqual("ready", operation.items[0].status)
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", operation.items[0].target_path)
+
+    def test_webdav_execute_ready_item_fails_with_clear_not_enabled_message(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
+            operation = create_rename_dry_run(self.settings, [3])
+
+        executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", executed.status)
+        self.assertEqual(1, executed.failed_count)
+        self.assertEqual("failed", executed.items[0].status)
+        self.assertIn("WebDAV 真实 MOVE 尚未启用", executed.items[0].message)
+
+    def _insert_webdav_preview(self):
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_sources "
+                "(id, name, path, path_type, protocol, username, encrypted_secret, auth_type, enabled, created_at, updated_at) "
+                "VALUES (2, 'webdav', 'https://nas.example/dav/', 'webdav', 'webdav', NULL, NULL, 'none', 1, 'now', 'now')"
+            )
+            connection.execute(
+                "INSERT INTO scan_jobs "
+                "(id, media_source_id, status, batch_size, batch_interval_seconds, created_at) "
+                "VALUES (2, 2, 'completed', 100, 0, 'now')"
+            )
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES "
+                "(3, 2, 2, 'https://nas.example/dav/Movie.2024.1080p.mkv', "
+                "'Movie.2024.1080p.mkv', '.mkv', 2048, 'now', 'now')"
+            )
+            connection.execute(
+                "INSERT INTO rename_previews "
+                "(id, media_file_id, media_type, parsed_title, parsed_year, season, episode, original_extension, "
+                "suggested_name, edited_name, status, created_at, updated_at) "
+                "VALUES (3, 3, 'movie', 'Movie', 2024, NULL, NULL, '.mkv', "
+                "'Movie.2024.mkv', 'Movie.Safe.mkv', 'generated', 'now', 'now')"
+            )
+            connection.commit()
+
+    def _fake_webdav_dry_run_urlopen(self, request, timeout=5):
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        source_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/Movie.2024.1080p.mkv</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>2048</d:getcontentlength>
+              <d:getetag>"source-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+        if request.full_url.endswith("/Movie.Safe.mkv"):
+            raise HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
+        return FakeResponse(source_xml)
 
     def test_execute_marks_missing_source_as_failed(self):
         generate_rename_previews(self.settings)

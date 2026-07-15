@@ -75,6 +75,28 @@ def _propfind(path: str, context: SharedPathContext | None) -> ET.Element:
     return ET.fromstring(payload)
 
 
+def _propfind_optional(path: str, context: SharedPathContext | None) -> ET.Element | None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<d:propfind xmlns:d="DAV:"><d:prop>'
+        b'<d:resourcetype /><d:getcontentlength />'
+        b'<d:getlastmodified /><d:getetag />'
+        b'</d:prop></d:propfind>'
+    )
+    try:
+        with _request(path, "PROPFIND", context, body=body) as response:
+            payload = response.read()
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        result = _webdav_error_message(exc)
+        raise ValueError(result.message) from exc
+    except Exception as exc:  # noqa: BLE001 - WebDAV 需要转换为用户可读错误。
+        result = _webdav_error_message(exc)
+        raise ValueError(result.message) from exc
+    return ET.fromstring(payload)
+
+
 def _webdav_error_message(exc: Exception) -> ConnectionTestResult:
     if isinstance(exc, HTTPError):
         if exc.code in (401, 403):
@@ -275,7 +297,33 @@ class WebDavProtocol:
         target_path: str,
         context: SharedPathContext | None = None,
     ) -> ConnectionTestResult:
-        return ConnectionTestResult(False, "WebDAV 重命名尚未启用", "后续阶段将接入远程操作锁和 MOVE dry-run")
+        source_validation = self.validate_config(source_path, context)
+        if not source_validation.success:
+            return source_validation
+        target_validation = self.validate_config(target_path, context)
+        if not target_validation.success:
+            return target_validation
+
+        try:
+            source_resource = _propfind_optional(source_path, context)
+            if source_resource is None:
+                return ConnectionTestResult(False, "WebDAV 源文件不存在", "请重新扫描后再生成重命名预览")
+            if any(_is_collection(response) for response in source_resource):
+                return ConnectionTestResult(False, "WebDAV 源路径不是文件", "当前仅支持媒体文件重命名 dry-run")
+            target_resource = _propfind_optional(target_path, context)
+        except ValueError as exc:
+            return ConnectionTestResult(False, str(exc), "请检查 WebDAV 服务状态、权限或代理配置")
+
+        if target_resource is not None:
+            return ConnectionTestResult(False, "WebDAV 目标文件已存在", "请修改目标文件名后重新 dry-run")
+
+        return ConnectionTestResult(
+            True,
+            "WebDAV MOVE dry-run 可执行",
+            "真实 MOVE 将在后续阶段接入远程操作锁后启用",
+            readable=True,
+            writable=True,
+        )
 
     def normalize_path(self, path: str) -> str:
         return _normalize_webdav_url(path)

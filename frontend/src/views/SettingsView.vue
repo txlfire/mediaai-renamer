@@ -2649,15 +2649,15 @@ onMounted(async () => {
               </div>
               <el-table
                 :data="savedAiProfiles"
-                :fit="false"
                 size="small"
                 class="settings-block-record-table settings-ai-profile-table"
+                table-layout="auto"
                 :empty-text="pageText.ai.profileEmpty"
               >
-                <el-table-column prop="name" :label="pageText.ai.profileName" width="180" show-overflow-tooltip />
-                <el-table-column prop="provider" :label="pageText.ai.provider" width="160" />
-                <el-table-column prop="model" :label="pageText.ai.model" width="180" show-overflow-tooltip />
-                <el-table-column prop="base_url" :label="pageText.ai.baseUrl" width="300" show-overflow-tooltip />
+                <el-table-column prop="name" :label="pageText.ai.profileName" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="provider" :label="pageText.ai.provider" min-width="140" show-overflow-tooltip />
+                <el-table-column prop="model" :label="pageText.ai.model" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="base_url" :label="pageText.ai.baseUrl" min-width="320" show-overflow-tooltip />
                 <el-table-column
                   :label="pageText.ai.currentProfile"
                   width="96"
@@ -3220,10 +3220,11 @@ onMounted(async () => {
               class="settings-user-table"
               :data="users"
               :empty-text="pageText.users.empty"
+              table-layout="auto"
               border
             >
-              <el-table-column prop="username" :label="pageText.users.username" width="150" show-overflow-tooltip />
-              <el-table-column prop="displayName" :label="pageText.users.displayName" width="160" show-overflow-tooltip />
+              <el-table-column prop="username" :label="pageText.users.username" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="displayName" :label="pageText.users.displayName" min-width="160" show-overflow-tooltip />
               <el-table-column :label="pageText.users.enabled" width="110" align="center">
                 <template #default="{ row }: { row: AuthUser }">
                   <el-tag :type="row.enabled ? 'success' : 'info'" effect="light">
@@ -3252,7 +3253,7 @@ onMounted(async () => {
                   </el-tooltip>
                 </template>
               </el-table-column>
-              <el-table-column :label="pageText.users.lastLoginAt" width="180" show-overflow-tooltip>
+              <el-table-column :label="pageText.users.lastLoginAt" min-width="180" show-overflow-tooltip>
                 <template #default="{ row }: { row: AuthUser }">
                   {{ row.lastLoginAt ? formatDateTime(row.lastLoginAt) : pageText.users.neverLogin }}
                 </template>

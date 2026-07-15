@@ -5,6 +5,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
 import sqlite3
+from urllib.parse import quote, unquote, urlparse
 
 from app.core.config import AppSettings
 from app.schema.media import RenameOperation, RenameOperationItem
@@ -23,6 +24,7 @@ from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
 
 READY_STATUSES = {"generated", "edited"}
+REMOTE_PATH_TYPES = {"webdav"}
 
 
 def _utc_now() -> str:
@@ -63,6 +65,20 @@ def _target_name_is_valid(target_name: str) -> bool:
     if not target_name.strip():
         return False
     return PurePath(target_name).name == target_name and "/" not in target_name and "\\" not in target_name
+
+
+def _is_remote_path_type(path_type: str) -> bool:
+    return path_type in REMOTE_PATH_TYPES
+
+
+def _build_target_path(source_path: str, target_name: str, path_type: str) -> str:
+    if not _is_remote_path_type(path_type):
+        return str(Path(source_path).parent / target_name)
+    parsed = urlparse(source_path)
+    parent_path = parsed.path.rsplit("/", 1)[0]
+    safe_target_name = quote(unquote(target_name), safe="")
+    target_path = f"{parent_path}/{safe_target_name}" if parent_path else f"/{safe_target_name}"
+    return parsed._replace(path=target_path, params="", query="", fragment="").geturl()
 
 
 def _query_previews(connection: sqlite3.Connection, preview_ids: list[int]) -> list[sqlite3.Row]:
@@ -157,9 +173,10 @@ def _build_item_plan(
     row: sqlite3.Row,
     duplicate_targets: Counter[str],
 ) -> tuple[str, str, str, str | None]:
-    source_path = Path(str(row["file_path"]))
+    source_path_value = str(row["file_path"])
+    path_type = str(row["path_type"])
     target_name = str(row["edited_name"] or row["suggested_name"])
-    target_path = source_path.parent / target_name
+    target_path_value = _build_target_path(source_path_value, target_name, path_type)
     status = "ready"
     message = None
 
@@ -169,27 +186,30 @@ def _build_item_plan(
     elif not _target_name_is_valid(target_name):
         status = "conflict"
         message = "目标文件名非法"
-    elif not source_path.exists():
-        status = "conflict"
-        message = "源文件不存在"
-    elif target_path.exists() and source_path.resolve() != target_path.resolve():
-        status = "conflict"
-        message = "目标文件已存在"
-    elif duplicate_targets[str(target_path)] > 1:
+    elif not _is_remote_path_type(path_type):
+        source_path = Path(source_path_value)
+        target_path = Path(target_path_value)
+        if not source_path.exists():
+            status = "conflict"
+            message = "源文件不存在"
+        elif target_path.exists() and source_path.resolve() != target_path.resolve():
+            status = "conflict"
+            message = "目标文件已存在"
+    if status == "ready" and duplicate_targets[target_path_value] > 1:
         status = "conflict"
         message = "批次内目标文件重复"
 
     if status == "ready":
-        readiness = get_protocol(str(row["path_type"])).check_rename_ready(
-            str(source_path),
-            str(target_path),
+        readiness = get_protocol(path_type).check_rename_ready(
+            source_path_value,
+            target_path_value,
             get_media_source_protocol_context(settings, int(row["media_source_id"])),
         )
         if not readiness.success:
             status = "conflict"
             message = readiness.message
 
-    return str(source_path), str(target_path), status, message
+    return source_path_value, target_path_value, status, message
 
 
 def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int]) -> RenameOperation:
@@ -205,9 +225,8 @@ def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int]) 
         rows = _query_previews(connection, preview_ids)
         target_paths = []
         for row in rows:
-            source_path = Path(str(row["file_path"]))
             target_name = str(row["edited_name"] or row["suggested_name"])
-            target_paths.append(str(source_path.parent / target_name))
+            target_paths.append(_build_target_path(str(row["file_path"]), target_name, str(row["path_type"])))
         duplicate_targets = Counter(target_paths)
 
         item_plans = [
@@ -311,12 +330,6 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                 continue
 
             try:
-                source_path = Path(item.source_path)
-                target_path = Path(item.target_path)
-                if not source_path.exists():
-                    raise ValueError("源文件不存在")
-                if target_path.exists() and source_path.resolve() != target_path.resolve():
-                    raise ValueError("目标文件已存在")
                 media_source_row = connection.execute(
                     "SELECT ms.id AS media_source_id, ms.path_type FROM rename_previews rp "
                     "JOIN media_files mf ON mf.id = rp.media_file_id "
@@ -325,6 +338,14 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                     (item.rename_preview_id,),
                 ).fetchone()
                 path_type = str(media_source_row["path_type"]) if media_source_row else "local"
+                if _is_remote_path_type(path_type):
+                    raise ValueError("WebDAV 真实 MOVE 尚未启用，请仅使用 dry-run 结果确认远程重命名计划")
+                source_path = Path(item.source_path)
+                target_path = Path(item.target_path)
+                if not source_path.exists():
+                    raise ValueError("源文件不存在")
+                if target_path.exists() and source_path.resolve() != target_path.resolve():
+                    raise ValueError("目标文件已存在")
                 context = (
                     get_media_source_protocol_context(settings, int(media_source_row["media_source_id"]))
                     if media_source_row
