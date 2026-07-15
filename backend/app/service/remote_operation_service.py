@@ -295,3 +295,50 @@ def create_remote_operation_item(
             (int(cursor.lastrowid),),
         ).fetchone()
     return _row_to_item(row)
+
+
+def update_remote_operation_item_status(
+    settings: AppSettings,
+    item_id: int,
+    status: str,
+    *,
+    error_message: str | None = None,
+    source_version: str | None = None,
+    target_version: str | None = None,
+    recovery: dict[str, Any] | list[Any] | None = None,
+) -> RemoteOperationItem:
+    """更新远程操作明细状态。"""
+
+    if not status.strip():
+        raise ValueError("远程操作状态不能为空")
+    now_text = _utc_text()
+    recovery_json = json.dumps(recovery, ensure_ascii=False, separators=(",", ":")) if recovery is not None else None
+    with closing(_connect(settings)) as connection:
+        row = connection.execute(
+            "SELECT * FROM remote_operation_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("远程操作明细不存在")
+        next_source_version = source_version if source_version is not None else row["source_version"]
+        next_target_version = target_version if target_version is not None else row["target_version"]
+        next_recovery_json = recovery_json if recovery is not None else row["recovery_json"]
+        connection.execute(
+            "UPDATE remote_operation_items SET source_version = ?, target_version = ?, status = ?, "
+            "error_message = ?, recovery_json = ?, updated_at = ? WHERE id = ?",
+            (
+                next_source_version,
+                next_target_version,
+                status,
+                error_message,
+                next_recovery_json,
+                now_text,
+                item_id,
+            ),
+        )
+        connection.commit()
+        updated = connection.execute(
+            "SELECT * FROM remote_operation_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+    return _row_to_item(updated)

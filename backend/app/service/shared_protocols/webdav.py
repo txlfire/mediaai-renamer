@@ -45,7 +45,13 @@ def _auth_header(context: SharedPathContext | None) -> str | None:
     return "Bearer " + context.secret
 
 
-def _request(path: str, method: str, context: SharedPathContext | None, body: bytes | None = None):
+def _request(
+    path: str,
+    method: str,
+    context: SharedPathContext | None,
+    body: bytes | None = None,
+    extra_headers: dict[str, str] | None = None,
+):
     headers = {"User-Agent": "MediaAI-Renamer-WebDAV"}
     auth = _auth_header(context)
     if auth:
@@ -53,6 +59,8 @@ def _request(path: str, method: str, context: SharedPathContext | None, body: by
     if method == "PROPFIND":
         headers["Depth"] = "1"
         headers["Content-Type"] = "application/xml; charset=utf-8"
+    if extra_headers:
+        headers.update(extra_headers)
     request = Request(_normalize_webdav_url(path), data=body, headers=headers, method=method)
     timeout = context.connection_timeout_seconds if context else 5
     return urlopen(request, timeout=timeout)
@@ -175,11 +183,11 @@ class WebDavProtocol:
             supports_credentials=True,
             supports_directory_browse=True,
             supports_scan=True,
-            supports_rename=False,
+            supports_rename=True,
             requires_system_mount=False,
             can_verify_filesystem_type=False,
             future_candidate=False,
-            user_notice="当前支持 HTTPS WebDAV 连接测试、目录浏览和递归扫描；重命名将在后续步骤接入。",
+            user_notice="当前支持 HTTPS WebDAV 连接测试、目录浏览、递归扫描、MOVE dry-run 和真实 MOVE 重命名。",
             remote_capabilities=(
                 RemoteProtocolCapability.BROWSE.value,
                 RemoteProtocolCapability.SCAN.value,
@@ -320,10 +328,41 @@ class WebDavProtocol:
         return ConnectionTestResult(
             True,
             "WebDAV MOVE dry-run 可执行",
-            "真实 MOVE 将在后续阶段接入远程操作锁后启用",
+            "真实 MOVE 执行时会再次使用远程写操作锁和禁止覆盖策略",
             readable=True,
             writable=True,
         )
+
+    def move_file(
+        self,
+        source_path: str,
+        target_path: str,
+        context: SharedPathContext | None = None,
+    ) -> ConnectionTestResult:
+        source_validation = self.validate_config(source_path, context)
+        if not source_validation.success:
+            return source_validation
+        target_validation = self.validate_config(target_path, context)
+        if not target_validation.success:
+            return target_validation
+
+        try:
+            with _request(
+                source_path,
+                "MOVE",
+                context,
+                extra_headers={
+                    "Destination": _normalize_webdav_url(target_path),
+                    "Overwrite": "F",
+                },
+            ) as response:
+                status = int(getattr(response, "status", 201))
+        except Exception as exc:  # noqa: BLE001 - WebDAV 需要转换为用户可读错误。
+            return _webdav_error_message(exc)
+
+        if status in (200, 201, 204):
+            return ConnectionTestResult(True, "WebDAV MOVE 执行成功", readable=True, writable=True)
+        return ConnectionTestResult(False, f"WebDAV MOVE 返回 HTTP {status}", "请检查目标路径和服务端权限")
 
     def normalize_path(self, path: str) -> str:
         return _normalize_webdav_url(path)

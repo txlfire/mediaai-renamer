@@ -262,17 +262,67 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual("ready", operation.items[0].status)
         self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", operation.items[0].target_path)
 
-    def test_webdav_execute_ready_item_fails_with_clear_not_enabled_message(self):
+    def test_webdav_execute_ready_item_runs_move_and_updates_records(self):
         self._insert_webdav_preview()
         with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
             operation = create_rename_dry_run(self.settings, [3])
+        captured_move = {}
+
+        def fake_move_file(source_path, target_path, context=None):
+            captured_move["source_path"] = source_path
+            captured_move["target_path"] = target_path
+            captured_move["context_path_type"] = context.path_type if context else None
+            from app.service.shared_protocols.base import ConnectionTestResult
+
+            return ConnectionTestResult(True, "WebDAV MOVE 执行成功", readable=True, writable=True)
+
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", side_effect=fake_move_file):
+            executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("completed", executed.status)
+        self.assertEqual(1, executed.renamed_count)
+        self.assertEqual(0, executed.failed_count)
+        self.assertEqual("renamed", executed.items[0].status)
+        self.assertEqual("https://nas.example/dav/Movie.2024.1080p.mkv", captured_move["source_path"])
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", captured_move["target_path"])
+        self.assertEqual("webdav", captured_move["context_path_type"])
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            media_row = connection.execute(
+                "SELECT file_path, file_name, extension FROM media_files WHERE id = 3"
+            ).fetchone()
+            preview_row = connection.execute(
+                "SELECT status FROM rename_previews WHERE id = 3"
+            ).fetchone()
+            remote_row = connection.execute(
+                "SELECT operation_type, source_path, target_path, status FROM remote_operation_items"
+            ).fetchone()
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", media_row[0])
+        self.assertEqual("Movie.Safe.mkv", media_row[1])
+        self.assertEqual(".mkv", media_row[2])
+        self.assertEqual("renamed", preview_row[0])
+        self.assertEqual(("rename", "https://nas.example/dav/Movie.2024.1080p.mkv", "https://nas.example/dav/Movie.Safe.mkv", "completed"), remote_row)
+
+    def test_webdav_execute_is_blocked_by_active_remote_lock(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
+            operation = create_rename_dry_run(self.settings, [3])
+        from app.service.remote_operation_service import acquire_remote_operation_lock
+
+        acquire_remote_operation_lock(
+            self.settings,
+            media_source_id=2,
+            lock_key="media-source:2:write",
+            owner="other",
+            task_type="rename_operation",
+            task_id=999,
+            ttl_seconds=60,
+        )
 
         executed = execute_rename_operation(self.settings, operation.id)
 
         self.assertEqual("failed", executed.status)
         self.assertEqual(1, executed.failed_count)
-        self.assertEqual("failed", executed.items[0].status)
-        self.assertIn("WebDAV 真实 MOVE 尚未启用", executed.items[0].message)
+        self.assertIn("远程媒体源正在执行写操作", executed.items[0].message)
 
     def _insert_webdav_preview(self):
         with closing(sqlite3.connect(self.settings.database_path)) as connection:

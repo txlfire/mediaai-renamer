@@ -249,6 +249,42 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual("WebDAV 目标文件已存在", result.message)
 
+    def test_webdav_move_file_sends_move_request_without_overwrite(self):
+        protocol = get_protocol("webdav")
+        captured = {}
+
+        class FakeResponse:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return b""
+
+        def fake_urlopen(request, timeout=5):
+            captured["method"] = request.get_method()
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=fake_urlopen):
+            result = protocol.move_file(
+                "https://nas.example/dav/Movie.2024.1080p.mkv",
+                "https://nas.example/dav/Movie.Safe.mkv",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual("MOVE", captured["method"])
+        self.assertEqual("https://nas.example/dav/Movie.2024.1080p.mkv", captured["url"])
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", captured["headers"]["Destination"])
+        self.assertEqual("F", captured["headers"]["Overwrite"])
+        self.assertIn("Authorization", captured["headers"])
+
     def test_local_protocol_declares_atomic_rename_capability(self):
         capabilities = get_protocol("local").capabilities()
 

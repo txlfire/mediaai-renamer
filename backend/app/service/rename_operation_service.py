@@ -19,6 +19,12 @@ from app.service.operation_log_service import (
     cleanup_operation_logs,
     record_operation_log,
 )
+from app.service.remote_operation_service import (
+    acquire_remote_operation_lock,
+    create_remote_operation_item,
+    release_remote_operation_lock,
+    update_remote_operation_item_status,
+)
 from app.service.scan_service import _file_modified_at, _normalized_index_path, _upsert_scan_file_index
 from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
@@ -81,6 +87,12 @@ def _build_target_path(source_path: str, target_name: str, path_type: str) -> st
     return parsed._replace(path=target_path, params="", query="", fragment="").geturl()
 
 
+def _remote_file_name(remote_path: str) -> str:
+    path = urlparse(remote_path).path
+    name = unquote(path.rstrip("/").rsplit("/", 1)[-1])
+    return name or remote_path
+
+
 def _query_previews(connection: sqlite3.Connection, preview_ids: list[int]) -> list[sqlite3.Row]:
     if not preview_ids:
         return []
@@ -108,6 +120,26 @@ def _update_successful_media_record(
         "SET file_path = ?, file_name = ?, extension = ?, modified_at = ? "
         "WHERE id = (SELECT media_file_id FROM rename_previews WHERE id = ?)",
         (str(target_path), target_path.name, target_path.suffix.lower(), updated_at, rename_preview_id),
+    )
+    connection.execute(
+        "UPDATE rename_previews SET status = ?, message = ?, updated_at = ? WHERE id = ?",
+        ("renamed", None, updated_at, rename_preview_id),
+    )
+
+
+def _update_successful_remote_media_record(
+    connection: sqlite3.Connection,
+    rename_preview_id: int,
+    target_path: str,
+    updated_at: str,
+) -> None:
+    target_name = _remote_file_name(target_path)
+    extension = "." + target_name.rsplit(".", 1)[-1].lower() if "." in target_name else ""
+    connection.execute(
+        "UPDATE media_files "
+        "SET file_path = ?, file_name = ?, extension = ?, modified_at = ? "
+        "WHERE id = (SELECT media_file_id FROM rename_previews WHERE id = ?)",
+        (target_path, target_name, extension, updated_at, rename_preview_id),
     )
     connection.execute(
         "UPDATE rename_previews SET status = ?, message = ?, updated_at = ? WHERE id = ?",
@@ -325,6 +357,7 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
             detail={"operation_status": operation.status},
             connection=connection,
         )
+        connection.commit()
         for item in operation.items:
             if item.status != "ready":
                 continue
@@ -339,7 +372,68 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                 ).fetchone()
                 path_type = str(media_source_row["path_type"]) if media_source_row else "local"
                 if _is_remote_path_type(path_type):
-                    raise ValueError("WebDAV 真实 MOVE 尚未启用，请仅使用 dry-run 结果确认远程重命名计划")
+                    if media_source_row is None:
+                        raise ValueError("远程媒体源不存在")
+                    media_source_id = int(media_source_row["media_source_id"])
+                    lock_key = f"media-source:{media_source_id}:write"
+                    lock = acquire_remote_operation_lock(
+                        settings,
+                        media_source_id=media_source_id,
+                        lock_key=lock_key,
+                        owner="system",
+                        task_type=TASK_TYPE_RENAME_OPERATION,
+                        task_id=operation_id,
+                        ttl_seconds=300,
+                    )
+                    remote_item = create_remote_operation_item(
+                        settings,
+                        media_source_id=media_source_id,
+                        operation_type="rename",
+                        idempotency_key=f"rename-operation:{operation_id}:item:{item.id}",
+                        source_path=item.source_path,
+                        target_path=item.target_path,
+                        recovery={"rename_preview_id": item.rename_preview_id},
+                    )
+                    try:
+                        context = get_media_source_protocol_context(settings, media_source_id)
+                        protocol = get_protocol(path_type)
+                        mover = getattr(protocol, "move_file", None)
+                        if mover is None:
+                            raise ValueError("当前协议不支持远程真实重命名")
+                        move_result = mover(item.source_path, item.target_path, context)
+                        if not move_result.success:
+                            raise ValueError(move_result.message)
+                        update_remote_operation_item_status(
+                            settings,
+                            remote_item.id,
+                            "completed",
+                            recovery={"rename_preview_id": item.rename_preview_id, "operation_id": operation_id},
+                        )
+                        release_remote_operation_lock(settings, lock_key, lock.lease_token)
+                        lock = None
+                        _update_successful_remote_media_record(
+                            connection,
+                            item.rename_preview_id,
+                            item.target_path,
+                            now,
+                        )
+                        connection.execute(
+                            "UPDATE rename_operation_items SET status = ?, message = ?, updated_at = ? WHERE id = ?",
+                            ("renamed", None, now, item.id),
+                        )
+                        renamed_count += 1
+                    except Exception as remote_exc:  # noqa: BLE001 - 单条远程失败必须记录。
+                        update_remote_operation_item_status(
+                            settings,
+                            remote_item.id,
+                            "failed",
+                            error_message=str(remote_exc),
+                        )
+                        raise
+                    finally:
+                        if lock is not None:
+                            release_remote_operation_lock(settings, lock_key, lock.lease_token)
+                    continue
                 source_path = Path(item.source_path)
                 target_path = Path(item.target_path)
                 if not source_path.exists():

@@ -14,6 +14,7 @@ from app.service.remote_operation_service import (
     create_remote_operation_item,
     heartbeat_remote_operation_lock,
     release_remote_operation_lock,
+    update_remote_operation_item_status,
 )
 
 
@@ -138,6 +139,32 @@ class RemoteOperationServiceTest(unittest.TestCase):
             self.assertEqual(first.id, second.id)
             self.assertEqual("pending", second.status)
             self.assertEqual({"step": "prepared"}, second.recovery)
+
+    def test_update_remote_operation_item_status_records_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            source_id = self.create_source(settings)
+            item = create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rename",
+                idempotency_key="rename:source-a:target-b",
+                source_path="/remote/source-a.mkv",
+                target_path="/remote/target-b.mkv",
+            )
+
+            updated = update_remote_operation_item_status(
+                settings,
+                item.id,
+                "completed",
+                target_version="etag-b",
+                recovery={"completed": True},
+            )
+
+            self.assertEqual("completed", updated.status)
+            self.assertEqual("etag-b", updated.target_version)
+            self.assertEqual({"completed": True}, updated.recovery)
 
 
 if __name__ == "__main__":
