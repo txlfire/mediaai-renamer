@@ -212,7 +212,7 @@ git commit -m "feat(m11): 暴露远程操作分页查询接口"
 - 修改：`frontend/src/api/client.test.ts`
 - 修改：`frontend/src/stores/pagination.ts`
 
-- [ ] **步骤 1：先写客户端失败测试**
+- [x] **步骤 1：先写客户端失败测试**
 
 测试查询调用：
 
@@ -233,7 +233,7 @@ await recoverRemoteOperation(9, fakeHttpClient);
 expect(postUrl).toBe("/remote-operations/9/recover");
 ```
 
-- [ ] **步骤 2：运行测试，确认失败**
+- [x] **步骤 2：运行测试，确认失败**
 
 ```powershell
 npm.cmd run frontend:test -- --run frontend/src/api/client.test.ts
@@ -241,7 +241,7 @@ npm.cmd run frontend:test -- --run frontend/src/api/client.test.ts
 
 预期：新类型和函数尚不存在而失败。
 
-- [ ] **步骤 3：实现类型和 API**
+- [x] **步骤 3：实现类型和 API**
 
 新增：
 
@@ -265,7 +265,7 @@ export type RemoteOperationPage = {
 
 在 `PaginationKey` 中加入 `"webdav-recovery"`，保证任务列表和恢复列表页码互不影响。
 
-- [ ] **步骤 4：运行前端目标测试**
+- [x] **步骤 4：运行前端目标测试**
 
 ```powershell
 npm.cmd run frontend:test -- --run frontend/src/api/client.test.ts frontend/src/stores/pagination.test.ts
@@ -273,7 +273,7 @@ npm.cmd run frontend:test -- --run frontend/src/api/client.test.ts frontend/src/
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```powershell
 git add frontend/src/api/client.ts frontend/src/api/client.test.ts frontend/src/stores/pagination.ts
