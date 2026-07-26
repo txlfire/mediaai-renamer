@@ -288,7 +288,7 @@ git commit -m "feat(m11): 增加 WebDAV 恢复前端接口"
 - 修改：`frontend/src/locales/zh-CN.ts`
 - 条件修改：`frontend/src/components/TablePagination.vue`
 
-- [ ] **步骤 1：增加独立状态和加载函数**
+- [x] **步骤 1：增加独立状态和加载函数**
 
 实现：
 
@@ -298,7 +298,7 @@ git commit -m "feat(m11): 增加 WebDAV 恢复前端接口"
 - `recoveringIds` 使用 `Set<number>` 的响应式副本，形成行级操作锁。
 - 切换到 WebDAV Tab 时首次加载，返回任务 Tab 不重复刷新任务表。
 
-- [ ] **步骤 2：增加 Tab、筛选和表格**
+- [x] **步骤 2：增加 Tab、筛选和表格**
 
 WebDAV 表格列严格按设计：
 
@@ -325,7 +325,7 @@ WebDAV 表格列严格按设计：
 />
 ```
 
-- [ ] **步骤 3：实现确认、恢复和结果反馈**
+- [x] **步骤 3：实现确认、恢复和结果反馈**
 
 确认文案必须明确：
 
@@ -339,11 +339,11 @@ WebDAV 表格列严格按设计：
 
 `409` 显示后端锁冲突或人工处理原因。无论成功或可恢复失败，完成后保持当前筛选和页码刷新。
 
-- [ ] **步骤 4：修正稳定版 WebDAV 文案**
+- [x] **步骤 4：修正稳定版 WebDAV 文案**
 
 把“暂不支持真实重命名”改为“支持连接测试、目录浏览、递归扫描、命名预览、真实重命名、回滚和失败恢复”；不宣传未实现认证方式或协议。
 
-- [ ] **步骤 5：运行测试和构建**
+- [x] **步骤 5：运行测试和构建**
 
 ```powershell
 npm.cmd run frontend:test
@@ -362,7 +362,7 @@ npm.cmd run frontend:build
 - 恢复确认、行加载、成功提示和 `409` 提示正确。
 - 页面缩放 150% 时表格可横向滚动，分页完整显示。
 
-- [ ] **步骤 7：提交**
+- [x] **步骤 7：提交**
 
 ```powershell
 git add frontend/src/views/TaskGovernanceView.vue frontend/src/locales/zh-CN.ts frontend/src/components/TablePagination.vue
