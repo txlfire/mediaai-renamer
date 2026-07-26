@@ -58,6 +58,23 @@ class RemoteOperationItem:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class RemoteOperationListItem(RemoteOperationItem):
+    """远程操作列表明细。"""
+
+    media_source_name: str | None
+
+
+@dataclass(frozen=True)
+class RemoteOperationPage:
+    """远程操作分页结果。"""
+
+    items: list[RemoteOperationListItem]
+    total: int
+    page: int
+    page_size: int
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -114,6 +131,14 @@ def _row_to_item(row: sqlite3.Row) -> RemoteOperationItem:
         recovery=recovery,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _row_to_list_item(row: sqlite3.Row) -> RemoteOperationListItem:
+    item = _row_to_item(row)
+    return RemoteOperationListItem(
+        **item.__dict__,
+        media_source_name=row["media_source_name"],
     )
 
 
@@ -308,6 +333,56 @@ def get_remote_operation_item(settings: AppSettings, item_id: int) -> RemoteOper
     if row is None:
         raise ValueError("远程操作明细不存在")
     return _row_to_item(row)
+
+
+def list_remote_operation_items(
+    settings: AppSettings,
+    *,
+    page: int = 1,
+    page_size: int = 10,
+    media_source_id: int | None = None,
+    operation_type: str | None = None,
+    status: str | None = None,
+) -> RemoteOperationPage:
+    """分页查询远程操作明细。"""
+
+    safe_page = max(1, int(page))
+    safe_page_size = min(100, max(1, int(page_size)))
+    conditions: list[str] = []
+    parameters: list[Any] = []
+    if media_source_id is not None:
+        conditions.append("r.media_source_id = ?")
+        parameters.append(int(media_source_id))
+    if operation_type:
+        conditions.append("r.operation_type = ?")
+        parameters.append(operation_type)
+    if status:
+        conditions.append("r.status = ?")
+        parameters.append(status)
+
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    offset = (safe_page - 1) * safe_page_size
+    with closing(_connect(settings)) as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM remote_operation_items r{where_clause}",
+                parameters,
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            "SELECT r.*, m.name AS media_source_name "
+            "FROM remote_operation_items r "
+            "LEFT JOIN media_sources m ON m.id = r.media_source_id"
+            f"{where_clause} "
+            "ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?",
+            [*parameters, safe_page_size, offset],
+        ).fetchall()
+    return RemoteOperationPage(
+        items=[_row_to_list_item(row) for row in rows],
+        total=total,
+        page=safe_page,
+        page_size=safe_page_size,
+    )
 
 
 def update_remote_operation_item_status(

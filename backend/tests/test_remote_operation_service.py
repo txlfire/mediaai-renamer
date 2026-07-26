@@ -13,6 +13,7 @@ from app.service.remote_operation_service import (
     acquire_remote_operation_lock,
     create_remote_operation_item,
     heartbeat_remote_operation_lock,
+    list_remote_operation_items,
     release_remote_operation_lock,
     update_remote_operation_item_status,
 )
@@ -165,6 +166,97 @@ class RemoteOperationServiceTest(unittest.TestCase):
             self.assertEqual("completed", updated.status)
             self.assertEqual("etag-b", updated.target_version)
             self.assertEqual({"completed": True}, updated.recovery)
+
+    def test_list_remote_operation_items_returns_newest_first_with_source_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            source_id = self.create_source(settings)
+            first = create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rename",
+                idempotency_key="rename:list:first",
+                source_path="/remote/first.mkv",
+                target_path="/remote/first-safe.mkv",
+            )
+            second = create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rename",
+                idempotency_key="rename:list:second",
+                source_path="/remote/second.mkv",
+                target_path="/remote/second-safe.mkv",
+            )
+            third = create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rollback",
+                idempotency_key="rollback:list:third",
+                source_path="/remote/third-safe.mkv",
+                target_path="/remote/third.mkv",
+            )
+
+            page = list_remote_operation_items(settings, page=1, page_size=2)
+
+            self.assertEqual(3, page.total)
+            self.assertEqual(1, page.page)
+            self.assertEqual(2, page.page_size)
+            self.assertEqual([third.id, second.id], [item.id for item in page.items])
+            self.assertEqual("media", page.items[0].media_source_name)
+            self.assertNotEqual(first.id, page.items[0].id)
+
+    def test_list_remote_operation_items_filters_source_type_and_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            source_id = self.create_source(settings)
+            rename_item = create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rename",
+                idempotency_key="rename:filter:item",
+                source_path="/remote/rename.mkv",
+                target_path="/remote/rename-safe.mkv",
+            )
+            rollback_item = create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rollback",
+                idempotency_key="rollback:filter:item",
+                source_path="/remote/rollback-safe.mkv",
+                target_path="/remote/rollback.mkv",
+            )
+            update_remote_operation_item_status(settings, rename_item.id, "completed")
+            update_remote_operation_item_status(
+                settings,
+                rollback_item.id,
+                "failed",
+                error_message="模拟恢复失败",
+            )
+
+            page = list_remote_operation_items(
+                settings,
+                media_source_id=source_id,
+                operation_type="rollback",
+                status="failed",
+            )
+
+            self.assertEqual(1, page.total)
+            self.assertEqual(rollback_item.id, page.items[0].id)
+            self.assertEqual("模拟恢复失败", page.items[0].error_message)
+
+    def test_list_remote_operation_items_normalizes_pagination_bounds(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+
+            page = list_remote_operation_items(settings, page=0, page_size=1000)
+
+            self.assertEqual(1, page.page)
+            self.assertEqual(100, page.page_size)
+            self.assertEqual([], page.items)
+            self.assertEqual(0, page.total)
 
 
 if __name__ == "__main__":

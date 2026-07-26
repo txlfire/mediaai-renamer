@@ -62,7 +62,7 @@
 - 修改：`backend/app/service/remote_operation_service.py`
 - 修改：`backend/tests/test_remote_operation_service.py`
 
-- [ ] **步骤 1：先写分页和筛选失败测试**
+- [x] **步骤 1：先写分页和筛选失败测试**
 
 新增三个测试：
 
@@ -90,17 +90,18 @@ def test_list_remote_operation_items_clamps_page_size(self):
     self.assertEqual(100, page.page_size)
 ```
 
-- [ ] **步骤 2：运行测试，确认失败**
+- [x] **步骤 2：运行测试，确认失败**
 
 运行：
 
 ```powershell
+$env:PYTHONPATH="backend"
 .\.venv\Scripts\python.exe -m unittest backend.tests.test_remote_operation_service -v
 ```
 
 预期：因 `list_remote_operation_items` 和分页 DTO 尚不存在而失败。
 
-- [ ] **步骤 3：实现服务层分页 DTO 和参数化 SQL**
+- [x] **步骤 3：实现服务层分页 DTO 和参数化 SQL**
 
 增加只读返回类型：
 
@@ -126,15 +127,16 @@ class RemoteOperationPage:
 - 固定按 `remote_operation_items.updated_at DESC, id DESC` 排序。
 - 返回字段不得包含认证信息、密钥、密码或连接上下文。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 ```powershell
+$env:PYTHONPATH="backend"
 .\.venv\Scripts\python.exe -m unittest backend.tests.test_remote_operation_service -v
 ```
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```powershell
 git add backend/app/service/remote_operation_service.py backend/tests/test_remote_operation_service.py
