@@ -64,6 +64,7 @@ fi
 export MEDIAAI_WEBDAV_INTEGRATION="1"
 export MEDIAAI_WEBDAV_TEST_URL="https://localhost:9443"
 export MEDIAAI_WEBDAV_TEST_CA_CERT="${tempRoot}/certs/ca.crt"
+export SSL_CERT_FILE="${MEDIAAI_WEBDAV_TEST_CA_CERT}"
 export PYTHONPATH="backend"
 
 if [[ -x "${root}/.venv/bin/python" ]]; then

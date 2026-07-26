@@ -62,6 +62,7 @@ try {
     $env:MEDIAAI_WEBDAV_INTEGRATION = "1"
     $env:MEDIAAI_WEBDAV_TEST_URL = "https://localhost:9443"
     $env:MEDIAAI_WEBDAV_TEST_CA_CERT = Join-Path $tempRoot "certs\ca.crt"
+    $env:SSL_CERT_FILE = $env:MEDIAAI_WEBDAV_TEST_CA_CERT
     $env:PYTHONPATH = "backend"
 
     $python = Join-Path $root ".venv\Scripts\python.exe"
