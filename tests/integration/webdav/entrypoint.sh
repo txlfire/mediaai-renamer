@@ -14,9 +14,14 @@ openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
   -keyout "${certDir}/ca.key" \
   -out "${certDir}/ca.crt" \
   -days 2 \
-  -subj "/CN=MediaAI WebDAV Test CA" >/dev/null 2>&1
+  -subj "/CN=MediaAI WebDAV Test CA" \
+  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "subjectKeyIdentifier=hash" >/dev/null 2>&1
 
 cat >"${extensionPath}" <<'EOF'
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
 subjectAltName=DNS:localhost,IP:127.0.0.1,DNS:webdav
 extendedKeyUsage=serverAuth
 EOF
