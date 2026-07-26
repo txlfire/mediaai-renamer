@@ -28,6 +28,7 @@ import {
   fetchMediaSourceDirectories,
   fetchMediaSources,
   fetchOperationLogs,
+  fetchRemoteOperations,
   fetchSharedProtocolCapabilities,
   fetchTasks,
   fetchPendingFiles,
@@ -53,6 +54,7 @@ import {
   parsePendingFileWithAi,
   dryRunRenameRollbackPlan,
   removePendingFile,
+  recoverRemoteOperation,
   cleanupOperationLogs,
   resetAdminPassword,
   resetUserPassword,
@@ -440,6 +442,17 @@ describe("media source API client", () => {
       httpClient,
     );
     await archiveTask("scan_job", 1, { archived: true, reason: "已处理" }, httpClient);
+    await fetchRemoteOperations(
+      {
+        page: 2,
+        page_size: 50,
+        media_source_id: 1,
+        operation_type: "rollback",
+        status: "failed",
+      },
+      httpClient,
+    );
+    await recoverRemoteOperation(9, httpClient);
 
     expect(calls).toEqual([
       'POST /scan-jobs:{"media_source_id":1,"scan_mode":"full"}',
@@ -450,6 +463,8 @@ describe("media source API client", () => {
       "POST /operation-logs/cleanup:{}",
       "GET /tasks?task_type=scan_job&status=completed&media_source_id=1&start_at=2026-07-09T00%3A00%3A00%2B08%3A00&end_at=2026-07-09T23%3A59%3A59%2B08%3A00&include_archived=true&limit=50",
       'PATCH /tasks/scan_job/1/archive:{"archived":true,"reason":"已处理"}',
+      "GET /remote-operations?page=2&page_size=50&media_source_id=1&operation_type=rollback&status=failed",
+      "POST /remote-operations/9/recover:{}",
     ]);
   });
 });

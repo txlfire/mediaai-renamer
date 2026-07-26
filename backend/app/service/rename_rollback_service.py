@@ -7,6 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
+from urllib.parse import unquote, urlparse
 
 from app.core.config import AppSettings
 from app.schema.media import RenameRollbackItem, RenameRollbackPlan
@@ -20,7 +21,18 @@ from app.service.operation_log_service import (
     cleanup_operation_logs,
     record_operation_log,
 )
-from app.service.scan_service import _file_modified_at, _normalized_index_path, _upsert_scan_file_index
+from app.service.remote_operation_service import (
+    acquire_remote_operation_lock,
+    create_remote_operation_item,
+    release_remote_operation_lock,
+    update_remote_operation_item_status,
+)
+from app.service.scan_service import (
+    _file_modified_at,
+    _normalized_index_path,
+    _remote_normalized_index_path,
+    _upsert_scan_file_index,
+)
 from app.service.shared_protocols.registry import get_protocol
 
 PLAN_STATUS_DRAFT = "draft"
@@ -34,10 +46,21 @@ ITEM_STATUS_READY = "ready"
 ITEM_STATUS_CONFLICT = "conflict"
 ITEM_STATUS_ROLLED_BACK = "rolled_back"
 ITEM_STATUS_FAILED = "failed"
+REMOTE_PATH_TYPES = {"webdav"}
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_remote_path_type(path_type: str) -> bool:
+    return path_type in REMOTE_PATH_TYPES
+
+
+def _remote_file_name(remote_path: str) -> str:
+    path = urlparse(remote_path).path
+    name = unquote(path.rstrip("/").rsplit("/", 1)[-1])
+    return name or remote_path
 
 
 def _row_to_item(row: sqlite3.Row) -> RenameRollbackItem:
@@ -203,20 +226,21 @@ def _validate_rollback_item(
     item: RenameRollbackItem,
     duplicate_rollback_paths: Counter[str],
 ) -> tuple[str, str | None]:
-    current_path = Path(item.current_path)
-    rollback_path = Path(item.rollback_path)
-    if duplicate_rollback_paths[str(rollback_path)] > 1:
+    if duplicate_rollback_paths[item.rollback_path] > 1:
         return ITEM_STATUS_CONFLICT, "批次内回滚目标重复"
-    if not current_path.exists():
-        return ITEM_STATUS_CONFLICT, "当前文件不存在"
-    if rollback_path.exists() and current_path.resolve() != rollback_path.resolve():
-        return ITEM_STATUS_CONFLICT, "回滚目标已存在"
     context_row = _rollback_item_context(connection, item.operation_item_id)
     path_type = str(context_row["path_type"]) if context_row else "local"
     media_source_id = int(context_row["media_source_id"]) if context_row else None
+    if not _is_remote_path_type(path_type):
+        current_path = Path(item.current_path)
+        rollback_path = Path(item.rollback_path)
+        if not current_path.exists():
+            return ITEM_STATUS_CONFLICT, "当前文件不存在"
+        if rollback_path.exists() and current_path.resolve() != rollback_path.resolve():
+            return ITEM_STATUS_CONFLICT, "回滚目标已存在"
     readiness = get_protocol(path_type).check_rename_ready(
-        str(current_path),
-        str(rollback_path),
+        item.current_path,
+        item.rollback_path,
         get_media_source_protocol_context(settings, media_source_id) if media_source_id is not None else None,
     )
     if not readiness.success:
@@ -335,6 +359,45 @@ def _update_media_record_after_rollback(
     )
 
 
+def _update_remote_media_record_after_rollback(
+    connection: sqlite3.Connection,
+    operation_item_id: int,
+    current_path: str,
+    rollback_path: str,
+    updated_at: str,
+) -> None:
+    context_row = _rollback_item_context(connection, operation_item_id)
+    if context_row is None:
+        return
+    rename_preview_id = int(context_row["rename_preview_id"])
+    media_source_id = int(context_row["media_source_id"])
+    media_source_path = str(context_row["media_source_path"])
+    rollback_name = _remote_file_name(rollback_path)
+    extension = "." + rollback_name.rsplit(".", 1)[-1].lower() if "." in rollback_name else ""
+    connection.execute(
+        "UPDATE media_files "
+        "SET file_path = ?, file_name = ?, extension = ?, modified_at = ? "
+        "WHERE id = (SELECT media_file_id FROM rename_previews WHERE id = ?)",
+        (rollback_path, rollback_name, extension, updated_at, rename_preview_id),
+    )
+    connection.execute(
+        "UPDATE rename_previews SET status = ?, message = ?, updated_at = ? WHERE id = ?",
+        ("rolled_back", "已回滚", updated_at, rename_preview_id),
+    )
+    current_normalized_path = _remote_normalized_index_path(current_path, media_source_path)
+    rollback_normalized_path = _remote_normalized_index_path(rollback_path, media_source_path)
+    connection.execute(
+        "UPDATE scan_file_index SET status = ?, updated_at = ? "
+        "WHERE media_source_id = ? AND normalized_path = ?",
+        ("rolled_back", updated_at, media_source_id, current_normalized_path),
+    )
+    connection.execute(
+        "UPDATE scan_file_index SET status = ?, rename_preview_id = ?, updated_at = ? "
+        "WHERE media_source_id = ? AND normalized_path = ?",
+        ("active", rename_preview_id, updated_at, media_source_id, rollback_normalized_path),
+    )
+
+
 def execute_rename_rollback_plan(settings: AppSettings, plan_id: int) -> RenameRollbackPlan:
     """执行已 dry-run 通过的回滚计划。"""
 
@@ -358,6 +421,7 @@ def execute_rename_rollback_plan(settings: AppSettings, plan_id: int) -> RenameR
             detail={"operation_id": plan.operation_id},
             connection=connection,
         )
+        connection.commit()
         rolled_back_count = 0
         failed_count = 0
         duplicate_rollback_paths = Counter(item.rollback_path for item in plan.items)
@@ -385,6 +449,83 @@ def execute_rename_rollback_plan(settings: AppSettings, plan_id: int) -> RenameR
                 )
                 continue
             try:
+                context_row = _rollback_item_context(connection, item.operation_item_id)
+                path_type = str(context_row["path_type"]) if context_row else "local"
+                if _is_remote_path_type(path_type):
+                    if context_row is None:
+                        raise ValueError("远程媒体源不存在")
+                    media_source_id = int(context_row["media_source_id"])
+                    lock_key = f"media-source:{media_source_id}:write"
+                    lock = acquire_remote_operation_lock(
+                        settings,
+                        media_source_id=media_source_id,
+                        lock_key=lock_key,
+                        owner="system",
+                        task_type=TASK_TYPE_ROLLBACK_PLAN,
+                        task_id=plan_id,
+                        ttl_seconds=300,
+                    )
+                    remote_item = create_remote_operation_item(
+                        settings,
+                        media_source_id=media_source_id,
+                        operation_type="rollback",
+                        idempotency_key=f"rollback-plan:{plan_id}:item:{item.id}",
+                        source_path=item.current_path,
+                        target_path=item.rollback_path,
+                        recovery={
+                            "operation_id": plan.operation_id,
+                            "operation_item_id": item.operation_item_id,
+                            "rollback_plan_id": plan_id,
+                            "rollback_item_id": item.id,
+                        },
+                    )
+                    try:
+                        context = get_media_source_protocol_context(settings, media_source_id)
+                        protocol = get_protocol(path_type)
+                        mover = getattr(protocol, "move_file", None)
+                        if mover is None:
+                            raise ValueError("当前协议不支持远程真实回滚")
+                        move_result = mover(item.current_path, item.rollback_path, context)
+                        if not move_result.success:
+                            raise ValueError(move_result.message)
+                        update_remote_operation_item_status(
+                            settings,
+                            remote_item.id,
+                            "completed",
+                            recovery={
+                                "operation_id": plan.operation_id,
+                                "operation_item_id": item.operation_item_id,
+                                "rollback_plan_id": plan_id,
+                                "rollback_item_id": item.id,
+                            },
+                        )
+                        release_remote_operation_lock(settings, lock_key, lock.lease_token)
+                        lock = None
+                        _update_remote_media_record_after_rollback(
+                            connection,
+                            item.operation_item_id,
+                            item.current_path,
+                            item.rollback_path,
+                            now,
+                        )
+                        connection.execute(
+                            "UPDATE rename_rollback_items "
+                            "SET status = ?, message = NULL, executed_at = ?, updated_at = ? WHERE id = ?",
+                            (ITEM_STATUS_ROLLED_BACK, now, now, item.id),
+                        )
+                        rolled_back_count += 1
+                    except Exception as remote_exc:  # noqa: BLE001 - 单条远程回滚失败必须记录。
+                        update_remote_operation_item_status(
+                            settings,
+                            remote_item.id,
+                            "failed",
+                            error_message=str(remote_exc),
+                        )
+                        raise
+                    finally:
+                        if lock is not None:
+                            release_remote_operation_lock(settings, lock_key, lock.lease_token)
+                    continue
                 current_path = Path(item.current_path)
                 rollback_path = Path(item.rollback_path)
                 current_path.rename(rollback_path)

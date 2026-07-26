@@ -10,12 +10,12 @@ import string
 from app.core.config import AppSettings
 from app.core.logger import get_batch_logger
 from app.schema.media import LocalDirectoryEntry, LocalDirectoryListing, MediaSource
-from app.service.media_source_secret import encrypt_secret, has_secret
+from app.service.media_source_secret import CURRENT_CREDENTIAL_VERSION, decrypt_secret, encrypt_secret, has_secret
 from app.service.shared_protocols.base import ConnectionTestResult, SharedPathContext
 from app.service.shared_protocols.registry import get_protocol
 from app.service.settings_service import get_effective_settings
 
-VALID_PATH_TYPES = {"local", "unc", "mounted_nfs"}
+VALID_PATH_TYPES = {"local", "unc", "mounted_nfs", "webdav"}
 
 
 def _utc_now() -> str:
@@ -45,6 +45,12 @@ def _row_to_media_source(row: sqlite3.Row) -> MediaSource:
         nfs_version=row["nfs_version"],
         nfs_options=row["nfs_options"],
         local_mount_path=row["local_mount_path"],
+        protocol_endpoint=row["protocol_endpoint"],
+        auth_type=row["auth_type"],
+        credential_version=int(row["credential_version"]),
+        remote_root=row["remote_root"],
+        capability_snapshot_json=row["capability_snapshot_json"],
+        trusted_certificate_fingerprint=row["trusted_certificate_fingerprint"],
     )
 
 
@@ -52,7 +58,8 @@ def _fetch_media_source(connection: sqlite3.Connection, source_id: int) -> Media
     row = connection.execute(
         "SELECT id, name, path, path_type, protocol, host, share_name, domain, username, "
         "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, nfs_options, "
-        "local_mount_path, enabled, created_at, updated_at "
+        "local_mount_path, protocol_endpoint, auth_type, credential_version, remote_root, "
+        "capability_snapshot_json, trusted_certificate_fingerprint, enabled, created_at, updated_at "
         "FROM media_sources WHERE id = ?",
         (source_id,),
     ).fetchone()
@@ -66,6 +73,7 @@ def _media_source_context(source: MediaSource, effective_settings: dict[str, obj
     return SharedPathContext(
         path_type=source.path_type,
         username=source.username,
+        secret=None,
         has_secret=source.has_secret,
         host=source.host,
         share_name=source.share_name,
@@ -81,6 +89,10 @@ def _media_source_context(source: MediaSource, effective_settings: dict[str, obj
     )
 
 
+def _media_source_context_with_secret(settings: AppSettings, source: MediaSource) -> SharedPathContext:
+    return get_media_source_protocol_context(settings, source.id)
+
+
 def get_media_source_protocol_context(settings: AppSettings, source_id: int) -> SharedPathContext:
     effective_settings = get_effective_settings(settings)
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -90,9 +102,11 @@ def get_media_source_protocol_context(settings: AppSettings, source_id: int) -> 
             "SELECT encrypted_secret FROM media_sources WHERE id = ?",
             (source_id,),
         ).fetchone()
+    secret = decrypt_secret(settings, row["encrypted_secret"]) if row and row["encrypted_secret"] else None
     return SharedPathContext(
         path_type=source.path_type,
         username=source.username,
+        secret=secret,
         has_secret=has_secret(row["encrypted_secret"] if row else None),
         host=source.host,
         share_name=source.share_name,
@@ -149,6 +163,14 @@ def _protocol_for_path_type(path_type: str) -> str:
     if path_type == "unc":
         return "smb"
     return path_type
+
+
+def _normalize_remote_protocol_path(path_type: str, path: str | Path) -> str:
+    protocol = get_protocol(path_type)
+    result = protocol.validate_config(str(path))
+    if not result.success:
+        raise ValueError(result.message)
+    return protocol.normalize_path(str(path))
 
 
 def _validate_media_source_name(name: str) -> str:
@@ -337,7 +359,7 @@ def list_source_directories(
     source = get_media_source(settings, source_id)
     protocol = get_protocol(source.path_type)
     effective_settings = get_effective_settings(settings)
-    listing = protocol.list_directories(path or source.path, _media_source_context(source, effective_settings))
+    listing = protocol.list_directories(path or source.path, _media_source_context_with_secret(settings, source))
     browse_limit = int(effective_settings.get("shared.directory_browse_limit") or 500)
     return LocalDirectoryListing(
         current_path=listing.current_path,
@@ -361,7 +383,7 @@ def test_media_source_connection(
 ) -> ConnectionTestResult:
     source = get_media_source(settings, source_id)
     protocol = get_protocol(source.path_type)
-    result = protocol.test_connection(source.path, _media_source_context(source, get_effective_settings(settings)))
+    result = protocol.test_connection(source.path, _media_source_context_with_secret(settings, source))
     status = "成功" if result.success else "失败"
     get_batch_logger().info(
         "媒体源连接测试%s source_id=%s path_type=%s path=%s message=%s suggestion=%s",
@@ -394,13 +416,16 @@ def test_media_source_connection_payload(
     port = _validate_port(port)
     if source_path_type == "unc":
         source_path = _validate_unc_path(str(path))
+    elif source_path_type == "webdav":
+        source_path = _normalize_remote_protocol_path(source_path_type, path)
     else:
         source_path = _normalize_media_source_path(path)
     protocol = get_protocol(source_path_type)
     context = SharedPathContext(
         path_type=source_path_type,
-        username=username if source_path_type == "unc" else None,
-        has_secret=bool(secret) if source_path_type == "unc" else False,
+        username=username if source_path_type in {"unc", "webdav"} else None,
+        secret=secret if source_path_type in {"unc", "webdav"} else None,
+        has_secret=bool(secret) if source_path_type in {"unc", "webdav"} else False,
         host=host,
         share_name=share_name,
         domain=domain if source_path_type == "unc" else None,
@@ -449,11 +474,23 @@ def create_media_source(
     if source_path_type == "unc":
         source_path = _validate_unc_path(str(path))
         encrypted_secret = encrypt_secret(settings, secret)
+        auth_type = "basic" if username or secret else "none"
+        credential_version = CURRENT_CREDENTIAL_VERSION if encrypted_secret else 1
+    elif source_path_type == "webdav":
+        source_path = _normalize_remote_protocol_path(source_path_type, path)
+        domain = None
+        host = host or None
+        share_name = None
+        encrypted_secret = encrypt_secret(settings, secret)
+        auth_type = "basic" if username else ("bearer" if secret else "none")
+        credential_version = CURRENT_CREDENTIAL_VERSION if encrypted_secret else 1
     else:
         source_path = _normalize_media_source_path(path)
         username = None
         domain = None
         encrypted_secret = None
+        auth_type = "none"
+        credential_version = 1
     protocol = _protocol_for_path_type(source_path_type)
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
@@ -463,8 +500,9 @@ def create_media_source(
                 "INSERT INTO media_sources "
                 "(name, path, path_type, protocol, host, share_name, domain, username, "
                 "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, "
-                "nfs_options, local_mount_path, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "nfs_options, local_mount_path, protocol_endpoint, auth_type, credential_version, "
+                "remote_root, capability_snapshot_json, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source_name,
                     str(source_path),
@@ -482,6 +520,11 @@ def create_media_source(
                     nfs_version,
                     nfs_options,
                     local_mount_path,
+                    str(source_path) if source_path_type == "webdav" else None,
+                    auth_type,
+                    credential_version,
+                    "/" if source_path_type == "webdav" else None,
+                    None,
                     int(enabled),
                     now,
                     now,
@@ -492,7 +535,8 @@ def create_media_source(
         row = connection.execute(
             "SELECT id, name, path, path_type, protocol, host, share_name, domain, username, "
             "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, nfs_options, "
-            "local_mount_path, enabled, created_at, updated_at "
+            "local_mount_path, protocol_endpoint, auth_type, credential_version, remote_root, "
+            "capability_snapshot_json, trusted_certificate_fingerprint, enabled, created_at, updated_at "
             "FROM media_sources WHERE id = ?",
             (cursor.lastrowid,),
         ).fetchone()
@@ -506,7 +550,8 @@ def list_media_sources(settings: AppSettings) -> list[MediaSource]:
         rows = connection.execute(
             "SELECT id, name, path, path_type, protocol, host, share_name, domain, username, "
             "encrypted_secret, port, remark, nfs_host, nfs_export, nfs_version, nfs_options, "
-            "local_mount_path, enabled, created_at, updated_at "
+            "local_mount_path, protocol_endpoint, auth_type, credential_version, remote_root, "
+            "capability_snapshot_json, trusted_certificate_fingerprint, enabled, created_at, updated_at "
             "FROM media_sources ORDER BY id"
         ).fetchall()
     return [_row_to_media_source(row) for row in rows]
@@ -539,6 +584,8 @@ def update_media_source(
         current = _fetch_media_source(connection, source_id)
         if current.path_type == "unc":
             source_path = _validate_unc_path(str(path))
+        elif current.path_type == "webdav":
+            source_path = _normalize_remote_protocol_path(current.path_type, path)
         else:
             source_path = _normalize_media_source_path(path)
         path_changed = str(source_path) != current.path
@@ -546,15 +593,28 @@ def update_media_source(
             raise ValueError("修改路径将清空历史数据，请确认后重试")
         if path_changed:
             cleanup_summary = _delete_related_history(connection, source_id)
-        update_username = username if current.path_type == "unc" else None
-        update_secret = encrypt_secret(settings, secret) if current.path_type == "unc" and secret else None
+        update_username = username if current.path_type in {"unc", "webdav"} else None
+        update_secret = encrypt_secret(settings, secret) if current.path_type in {"unc", "webdav"} and secret else None
+        if current.path_type in {"unc", "webdav"}:
+            update_auth_type = (
+                "basic"
+                if update_username or update_secret or current.has_secret
+                else "none"
+            )
+        else:
+            update_auth_type = "none"
         update_nfs_host = nfs_host if current.path_type == "mounted_nfs" else None
         update_nfs_export = nfs_export if current.path_type == "mounted_nfs" else None
+        update_protocol_endpoint = str(source_path) if current.path_type == "webdav" else current.protocol_endpoint
+        update_remote_root = "/" if current.path_type == "webdav" else current.remote_root
         try:
             connection.execute(
                 "UPDATE media_sources SET name = ?, path = ?, username = ?, "
                 "encrypted_secret = CASE WHEN ? IS NULL THEN encrypted_secret ELSE ? END, "
-                "nfs_host = ?, nfs_export = ?, enabled = ?, updated_at = ? "
+                "credential_version = CASE WHEN ? IS NULL THEN credential_version ELSE ? END, "
+                "auth_type = ?, "
+                "nfs_host = ?, nfs_export = ?, protocol_endpoint = ?, remote_root = ?, "
+                "enabled = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
                     source_name,
@@ -562,8 +622,13 @@ def update_media_source(
                     update_username,
                     update_secret,
                     update_secret,
+                    update_secret,
+                    CURRENT_CREDENTIAL_VERSION,
+                    update_auth_type,
                     update_nfs_host,
                     update_nfs_export,
+                    update_protocol_endpoint,
+                    update_remote_root,
                     int(enabled),
                     now,
                     source_id,

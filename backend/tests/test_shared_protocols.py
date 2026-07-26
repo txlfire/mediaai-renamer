@@ -3,7 +3,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 
+from app.service.shared_protocols.base import RemoteProtocolCapability, SharedPathContext
 from app.service.shared_protocols.registry import get_protocol, list_protocol_capabilities
 
 
@@ -23,14 +26,280 @@ class SharedProtocolRegistryTest(unittest.TestCase):
     def test_future_protocols_are_listed_as_candidates_only(self):
         capabilities = {item.protocol: item for item in list_protocol_capabilities()}
 
-        for protocol in ("webdav", "ftp", "sftp", "s3"):
+        for protocol in ("ftp", "sftp", "s3"):
             self.assertIn(protocol, capabilities)
             self.assertTrue(capabilities[protocol].future_candidate)
             self.assertFalse(capabilities[protocol].supports_scan)
             self.assertFalse(capabilities[protocol].supports_rename)
+            self.assertIn(RemoteProtocolCapability.BROWSE.value, capabilities[protocol].remote_capabilities)
+            self.assertIn(RemoteProtocolCapability.READ_METADATA.value, capabilities[protocol].remote_capabilities)
 
         with self.assertRaises(ValueError):
-            get_protocol("webdav")
+            get_protocol("ftp")
+
+    def test_webdav_protocol_validates_https_and_lists_directories(self):
+        capabilities = {item.protocol: item for item in list_protocol_capabilities()}
+        protocol = get_protocol("webdav")
+
+        self.assertIn("webdav", capabilities)
+        self.assertFalse(capabilities["webdav"].future_candidate)
+        self.assertTrue(capabilities["webdav"].supports_credentials)
+        self.assertTrue(capabilities["webdav"].supports_directory_browse)
+        self.assertTrue(capabilities["webdav"].supports_scan)
+        self.assertFalse(protocol.validate_config("http://nas.example/dav").success)
+        self.assertTrue(protocol.validate_config("https://nas.example/dav").success)
+
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        propfind_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/Movies/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/poster.jpg</d:href>
+            <d:propstat><d:prop><d:resourcetype /></d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+
+        with patch("app.service.shared_protocols.webdav.urlopen", return_value=FakeResponse(propfind_xml)):
+            result = protocol.test_connection(
+                "https://nas.example/dav/",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+            listing = protocol.list_directories(
+                "https://nas.example/dav/",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(["Movies"], [entry.name for entry in listing.entries])
+        self.assertEqual("https://nas.example/dav/Movies/", listing.entries[0].path)
+
+    def test_webdav_protocol_lists_files_with_etag_metadata(self):
+        protocol = get_protocol("webdav")
+
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        root_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/Movies/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/root.mp4</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>2048</d:getcontentlength>
+              <d:getlastmodified>Tue, 14 Jul 2026 01:02:03 GMT</d:getlastmodified>
+              <d:getetag>"root-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+        movies_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/Movies/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection /></d:resourcetype></d:prop></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/Movies/电影.mkv</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>4096</d:getcontentlength>
+              <d:getlastmodified>Tue, 14 Jul 2026 02:03:04 GMT</d:getlastmodified>
+              <d:getetag>"movie-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+
+        def fake_urlopen(request, timeout=5):
+            if request.full_url.endswith("/Movies/"):
+                return FakeResponse(movies_xml)
+            return FakeResponse(root_xml)
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=fake_urlopen):
+            files = protocol.list_files("https://nas.example/dav/")
+
+        self.assertEqual(["电影.mkv", "root.mp4"], [item.name for item in files])
+        self.assertEqual([4096, 2048], [item.file_size for item in files])
+        self.assertEqual(['"movie-etag"', '"root-etag"'], [item.version for item in files])
+
+    def test_webdav_rename_readiness_accepts_existing_source_and_missing_target(self):
+        protocol = get_protocol("webdav")
+
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        source_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/Movie.2024.1080p.mkv</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>2048</d:getcontentlength>
+              <d:getetag>"source-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+
+        def fake_urlopen(request, timeout=5):
+            if request.full_url.endswith("/Movie.Safe.mkv"):
+                raise HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
+            return FakeResponse(source_xml)
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=fake_urlopen):
+            result = protocol.check_rename_ready(
+                "https://nas.example/dav/Movie.2024.1080p.mkv",
+                "https://nas.example/dav/Movie.Safe.mkv",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+
+        self.assertTrue(result.success)
+        self.assertTrue(result.readable)
+        self.assertTrue(result.writable)
+        self.assertIn("dry-run", result.message)
+
+    def test_webdav_rename_readiness_rejects_existing_target(self):
+        protocol = get_protocol("webdav")
+
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        file_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/file.mkv</d:href>
+            <d:propstat><d:prop><d:resourcetype /></d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+
+        with patch("app.service.shared_protocols.webdav.urlopen", return_value=FakeResponse(file_xml)):
+            result = protocol.check_rename_ready(
+                "https://nas.example/dav/Movie.2024.1080p.mkv",
+                "https://nas.example/dav/Movie.Safe.mkv",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual("WebDAV 目标文件已存在", result.message)
+
+    def test_webdav_move_file_sends_move_request_without_overwrite(self):
+        protocol = get_protocol("webdav")
+        captured = {}
+
+        class FakeResponse:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return b""
+
+        def fake_urlopen(request, timeout=5):
+            captured["method"] = request.get_method()
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=fake_urlopen):
+            result = protocol.move_file(
+                "https://nas.example/dav/Movie.2024.1080p.mkv",
+                "https://nas.example/dav/Movie.Safe.mkv",
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual("MOVE", captured["method"])
+        self.assertEqual("https://nas.example/dav/Movie.2024.1080p.mkv", captured["url"])
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", captured["headers"]["Destination"])
+        self.assertEqual("F", captured["headers"]["Overwrite"])
+        self.assertIn("Authorization", captured["headers"])
+
+    def test_local_protocol_declares_atomic_rename_capability(self):
+        capabilities = get_protocol("local").capabilities()
+
+        self.assertIn(RemoteProtocolCapability.SCAN.value, capabilities.remote_capabilities)
+        self.assertIn(RemoteProtocolCapability.ATOMIC_RENAME.value, capabilities.remote_capabilities)
+        self.assertNotIn(RemoteProtocolCapability.COPY_DELETE_RENAME.value, capabilities.remote_capabilities)
+
+    def test_webdav_capability_notice_describes_stable_write_and_recovery_support(self):
+        notice = get_protocol("webdav").capabilities().user_notice
+
+        self.assertIn("递归扫描", notice)
+        self.assertIn("真实 MOVE 重命名", notice)
+        self.assertIn("回滚", notice)
+        self.assertIn("失败恢复", notice)
+        self.assertNotIn("暂不支持真实重命名", notice)
 
     def test_local_connection_and_directory_listing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

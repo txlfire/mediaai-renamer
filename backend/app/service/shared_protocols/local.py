@@ -8,6 +8,7 @@ from app.service.shared_protocols.base import (
     DirectoryEntry,
     DirectoryListing,
     ProtocolCapabilities,
+    RemoteProtocolCapability,
     SharedPathContext,
 )
 
@@ -102,6 +103,12 @@ class LocalProtocol:
             can_verify_filesystem_type=False,
             future_candidate=False,
             user_notice="服务所在机器必须能访问该路径。",
+            remote_capabilities=(
+                RemoteProtocolCapability.BROWSE.value,
+                RemoteProtocolCapability.SCAN.value,
+                RemoteProtocolCapability.READ_METADATA.value,
+                RemoteProtocolCapability.ATOMIC_RENAME.value,
+            ),
         )
 
     def validate_config(self, path: str, context: SharedPathContext | None = None) -> ConnectionTestResult:

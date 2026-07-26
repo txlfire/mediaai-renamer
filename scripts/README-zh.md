@@ -11,6 +11,7 @@
 - 支持动作：`start`、`stop`、`restart`、`status`。
 - 作用：Windows 下按输入动作一键后台启动、停止、重启或查看前后端开发服务状态。
 - 默认端口：前端 `5173`，后端 `8970`。
+- 可通过 `-FrontendPort` 和 `-BackendPort` 指定端口；脚本会同步设置 `VITE_BACKEND_URL`，使前端 `/api` 代理指向指定后端。
 - 关键步骤：
   - 根据 `Action` 参数判断操作类型。
   - 启动时调用 `start-dev-lan.ps1`。
@@ -57,7 +58,7 @@
   - 调用 `stop-dev-lan.ps1` 清理旧进程和端口占用。
   - 创建 `.codex/run-logs` 日志目录。
   - 后台启动 `uvicorn app.main:app`。
-  - 后台直接启动本地 `node_modules/vite/bin/vite.js`，使用 `frontend/vite.config.ts` 提供前端开发服务。
+  - 后台直接启动本地 `node_modules/vite/bin/vite.js`，使用 `frontend/vite.config.ts` 提供前端开发服务，并按后端端口设置代理地址。
   - 写入 `backend.pid` 和 `frontend.pid`，供停止脚本使用。
 
 ### `stop-dev-lan.ps1`
@@ -77,6 +78,7 @@
 - 推荐调用：`npm run dev:start:linux`。
 - 作用：同时启动后端 FastAPI 服务和前端 Vite 服务，并监听局域网地址。
 - 默认端口：可通过环境变量 `FRONTEND_PORT` 和 `BACKEND_PORT` 覆盖。
+- 启动前端时会同步设置 `VITE_BACKEND_URL=http://127.0.0.1:$BACKEND_PORT`。
 - 关键步骤：
   - 检查 Node、npm、Python 虚拟环境、后端依赖和前端 Vite 入口。
   - 读取并清理旧 PID 文件。
@@ -100,6 +102,7 @@
 - 适用环境：Windows。
 - 推荐调用：`npm.cmd run frontend:dev` 或 `npm.cmd run frontend:dev:lan`。
 - 作用：只启动前端 Vite 开发服务，不启动后端。
+- 可通过 `-BackendUrl` 指定 `/api` 代理目标，默认 `http://127.0.0.1:8970`。
 - 关键步骤：
   - 修正 Windows 进程内 `Path/PATH` 环境变量重复问题。
   - 查找 Node 可执行文件。

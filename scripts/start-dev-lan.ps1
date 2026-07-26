@@ -105,6 +105,7 @@ $FrontendErr = Join-Path $LogDir "frontend-vite.err.log"
 
 $env:PYTHONPATH = "backend"
 $env:CI = "true"
+$env:VITE_BACKEND_URL = "http://127.0.0.1:$BackendPort"
 
 # Start backend in a hidden background process with split stdout/stderr logs.
 $Backend = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--app-dir", "backend") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $BackendOut -RedirectStandardError $BackendErr -PassThru

@@ -1,10 +1,13 @@
 """M3 rename operation tests."""
 
+import json
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
 
@@ -248,6 +251,147 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual(1, operation.conflict_count)
         self.assertEqual("conflict", operation.items[0].status)
         self.assertEqual("UNC 路径格式不正确", operation.items[0].message)
+
+    def test_webdav_dry_run_uses_remote_url_target_without_local_path_check(self):
+        self._insert_webdav_preview()
+
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
+            operation = create_rename_dry_run(self.settings, [3])
+
+        self.assertEqual(1, operation.ready_count)
+        self.assertEqual(0, operation.conflict_count)
+        self.assertEqual("ready", operation.items[0].status)
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", operation.items[0].target_path)
+
+    def test_webdav_execute_ready_item_runs_move_and_updates_records(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
+            operation = create_rename_dry_run(self.settings, [3])
+        captured_move = {}
+
+        def fake_move_file(source_path, target_path, context=None):
+            captured_move["source_path"] = source_path
+            captured_move["target_path"] = target_path
+            captured_move["context_path_type"] = context.path_type if context else None
+            from app.service.shared_protocols.base import ConnectionTestResult
+
+            return ConnectionTestResult(True, "WebDAV MOVE 执行成功", readable=True, writable=True)
+
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", side_effect=fake_move_file):
+            executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("completed", executed.status)
+        self.assertEqual(1, executed.renamed_count)
+        self.assertEqual(0, executed.failed_count)
+        self.assertEqual("renamed", executed.items[0].status)
+        self.assertEqual("https://nas.example/dav/Movie.2024.1080p.mkv", captured_move["source_path"])
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", captured_move["target_path"])
+        self.assertEqual("webdav", captured_move["context_path_type"])
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            media_row = connection.execute(
+                "SELECT file_path, file_name, extension FROM media_files WHERE id = 3"
+            ).fetchone()
+            preview_row = connection.execute(
+                "SELECT status FROM rename_previews WHERE id = 3"
+            ).fetchone()
+            remote_row = connection.execute(
+                "SELECT operation_type, source_path, target_path, status, recovery_json "
+                "FROM remote_operation_items"
+            ).fetchone()
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", media_row[0])
+        self.assertEqual("Movie.Safe.mkv", media_row[1])
+        self.assertEqual(".mkv", media_row[2])
+        self.assertEqual("renamed", preview_row[0])
+        self.assertEqual(
+            ("rename", "https://nas.example/dav/Movie.2024.1080p.mkv", "https://nas.example/dav/Movie.Safe.mkv", "completed"),
+            remote_row[:4],
+        )
+        recovery = json.loads(remote_row[4])
+        self.assertEqual(operation.id, recovery["operation_id"])
+        self.assertEqual(executed.items[0].id, recovery["operation_item_id"])
+        self.assertEqual(3, recovery["rename_preview_id"])
+
+    def test_webdav_execute_is_blocked_by_active_remote_lock(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.urlopen", side_effect=self._fake_webdav_dry_run_urlopen):
+            operation = create_rename_dry_run(self.settings, [3])
+        from app.service.remote_operation_service import acquire_remote_operation_lock
+
+        acquire_remote_operation_lock(
+            self.settings,
+            media_source_id=2,
+            lock_key="media-source:2:write",
+            owner="other",
+            task_type="rename_operation",
+            task_id=999,
+            ttl_seconds=60,
+        )
+
+        executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", executed.status)
+        self.assertEqual(1, executed.failed_count)
+        self.assertIn("远程媒体源正在执行写操作", executed.items[0].message)
+
+    def _insert_webdav_preview(self):
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_sources "
+                "(id, name, path, path_type, protocol, username, encrypted_secret, auth_type, enabled, created_at, updated_at) "
+                "VALUES (2, 'webdav', 'https://nas.example/dav/', 'webdav', 'webdav', NULL, NULL, 'none', 1, 'now', 'now')"
+            )
+            connection.execute(
+                "INSERT INTO scan_jobs "
+                "(id, media_source_id, status, batch_size, batch_interval_seconds, created_at) "
+                "VALUES (2, 2, 'completed', 100, 0, 'now')"
+            )
+            connection.execute(
+                "INSERT INTO media_files "
+                "(id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES "
+                "(3, 2, 2, 'https://nas.example/dav/Movie.2024.1080p.mkv', "
+                "'Movie.2024.1080p.mkv', '.mkv', 2048, 'now', 'now')"
+            )
+            connection.execute(
+                "INSERT INTO rename_previews "
+                "(id, media_file_id, media_type, parsed_title, parsed_year, season, episode, original_extension, "
+                "suggested_name, edited_name, status, created_at, updated_at) "
+                "VALUES (3, 3, 'movie', 'Movie', 2024, NULL, NULL, '.mkv', "
+                "'Movie.2024.mkv', 'Movie.Safe.mkv', 'generated', 'now', 'now')"
+            )
+            connection.commit()
+
+    def _fake_webdav_dry_run_urlopen(self, request, timeout=5):
+        class FakeResponse:
+            status = 207
+
+            def __init__(self, body: str):
+                self.body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
+        source_xml = """<?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/Movie.2024.1080p.mkv</d:href>
+            <d:propstat><d:prop>
+              <d:resourcetype />
+              <d:getcontentlength>2048</d:getcontentlength>
+              <d:getetag>"source-etag"</d:getetag>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+        if request.full_url.endswith("/Movie.Safe.mkv"):
+            raise HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
+        return FakeResponse(source_xml)
 
     def test_execute_marks_missing_source_as_failed(self):
         generate_rename_previews(self.settings)

@@ -9,10 +9,16 @@ import sqlite3
 
 from app.core.config import AppSettings
 from app.core.logger import get_logger
+from app.service.media_source_secret import (
+    CURRENT_CREDENTIAL_VERSION,
+    LEGACY_CREDENTIAL_VERSION,
+    credential_version_for_secret,
+    migrate_secret,
+)
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 20
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -283,6 +289,50 @@ def _ensure_task_archives_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_remote_operation_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS remote_operation_locks "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "media_source_id INTEGER NOT NULL, "
+        "lock_key TEXT NOT NULL UNIQUE, "
+        "owner TEXT, "
+        "task_type TEXT, "
+        "task_id INTEGER, "
+        "lease_token TEXT NOT NULL, "
+        "heartbeat_at TEXT, "
+        "expires_at TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'active', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY(media_source_id) REFERENCES media_sources(id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_remote_operation_locks_source "
+        "ON remote_operation_locks(media_source_id, status, expires_at)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS remote_operation_items "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "media_source_id INTEGER NOT NULL, "
+        "operation_type TEXT NOT NULL, "
+        "idempotency_key TEXT NOT NULL UNIQUE, "
+        "source_path TEXT NOT NULL, "
+        "target_path TEXT, "
+        "source_version TEXT, "
+        "target_version TEXT, "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "error_message TEXT, "
+        "recovery_json TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY(media_source_id) REFERENCES media_sources(id))"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_remote_operation_items_source "
+        "ON remote_operation_items(media_source_id, operation_type, status)"
+    )
+
+
 def _ensure_metadata_provider_configs_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS metadata_provider_configs "
@@ -441,7 +491,46 @@ def _ensure_media_source_shared_path_columns(connection: sqlite3.Connection) -> 
     _ensure_column(connection, "media_sources", "local_mount_path", "TEXT")
 
 
-def _run_migrations(connection: sqlite3.Connection) -> None:
+def _ensure_media_source_remote_protocol_columns(connection: sqlite3.Connection) -> None:
+    _ensure_column(connection, "media_sources", "protocol_endpoint", "TEXT")
+    _ensure_column(connection, "media_sources", "auth_type", "TEXT NOT NULL DEFAULT 'none'")
+    _ensure_column(connection, "media_sources", "credential_version", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "media_sources", "remote_root", "TEXT")
+    _ensure_column(connection, "media_sources", "capability_snapshot_json", "TEXT")
+    _ensure_column(connection, "media_sources", "trusted_certificate_fingerprint", "TEXT")
+
+
+def _migrate_media_source_secrets(settings: AppSettings, connection: sqlite3.Connection) -> None:
+    if "media_sources" not in _table_names(connection):
+        return
+    columns = _column_names(connection, "media_sources")
+    if "encrypted_secret" not in columns or "credential_version" not in columns:
+        return
+
+    rows = connection.execute(
+        "SELECT id, encrypted_secret FROM media_sources WHERE encrypted_secret IS NOT NULL "
+        "AND encrypted_secret <> ''"
+    ).fetchall()
+    for source_id, encrypted_secret in rows:
+        try:
+            migrated_secret = migrate_secret(settings, str(encrypted_secret))
+            credential_version = credential_version_for_secret(migrated_secret)
+        except Exception as exc:  # pragma: no cover - 防御历史坏数据，避免阻断启动
+            logger.warning("媒体源凭据迁移失败 source_id=%s error=%s", source_id, exc)
+            migrated_secret = encrypted_secret
+            credential_version = LEGACY_CREDENTIAL_VERSION
+        connection.execute(
+            "UPDATE media_sources SET encrypted_secret = ?, credential_version = ? WHERE id = ?",
+            (migrated_secret, credential_version, source_id),
+        )
+    connection.execute(
+        "UPDATE media_sources SET credential_version = ? "
+        "WHERE encrypted_secret IS NULL OR encrypted_secret = ''",
+        (LEGACY_CREDENTIAL_VERSION,),
+    )
+
+
+def _run_migrations(settings: AppSettings, connection: sqlite3.Connection) -> None:
     version = _schema_version(connection)
 
     if version < 4:
@@ -519,6 +608,24 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         _seed_metadata_provider_configs(connection)
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
+    if version < 19:
+        _ensure_media_source_remote_protocol_columns(connection)
+        connection.execute(
+            "UPDATE media_sources SET auth_type = 'none' "
+            "WHERE auth_type IS NULL OR auth_type = ''"
+        )
+        connection.execute(
+            "UPDATE media_sources SET credential_version = 1 "
+            "WHERE credential_version IS NULL OR credential_version < 1"
+        )
+        _ensure_remote_operation_tables(connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    if version < 20:
+        _ensure_media_source_remote_protocol_columns(connection)
+        _migrate_media_source_secrets(settings, connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
 
 def ensure_database(settings: AppSettings) -> Path:
     """确保 SQLite 数据库和基础元数据表存在。
@@ -561,6 +668,12 @@ def ensure_database(settings: AppSettings) -> Path:
             "nfs_version TEXT, "
             "nfs_options TEXT, "
             "local_mount_path TEXT, "
+            "protocol_endpoint TEXT, "
+            "auth_type TEXT NOT NULL DEFAULT 'none', "
+            "credential_version INTEGER NOT NULL DEFAULT 1, "
+            "remote_root TEXT, "
+            "capability_snapshot_json TEXT, "
+            "trusted_certificate_fingerprint TEXT, "
             "enabled INTEGER NOT NULL DEFAULT 1, "
             "created_at TEXT NOT NULL, "
             "updated_at TEXT NOT NULL)"
@@ -667,7 +780,8 @@ def ensure_database(settings: AppSettings) -> Path:
         _ensure_task_archives_table(connection)
         _ensure_metadata_provider_configs_table(connection)
         _seed_metadata_provider_configs(connection)
-        _run_migrations(connection)
+        _ensure_remote_operation_tables(connection)
+        _run_migrations(settings, connection)
         connection.commit()
     logger.info("数据库初始化完成: %s", settings.database_path)
     return settings.database_path

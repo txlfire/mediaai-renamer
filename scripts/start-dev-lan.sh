@@ -75,7 +75,7 @@ BACKEND_PID="$!"
 echo "$BACKEND_PID" >"$LOG_DIR/backend.pid"
 
 # 前端后台启动，直接调用本地 Vite 入口，确保使用项目依赖。
-CI=true node "$VITE_ENTRY" --host 0.0.0.0 --port "$FRONTEND_PORT" --config frontend/vite.config.ts >"$LOG_DIR/frontend-vite.out.log" 2>"$LOG_DIR/frontend-vite.err.log" &
+CI=true VITE_BACKEND_URL="http://127.0.0.1:$BACKEND_PORT" node "$VITE_ENTRY" --host 0.0.0.0 --port "$FRONTEND_PORT" --config frontend/vite.config.ts >"$LOG_DIR/frontend-vite.out.log" 2>"$LOG_DIR/frontend-vite.err.log" &
 FRONTEND_PID="$!"
 echo "$FRONTEND_PID" >"$LOG_DIR/frontend.pid"
 

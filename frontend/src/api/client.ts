@@ -136,7 +136,7 @@ export type MediaSourceCreatePayload = {
   name: string;
   path: string;
   enabled: boolean;
-  path_type?: "local" | "unc" | "mounted_nfs";
+  path_type?: "local" | "unc" | "mounted_nfs" | "webdav";
   host?: string | null;
   share_name?: string | null;
   domain?: string | null;
@@ -207,7 +207,7 @@ export type ConnectionTestResult = {
 
 export type MediaSourceConnectionTestPayload = {
   path: string;
-  path_type?: "local" | "unc" | "mounted_nfs";
+  path_type?: "local" | "unc" | "mounted_nfs" | "webdav";
   host?: string | null;
   share_name?: string | null;
   domain?: string | null;
@@ -357,6 +357,53 @@ export type TaskGovernanceFilters = {
 export type TaskArchivePayload = {
   archived: boolean;
   reason?: string;
+};
+
+export type RemoteOperationStatus =
+  | "pending"
+  | "recovering"
+  | "completed"
+  | "failed"
+  | "recovery_required";
+
+export type RemoteOperationType = "rename" | "rollback";
+
+export type RemoteOperationItem = {
+  id: number;
+  media_source_id: number;
+  media_source_name: string | null;
+  operation_type: RemoteOperationType;
+  idempotency_key: string;
+  source_path: string;
+  target_path: string | null;
+  source_version: string | null;
+  target_version: string | null;
+  status: RemoteOperationStatus;
+  error_message: string | null;
+  recovery: Record<string, unknown> | unknown[] | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RemoteOperationFilters = {
+  page?: number;
+  page_size?: number;
+  media_source_id?: number;
+  operation_type?: RemoteOperationType;
+  status?: RemoteOperationStatus;
+};
+
+export type RemoteOperationPage = {
+  items: RemoteOperationItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type RemoteOperationRecoveryResult = {
+  item: RemoteOperationItem;
+  action: "retried" | "reconciled" | "already_completed" | string;
+  message: string;
 };
 
 export type RenamePreview = {
@@ -1267,6 +1314,33 @@ export async function archiveTask(
   const patch = requirePatch(httpClient);
   const response = await patch<TaskGovernanceItem>(`/tasks/${taskType}/${taskId}/archive`, payload);
   return response.data;
+}
+
+export async function fetchRemoteOperations(
+  filters: RemoteOperationFilters = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RemoteOperationPage> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<RemoteOperationPage>(
+    query ? `/remote-operations?${query}` : "/remote-operations",
+  );
+  return response.data;
+}
+
+export async function recoverRemoteOperation(
+  itemId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RemoteOperationRecoveryResult> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<RemoteOperationRecoveryResult>(
+      `/remote-operations/${itemId}/recover`,
+      {},
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function generateRenamePreviews(

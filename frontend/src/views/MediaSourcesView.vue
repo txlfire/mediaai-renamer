@@ -38,10 +38,11 @@ const authStore = useAuthStore();
 const mediaStore = useMediaStore();
 const paginationStore = usePaginationStore();
 const router = useRouter();
+type MediaSourcePathType = "local" | "unc" | "mounted_nfs" | "webdav";
 const form = reactive({
   name: "",
   path: "",
-  path_type: "local" as "local" | "unc" | "mounted_nfs",
+  path_type: "local" as MediaSourcePathType,
   username: "",
   secret: "",
   nfs_host: "",
@@ -53,7 +54,7 @@ const editForm = reactive({
   name: "",
   path: "",
   originalPath: "",
-  path_type: "local" as "local" | "unc" | "mounted_nfs",
+  path_type: "local" as MediaSourcePathType,
   username: "",
   secret: "",
   nfs_host: "",
@@ -98,6 +99,9 @@ const pathTypeNotice = computed(() => {
   if (form.path_type === "mounted_nfs") {
     return pageText.nfsNotice;
   }
+  if (form.path_type === "webdav") {
+    return pageText.webdavNotice;
+  }
   return "";
 });
 
@@ -115,9 +119,6 @@ function connectionErrorMessage(message: string, suggestion?: string | null) {
 
 function unsupportedPathProtocol(path: string): string | null {
   const value = path.trim().toLowerCase();
-  if (/^https?:\/\/.+\/dav(\/|$)/.test(value) || /^webdav:\/\//.test(value)) {
-    return "WebDAV";
-  }
   if (/^sftp:\/\//.test(value)) {
     return "SFTP";
   }
@@ -142,7 +143,7 @@ function warnUnsupportedPathProtocol(path: string): boolean {
 watch(
   () => form.path_type,
   (pathType) => {
-    if (pathType !== "unc") {
+    if (!["unc", "webdav"].includes(pathType)) {
       form.username = "";
       form.secret = "";
     }
@@ -176,6 +177,11 @@ async function submitSource() {
     ElMessage.warning(`${pageText.username}${messages.validation.requiredSuffix}`);
     return;
   }
+  if (form.path_type === "webdav" && !form.path.trim().toLowerCase().startsWith("https://")) {
+    showPathPopoverIfNeeded();
+    ElMessage.warning(pageText.webdavPathRequired);
+    return;
+  }
   if (form.path_type === "mounted_nfs" && !form.nfs_host.trim()) {
     showPathPopoverIfNeeded();
     ElMessage.warning(`${pageText.nfsHost}${messages.validation.requiredSuffix}`);
@@ -193,8 +199,8 @@ async function submitSource() {
       path: form.path,
       enabled: form.enabled,
       path_type: form.path_type,
-      username: form.path_type === "unc" ? form.username : null,
-      secret: form.path_type === "unc" ? form.secret : null,
+      username: ["unc", "webdav"].includes(form.path_type) ? form.username : null,
+      secret: ["unc", "webdav"].includes(form.path_type) ? form.secret : null,
       nfs_host: form.path_type === "mounted_nfs" ? form.nfs_host : null,
       nfs_export: form.path_type === "mounted_nfs" ? form.nfs_export : null,
     });
@@ -224,6 +230,9 @@ function protocolLabel(row: MediaSource) {
   if (row.path_type === "mounted_nfs") {
     return pageText.pathTypes.mountedNfs;
   }
+  if (row.path_type === "webdav") {
+    return pageText.pathTypes.webdav;
+  }
   return pageText.pathTypes.local;
 }
 
@@ -233,6 +242,9 @@ function editPathTypeLabel() {
   }
   if (editForm.path_type === "mounted_nfs") {
     return pageText.pathTypes.mountedNfs;
+  }
+  if (editForm.path_type === "webdav") {
+    return pageText.pathTypes.webdav;
   }
   return pageText.pathTypes.local;
 }
@@ -315,13 +327,17 @@ async function testEditConnection() {
     ElMessage.warning(pageText.uncPathRequired);
     return;
   }
+  if (editForm.path_type === "webdav" && !editForm.path.trim().toLowerCase().startsWith("https://")) {
+    ElMessage.warning(pageText.webdavPathRequired);
+    return;
+  }
   testingEditSource.value = true;
   try {
     const result = await testMediaSourceConnectionPayload({
       path: editForm.path,
       path_type: editForm.path_type,
-      username: editForm.path_type === "unc" ? editForm.username : null,
-      secret: editForm.path_type === "unc" ? editForm.secret || null : null,
+      username: ["unc", "webdav"].includes(editForm.path_type) ? editForm.username : null,
+      secret: ["unc", "webdav"].includes(editForm.path_type) ? editForm.secret || null : null,
       nfs_host: editForm.path_type === "mounted_nfs" ? editForm.nfs_host : null,
       nfs_export: editForm.path_type === "mounted_nfs" ? editForm.nfs_export : null,
     });
@@ -342,7 +358,7 @@ function openEditDialog(row: MediaSource) {
   editForm.name = row.name;
   editForm.path = row.path;
   editForm.originalPath = row.path;
-  editForm.path_type = row.path_type as "local" | "unc" | "mounted_nfs";
+  editForm.path_type = row.path_type as MediaSourcePathType;
   editForm.username = row.username ?? "";
   editForm.secret = "";
   editForm.nfs_host = row.nfs_host ?? "";
@@ -389,6 +405,10 @@ async function submitEditSource() {
     ElMessage.warning(`${pageText.username}${messages.validation.requiredSuffix}`);
     return;
   }
+  if (editForm.path_type === "webdav" && !editForm.path.trim().toLowerCase().startsWith("https://")) {
+    ElMessage.warning(pageText.webdavPathRequired);
+    return;
+  }
   if (editForm.path_type === "mounted_nfs" && !editForm.nfs_host.trim()) {
     ElMessage.warning(`${pageText.nfsHost}${messages.validation.requiredSuffix}`);
     return;
@@ -418,8 +438,8 @@ async function submitEditSource() {
             name: editForm.name,
             path: editForm.path,
             enabled: editForm.enabled,
-            username: editForm.path_type === "unc" ? editForm.username : null,
-            secret: editForm.path_type === "unc" ? editForm.secret || null : null,
+            username: ["unc", "webdav"].includes(editForm.path_type) ? editForm.username : null,
+            secret: ["unc", "webdav"].includes(editForm.path_type) ? editForm.secret || null : null,
             nfs_host: editForm.path_type === "mounted_nfs" ? editForm.nfs_host : null,
             nfs_export: editForm.path_type === "mounted_nfs" ? editForm.nfs_export : null,
             clear_history_on_path_change: true,
@@ -429,8 +449,8 @@ async function submitEditSource() {
           name: editForm.name,
           path: editForm.path,
           enabled: editForm.enabled,
-          username: editForm.path_type === "unc" ? editForm.username : null,
-          secret: editForm.path_type === "unc" ? editForm.secret || null : null,
+          username: ["unc", "webdav"].includes(editForm.path_type) ? editForm.username : null,
+          secret: ["unc", "webdav"].includes(editForm.path_type) ? editForm.secret || null : null,
           nfs_host: editForm.path_type === "mounted_nfs" ? editForm.nfs_host : null,
           nfs_export: editForm.path_type === "mounted_nfs" ? editForm.nfs_export : null,
         });
@@ -511,6 +531,7 @@ onMounted(() => {
                     <el-option :label="pageText.pathTypes.local" value="local" />
                     <el-option :label="pageText.pathTypes.unc" value="unc" />
                     <el-option :label="pageText.pathTypes.mountedNfs" value="mounted_nfs" />
+                    <el-option :label="pageText.pathTypes.webdav" value="webdav" />
                   </el-select>
                   <el-popover
                     v-if="form.path_type !== 'local'"
@@ -549,6 +570,20 @@ onMounted(() => {
                           <el-input v-model="form.nfs_export" :placeholder="pageText.nfsExportPlaceholder" />
                         </el-form-item>
                       </template>
+                      <template v-if="form.path_type === 'webdav'">
+                        <p>{{ pageText.webdavNotice }}</p>
+                        <el-form-item :label="pageText.username">
+                          <el-input v-model="form.username" :placeholder="pageText.usernamePlaceholder" />
+                        </el-form-item>
+                        <el-form-item :label="pageText.password">
+                          <el-input
+                            v-model="form.secret"
+                            type="password"
+                            show-password
+                            :placeholder="pageText.passwordPlaceholder"
+                          />
+                        </el-form-item>
+                      </template>
                     </div>
                   </el-popover>
                 </div>
@@ -562,7 +597,7 @@ onMounted(() => {
                     @blur="warnUnsupportedPathProtocol(form.path)"
                   />
                   <el-button
-                    v-if="form.path_type !== 'unc'"
+                    v-if="!['unc', 'webdav'].includes(form.path_type)"
                     class="media-source-path-picker"
                     :icon="FolderOpened"
                     @click="openDirectoryPicker('create')"
@@ -733,7 +768,7 @@ onMounted(() => {
               @blur="warnUnsupportedPathProtocol(editForm.path)"
             />
             <el-button
-              v-if="editForm.path_type !== 'unc'"
+              v-if="!['unc', 'webdav'].includes(editForm.path_type)"
               class="media-source-path-picker"
               :icon="FolderOpened"
               @click="openDirectoryPicker('edit')"
@@ -742,7 +777,7 @@ onMounted(() => {
             </el-button>
           </div>
         </el-form-item>
-        <template v-if="editForm.path_type === 'unc'">
+        <template v-if="['unc', 'webdav'].includes(editForm.path_type)">
           <el-form-item :label="pageText.username">
             <el-input v-model="editForm.username" :placeholder="pageText.usernamePlaceholder" />
           </el-form-item>

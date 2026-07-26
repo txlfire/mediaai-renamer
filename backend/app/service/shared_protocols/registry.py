@@ -1,31 +1,21 @@
 """Shared protocol registry."""
 
-from app.service.shared_protocols.base import ProtocolCapabilities, SharedProtocol
+from app.service.shared_protocols.base import ProtocolCapabilities, RemoteProtocolCapability, SharedProtocol
 from app.service.shared_protocols.local import LocalProtocol
 from app.service.shared_protocols.mounted_nfs import MountedNfsProtocol
 from app.service.shared_protocols.smb import SmbProtocol
+from app.service.shared_protocols.webdav import WebDavProtocol
 
 
 _PROTOCOLS: dict[str, SharedProtocol] = {
     "local": LocalProtocol(),
     "unc": SmbProtocol(),
     "mounted_nfs": MountedNfsProtocol(),
+    "webdav": WebDavProtocol(),
 }
 
 
 _FUTURE_PROTOCOLS = [
-    ProtocolCapabilities(
-        protocol="webdav",
-        display_name="WebDAV",
-        supports_credentials=True,
-        supports_directory_browse=False,
-        supports_scan=False,
-        supports_rename=False,
-        requires_system_mount=False,
-        can_verify_filesystem_type=False,
-        future_candidate=True,
-        user_notice="当前版本暂不支持 WebDAV，后续需单独设计远程写入和锁语义。",
-    ),
     ProtocolCapabilities(
         protocol="ftp",
         display_name="FTP",
@@ -37,6 +27,11 @@ _FUTURE_PROTOCOLS = [
         can_verify_filesystem_type=False,
         future_candidate=True,
         user_notice="当前版本暂不支持 FTP，后续需单独设计远程移动和失败恢复。",
+        remote_capabilities=(
+            RemoteProtocolCapability.BROWSE.value,
+            RemoteProtocolCapability.SCAN.value,
+            RemoteProtocolCapability.READ_METADATA.value,
+        ),
     ),
     ProtocolCapabilities(
         protocol="sftp",
@@ -49,6 +44,14 @@ _FUTURE_PROTOCOLS = [
         can_verify_filesystem_type=False,
         future_candidate=True,
         user_notice="当前版本暂不支持 SFTP，后续需单独设计密钥凭据和远程操作语义。",
+        remote_capabilities=(
+            RemoteProtocolCapability.BROWSE.value,
+            RemoteProtocolCapability.SCAN.value,
+            RemoteProtocolCapability.READ_METADATA.value,
+            RemoteProtocolCapability.ATOMIC_RENAME.value,
+            RemoteProtocolCapability.CONDITIONAL_WRITE.value,
+            RemoteProtocolCapability.RESUME.value,
+        ),
     ),
     ProtocolCapabilities(
         protocol="s3",
@@ -61,6 +64,14 @@ _FUTURE_PROTOCOLS = [
         can_verify_filesystem_type=False,
         future_candidate=True,
         user_notice="当前版本暂不支持对象存储，S3 不具备本地文件系统的原子重命名语义。",
+        remote_capabilities=(
+            RemoteProtocolCapability.BROWSE.value,
+            RemoteProtocolCapability.SCAN.value,
+            RemoteProtocolCapability.READ_METADATA.value,
+            RemoteProtocolCapability.COPY_DELETE_RENAME.value,
+            RemoteProtocolCapability.CONDITIONAL_WRITE.value,
+            RemoteProtocolCapability.RESUME.value,
+        ),
     ),
 ]
 

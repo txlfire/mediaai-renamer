@@ -35,6 +35,12 @@ npm run frontend:dev:lan
 npm run dev:start
 ```
 
+指定端口启动：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-dev-lan.ps1 -FrontendPort 5174 -BackendPort 8972
+```
+
 停止前后端：
 
 ```powershell
@@ -54,6 +60,7 @@ npm run dev:stop:linux
 - `npm run dev:lan` 仍保留兼容；新命令统一使用 `npm run dev:start` 和 `npm run dev:stop`。
 - 启动脚本会先检查 Node.js、npm、`.venv`、前端依赖、后端依赖和关键入口文件；依赖不满足时会直接停止并给出安装提示。
 - 一键启动会后台启动前后端，并将日志和 PID 写入 `.codex/run-logs/`。
+- 指定后端端口时，启动脚本会设置 `VITE_BACKEND_URL`，让 Vite 的 `/api` 代理转发到对应后端端口。
 - 如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，启动脚本会只在当前进程内临时规整，避免 Windows `Start-Process` 报重复键错误。
 
 局域网内其他机器访问：

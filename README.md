@@ -2,11 +2,11 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与安全重命名工具。项目目标是安全整理本地或服务端可访问目录中的媒体文件，并提供元数据匹配、命名规则和共享目录能力。
 
-当前版本：`0.10.7`
+当前版本：`1.0.0`
 
 最近正式发布版本：`v0.10.7`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.10.7)
 
-当前阶段：M10 已正式发布 `v0.10.7`；M11 已完成远程协议扩展开发规划，尚未开始实现。M9 已发布 `v0.9.0`，M9+ 维护版 `0.9.1` 已补齐任务治理归档入口。
+当前阶段：M1-M11 核心产品功能已完成，正在执行 `v1.0.0` 稳定版发布验收。
 
 ## 当前能力
 
@@ -35,12 +35,14 @@ MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等�
 - 页面框架：左侧可伸缩菜单、亮色/暗色主题、跟随系统主题、状态显示、语言占位和全局搜索框。
 - 共享目录：支持本地路径、Windows UNC / SMB、已挂载路径 / NFS 三类媒体源，扫描和重命名前执行统一协议校验。
 - SMB 凭据：复用媒体源自身加密字段保存，接口和日志脱敏，不建立全局凭据库。
+- WebDAV：支持 HTTPS、无认证 / Basic / Bearer、连接测试、目录浏览、递归扫描、MOVE dry-run、真实重命名、反向回滚和失败恢复。
 
 M5 实机验收边界：
 
 - SMB / UNC 访问依赖当前后端服务进程已有共享访问权限，系统不会自动执行 `net use`。
 - NFS 依赖操作系统、NAS 或 Docker 宿主机预先挂载，系统不会自动执行 `mount`，也不保存 NFS 密码或 Kerberos 凭据。
-- WebDAV、FTP、SFTP、S3 暂不支持真实扫描和重命名，仅作为后续候选协议。
+- WebDAV 已支持 HTTPS 地址校验、连接测试、目录浏览、递归扫描、MOVE dry-run、真实重命名、反向 MOVE 回滚和失败恢复。
+- HTTP WebDAV、Digest、跳过 TLS 校验、FTP、FTPS、SFTP、S3 / MinIO 不受支持；后述协议仅保留为未来候选能力，不承诺排期。
 
 M6 AI 使用边界：
 
@@ -217,6 +219,12 @@ npm run release:publish
 - M10 验收报告：[docs/development/m10/M10-多站点元数据源验收报告.md](docs/development/m10/M10-%E5%A4%9A%E7%AB%99%E7%82%B9%E5%85%83%E6%95%B0%E6%8D%AE%E6%BA%90%E9%AA%8C%E6%94%B6%E6%8A%A5%E5%91%8A.md)
 - M10 用户手册：[docs/manuals/M10-user-manual-cn.md](docs/manuals/M10-user-manual-cn.md)
 - M11 开发计划：[docs/development/m11/M11-远程协议扩展开发计划.md](docs/development/m11/M11-%E8%BF%9C%E7%A8%8B%E5%8D%8F%E8%AE%AE%E6%89%A9%E5%B1%95%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)
+- M11 WebDAV 设计手册：[docs/design/M11-WebDAV设计手册.md](docs/design/M11-WebDAV%E8%AE%BE%E8%AE%A1%E6%89%8B%E5%86%8C.md)
+- M11 WebDAV 验收清单：[docs/development/m11/M11-WebDAV验收清单.md](docs/development/m11/M11-WebDAV%E9%AA%8C%E6%94%B6%E6%B8%85%E5%8D%95.md)
+- M11 WebDAV 验收报告：[docs/development/m11/M11-WebDAV验收报告.md](docs/development/m11/M11-WebDAV%E9%AA%8C%E6%94%B6%E6%8A%A5%E5%91%8A.md)
+- M11 WebDAV 用户手册：[docs/manuals/M11-WebDAV用户手册.md](docs/manuals/M11-WebDAV%E7%94%A8%E6%88%B7%E6%89%8B%E5%86%8C.md)
+- WebDAV 部署说明：[docs/deployment/webdav.md](docs/deployment/webdav.md)
+- v1.0.0 发布说明：[docs/releases/v1.0.0.md](docs/releases/v1.0.0.md)
 - M5 开发计划：[docs/development/m5/M5-NAS-SMB共享目录开发计划.md](docs/development/m5/M5-NAS-SMB共享目录开发计划.md)
 - M5 验收清单：[docs/development/m5/M5-NAS-SMB共享目录验收清单.md](docs/development/m5/M5-NAS-SMB共享目录验收清单.md)
 - M5 设计手册：[docs/design/M5-design-manual.md](docs/design/M5-design-manual.md)

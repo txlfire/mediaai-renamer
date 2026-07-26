@@ -1,7 +1,18 @@
 """Shared path protocol interfaces and capability models."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
+
+
+class RemoteProtocolCapability(StrEnum):
+    BROWSE = "browse"
+    SCAN = "scan"
+    READ_METADATA = "read_metadata"
+    ATOMIC_RENAME = "atomic_rename"
+    COPY_DELETE_RENAME = "copy_delete_rename"
+    CONDITIONAL_WRITE = "conditional_write"
+    RESUME = "resume"
 
 
 @dataclass(frozen=True)
@@ -16,6 +27,7 @@ class ProtocolCapabilities:
     can_verify_filesystem_type: bool
     future_candidate: bool
     user_notice: str
+    remote_capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -32,6 +44,7 @@ class ConnectionTestResult:
 class SharedPathContext:
     path_type: str
     username: str | None = None
+    secret: str | None = None
     has_secret: bool = False
     host: str | None = None
     share_name: str | None = None
@@ -62,6 +75,16 @@ class DirectoryListing:
     entries: list[DirectoryEntry]
 
 
+@dataclass(frozen=True)
+class RemoteFileEntry:
+    path: str
+    name: str
+    extension: str
+    file_size: int
+    modified_at: str
+    version: str | None = None
+
+
 class SharedProtocol(Protocol):
     def capabilities(self) -> ProtocolCapabilities:
         ...
@@ -73,6 +96,14 @@ class SharedProtocol(Protocol):
         ...
 
     def list_directories(self, path: str, context: SharedPathContext | None = None) -> DirectoryListing:
+        ...
+
+    def list_files(
+        self,
+        path: str,
+        context: SharedPathContext | None = None,
+        recursive: bool = True,
+    ) -> list[RemoteFileEntry]:
         ...
 
     def check_scan_ready(self, path: str, context: SharedPathContext | None = None) -> ConnectionTestResult:

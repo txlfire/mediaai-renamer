@@ -20,6 +20,7 @@ from app.service.media_source_service import (
     test_media_source_connection_payload,
     update_media_source,
 )
+from app.service.media_source_secret import decrypt_secret
 from app.service.settings_service import update_setting_values
 
 
@@ -111,11 +112,14 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertIsNone(created.secret)
             with closing(sqlite3.connect(settings.database_path)) as connection:
                 row = connection.execute(
-                    "SELECT encrypted_secret FROM media_sources WHERE id = ?",
+                    "SELECT encrypted_secret, credential_version FROM media_sources WHERE id = ?",
                     (created.id,),
                 ).fetchone()
             self.assertIsNotNone(row[0])
             self.assertNotEqual("plain-password", row[0])
+            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertEqual(2, row[1])
+            self.assertEqual("plain-password", decrypt_secret(settings, row[0]))
 
     def test_create_media_source_rejects_invalid_port(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -186,6 +190,93 @@ class MediaSourceServiceTest(unittest.TestCase):
                     (created.id,),
                 ).fetchone()
             self.assertEqual((None, None), row)
+
+    def test_create_webdav_media_source_encrypts_secret_and_preserves_protocol(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+
+            created = create_media_source(
+                settings,
+                "WebDAV",
+                "https://nas.example/dav",
+                True,
+                path_type="webdav",
+                username="dav-user",
+                secret="dav-password",
+            )
+
+            self.assertEqual("webdav", created.path_type)
+            self.assertEqual("webdav", created.protocol)
+            self.assertEqual("dav-user", created.username)
+            self.assertTrue(created.has_secret)
+            self.assertIsNone(created.secret)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT encrypted_secret, auth_type, credential_version FROM media_sources WHERE id = ?",
+                    (created.id,),
+                ).fetchone()
+            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertEqual("basic", row[1])
+            self.assertEqual(2, row[2])
+
+    def test_update_webdav_media_source_keeps_protocol_and_updates_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings,
+                "WebDAV",
+                "https://nas.example/dav",
+                True,
+                path_type="webdav",
+                username="old-user",
+                secret="old-secret",
+            )
+
+            result = update_media_source(
+                settings,
+                source.id,
+                name="WebDAV 新",
+                path="https://nas.example/new-dav",
+                enabled=False,
+                username="new-user",
+                secret="new-secret",
+                clear_history_on_path_change=True,
+            )
+
+            updated = result["source"]
+            self.assertEqual("WebDAV 新", updated.name)
+            self.assertEqual("https://nas.example/new-dav", updated.path)
+            self.assertEqual("webdav", updated.path_type)
+            self.assertEqual("webdav", updated.protocol)
+            self.assertEqual("new-user", updated.username)
+            self.assertTrue(updated.has_secret)
+            self.assertFalse(updated.enabled)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute(
+                    "SELECT encrypted_secret, auth_type, credential_version, protocol_endpoint "
+                    "FROM media_sources WHERE id = ?",
+                    (source.id,),
+                ).fetchone()
+            self.assertEqual("new-secret", decrypt_secret(settings, row[0]))
+            self.assertEqual("basic", row[1])
+            self.assertEqual(2, row[2])
+            self.assertEqual("https://nas.example/new-dav", row[3])
+
+    def test_connection_payload_accepts_webdav_https(self):
+        result = test_media_source_connection_payload(
+            "webdav",
+            "https://nas.example/dav",
+            username="dav-user",
+            secret="dav-password",
+        )
+
+        self.assertFalse(result.success)
+        self.assertNotIn("dav-password", result.message)
+        self.assertNotIn("dav-password", result.suggestion or "")
 
     def test_database_creates_m1_tables(self):
         """数据库初始化应创建 M1 所需表。"""

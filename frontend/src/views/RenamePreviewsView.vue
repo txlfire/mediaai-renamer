@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDown, CloseBold, Connection, Delete, Edit, MagicStick, Search, Select } from "@element-plus/icons-vue";
+import { ArrowDown, CloseBold, Connection, Delete, Edit, MagicStick, Search, Select, View } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
@@ -34,6 +34,10 @@ import { useSettingsStore } from "../stores/settings";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime } from "../utils/displayFormat";
 import { formatFileSize } from "../utils/displayFormat";
+import {
+  buildMultiSourceMatchRows,
+  type MultiSourceMatchRow,
+} from "../utils/multiSourceMatchResults";
 import {
   namingTemplateStatusLabel,
   namingTemplateStatusTagType,
@@ -72,6 +76,7 @@ const selectedOperationLogTaskType = ref<"rename_operation" | "rollback_plan">("
 const emptyTargetDialogVisible = ref(false);
 const detailDialogVisible = ref(false);
 const metadataDialogVisible = ref(false);
+const multiSourceResultDialogVisible = ref(false);
 const aiParseDialogVisible = ref(false);
 const pendingMoveDialogVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
@@ -84,6 +89,7 @@ const selectedPreviewRows = ref<RenamePreview[]>([]);
 const selectedPendingFileIds = ref<number[]>([]);
 const pendingRenamePreviews = ref<RenamePreview[]>([]);
 const metadataCandidates = ref<MetadataMatchResult[]>([]);
+const multiSourceMatchRows = ref<MultiSourceMatchRow[]>([]);
 const aiParseResult = ref<AiParseResult | null>(null);
 const aiParsingPreviewId = ref<number | null>(null);
 const aiBatchResults = ref<Record<number, AiParseResult>>({});
@@ -567,6 +573,7 @@ function resetOperationProgress(total = 0, operation = "") {
     ? formatMessage(messages.renamePreviews.processing, { current: 0, total })
     : operation;
   operationProgressLogs.value = [];
+  multiSourceMatchRows.value = [];
 }
 
 function finishOperationProgress(total: number, success: number, failed: number, skipped = 0) {
@@ -797,6 +804,25 @@ function cacheMultiSourceProviderResults(result: BatchMultiSourceMatchResult) {
   multiSourceProviderResults.value = next;
 }
 
+function cacheMultiSourceMatchRows(result: BatchMultiSourceMatchResult) {
+  multiSourceMatchRows.value = buildMultiSourceMatchRows(result);
+}
+
+function openMultiSourceMatchResults() {
+  if (multiSourceMatchRows.value.length === 0) {
+    ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
+    return;
+  }
+  operationResultVisible.value = false;
+  multiSourceResultDialogVisible.value = true;
+}
+
+function multiSourceProviderSummary(row: MultiSourceMatchRow) {
+  return row.providerResults
+    .map((item) => `${item.label || item.provider} ${item.candidate_count}`)
+    .join(" · ");
+}
+
 function appendMultiSourceLogs(result: BatchMultiSourceMatchResult) {
   operationProgressLogs.value.push(
     formatMessage(messages.renamePreviews.multiSourceSummaryLog, {
@@ -871,6 +897,7 @@ async function matchSelectedMultiSource() {
     multiSourceMatchMode.value,
   );
   cacheMultiSourceProviderResults(result);
+  cacheMultiSourceMatchRows(result);
   appendMultiSourceLogs(result);
   finishOperationProgress(
     result.total_count,
@@ -894,6 +921,7 @@ async function matchAllCurrentMultiSource() {
     multiSourceMatchMode.value,
   );
   cacheMultiSourceProviderResults(result);
+  cacheMultiSourceMatchRows(result);
   appendMultiSourceLogs(result);
   finishOperationProgress(
     result.total_count,
@@ -1812,10 +1840,10 @@ onMounted(async () => {
           @click.stop="parseSingleWithAi(row)"
           />
           </el-tooltip>
-          <el-tooltip v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataBackfill" placement="top">
+          <el-tooltip v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataResult" placement="top">
           <el-button
           class="table-action-button action-sync"
-          :icon="MagicStick"
+          :icon="View"
           text
           circle
           :disabled="!canSubmitMetadata"
@@ -1974,6 +2002,9 @@ onMounted(async () => {
               ? messages.renamePreviews.operationResultDialog.collapseLog
               : messages.renamePreviews.operationResultDialog.viewFullLog
           }}
+        </el-button>
+        <el-button v-if="multiSourceMatchRows.length > 0" @click="openMultiSourceMatchResults">
+          {{ messages.renamePreviews.multiSourceResults.viewResults }}
         </el-button>
         <el-button type="primary" @click="operationResultVisible = false">{{ messages.common.close }}</el-button>
       </template>
@@ -2194,6 +2225,54 @@ onMounted(async () => {
       />
       <template #footer>
         <el-button @click="metadataDialogVisible = false">{{ messages.common.close }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="multiSourceResultDialogVisible"
+      :title="messages.renamePreviews.multiSourceResults.title"
+      width="min(980px, calc(100vw - 2rem))"
+      align-center
+    >
+      <el-alert
+        :title="messages.renamePreviews.multiSourceResults.notice"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <el-table :data="multiSourceMatchRows" class="data-table multi-source-result-table" table-layout="auto">
+        <el-table-column :label="messages.renamePreviews.columns.originalName" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">
+            <TextCell :value="row.fileName" :max-length="tableDisplayConfig.fileNameMaxLength" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.columns.metadata" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="metadataStatusTagType(row.matchStatus || 'failed')" effect="light">
+              {{ metadataStatusLabel(row.matchStatus || 'failed') }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.multiSourceResults.candidateCount" width="96" align="center">
+          <template #default="{ row }">{{ row.candidateCount }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.multiSourceResults.providers" min-width="260" show-overflow-tooltip>
+          <template #default="{ row }">{{ multiSourceProviderSummary(row) || '-' }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.common.actions" width="132" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              :disabled="!row.canViewCandidates"
+              @click="openMetadataBackfill(row.preview)"
+            >
+              {{ messages.renamePreviews.multiSourceResults.viewCandidates }}
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="multiSourceResultDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>
     </el-dialog>
 

@@ -10,7 +10,9 @@ export type PaginationKey =
   | "scan-results"
   | "rename-previews"
   | "metadata-candidates"
-  | "task-governance";
+  | "audit-events"
+  | "task-governance"
+  | "webdav-recovery";
 
 type PaginationState = {
   currentPage: number;
