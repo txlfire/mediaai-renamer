@@ -99,7 +99,7 @@ class WebDavEndToEndTest(unittest.TestCase):
 
         self.assertEqual(1, len(files))
         self.assertTrue(files[0].path.endswith("/Series/Episode.S01E01.mkv"))
-        self.assertEqual(len(b"video-content"), files[0].size)
+        self.assertEqual(len(b"video-content"), files[0].file_size)
         self.assertTrue(files[0].version)
 
     def test_move_dry_run_detects_existing_target(self):
