@@ -150,7 +150,7 @@ git commit -m "feat(m11): 增加远程操作分页查询服务"
 - 修改：`backend/app/api/remote_operations.py`
 - 修改：`backend/tests/test_remote_operation_recovery.py`
 
-- [ ] **步骤 1：先写 API 失败测试**
+- [x] **步骤 1：先写 API 失败测试**
 
 覆盖：
 
@@ -160,15 +160,16 @@ git commit -m "feat(m11): 增加远程操作分页查询服务"
 - 未认证请求按现有鉴权模式被拒绝。
 - 列表响应不出现 `password`、`token`、`encrypted_secret`。
 
-- [ ] **步骤 2：运行测试，确认失败**
+- [x] **步骤 2：运行测试，确认失败**
 
 ```powershell
+$env:PYTHONPATH="backend"
 .\.venv\Scripts\python.exe -m unittest backend.tests.test_remote_operation_recovery -v
 ```
 
 预期：`GET /api/remote-operations` 当前被 `/{item_id}` 路由处理或不存在，测试失败。
 
-- [ ] **步骤 3：实现静态列表路由**
+- [x] **步骤 3：实现静态列表路由**
 
 在 `/{item_id}` 之前注册：
 
@@ -186,16 +187,17 @@ def list_remote_operations_api(
     return list_remote_operation_items(...)
 ```
 
-- [ ] **步骤 4：运行目标测试和全量后端测试**
+- [x] **步骤 4：运行目标测试和全量后端测试**
 
 ```powershell
+$env:PYTHONPATH="backend"
 .\.venv\Scripts\python.exe -m unittest backend.tests.test_remote_operation_recovery -v
 npm.cmd run backend:test
 ```
 
 预期：目标测试和全量后端测试通过。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```powershell
 git add backend/app/api/remote_operations.py backend/tests/test_remote_operation_recovery.py

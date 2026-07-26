@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.auth import require_authenticated_user, require_permission
 from app.service.audit_service import record_audit_event
@@ -13,6 +15,7 @@ from app.service.remote_operation_recovery_service import (
 from app.service.remote_operation_service import (
     RemoteOperationLockConflict,
     get_remote_operation_item,
+    list_remote_operation_items,
 )
 
 router = APIRouter(prefix="/api/remote-operations", tags=["remote-operations"])
@@ -23,6 +26,35 @@ def _audit_request_context(request: Request) -> dict[str, str | None]:
         "ip_address": request.client.host if request.client else None,
         "user_agent": request.headers.get("user-agent"),
     }
+
+
+@router.get("")
+def list_remote_operations_api(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    media_source_id: int | None = Query(None, ge=1),
+    operation_type: Literal["rename", "rollback"] | None = None,
+    status: Literal[
+        "pending",
+        "recovering",
+        "completed",
+        "failed",
+        "recovery_required",
+    ]
+    | None = None,
+    _current_user=Depends(require_authenticated_user()),
+):
+    """分页查询远程操作明细。"""
+
+    return list_remote_operation_items(
+        request.app.state.settings,
+        page=page,
+        page_size=page_size,
+        media_source_id=media_source_id,
+        operation_type=operation_type,
+        status=status,
+    )
 
 
 @router.get("/{item_id}")

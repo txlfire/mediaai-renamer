@@ -197,6 +197,46 @@ class RemoteOperationRecoveryTest(unittest.TestCase):
         self.assertEqual("retried", recover_response.json()["action"])
         self.assertEqual("completed", recover_response.json()["item"]["status"])
 
+    def test_remote_operation_api_returns_filtered_paginated_list_without_credentials(self):
+        rename_item_id = self._create_failed_remote_rename()
+        rollback_item_id = self._create_failed_remote_rollback()
+        client = TestClient(create_app(self.settings))
+
+        response = client.get(
+            "/api/remote-operations",
+            params={
+                "page": 1,
+                "page_size": 10,
+                "media_source_id": 1,
+                "operation_type": "rollback",
+                "status": "failed",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(1, payload["total"])
+        self.assertEqual(1, payload["page"])
+        self.assertEqual(10, payload["page_size"])
+        self.assertEqual(rollback_item_id, payload["items"][0]["id"])
+        self.assertEqual("webdav", payload["items"][0]["media_source_name"])
+        self.assertNotEqual(rename_item_id, payload["items"][0]["id"])
+        serialized = response.text.lower()
+        self.assertNotIn("password", serialized)
+        self.assertNotIn("token", serialized)
+        self.assertNotIn("encrypted_secret", serialized)
+
+    def test_remote_operation_api_rejects_invalid_page_size_and_filter_values(self):
+        client = TestClient(create_app(self.settings))
+
+        oversized_response = client.get("/api/remote-operations?page_size=101")
+        invalid_type_response = client.get("/api/remote-operations?operation_type=copy")
+        invalid_status_response = client.get("/api/remote-operations?status=unknown")
+
+        self.assertEqual(422, oversized_response.status_code)
+        self.assertEqual(422, invalid_type_response.status_code)
+        self.assertEqual(422, invalid_status_response.status_code)
+
     def test_remote_operation_api_returns_conflict_when_write_lock_is_active(self):
         remote_item_id = self._create_failed_remote_rename()
         acquire_remote_operation_lock(
