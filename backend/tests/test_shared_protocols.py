@@ -292,6 +292,15 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         self.assertIn(RemoteProtocolCapability.ATOMIC_RENAME.value, capabilities.remote_capabilities)
         self.assertNotIn(RemoteProtocolCapability.COPY_DELETE_RENAME.value, capabilities.remote_capabilities)
 
+    def test_webdav_capability_notice_describes_stable_write_and_recovery_support(self):
+        notice = get_protocol("webdav").capabilities().user_notice
+
+        self.assertIn("递归扫描", notice)
+        self.assertIn("真实 MOVE 重命名", notice)
+        self.assertIn("回滚", notice)
+        self.assertIn("失败恢复", notice)
+        self.assertNotIn("暂不支持真实重命名", notice)
+
     def test_local_connection_and_directory_listing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -378,24 +378,26 @@ git commit -m "feat(m11): 增加任务治理 WebDAV 恢复入口"
 - 修改：`backend/app/service/shared_protocols/webdav.py`
 - 修改：`backend/tests/test_shared_protocols.py`
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 断言 WebDAV 能力说明包含扫描、真实重命名、回滚和失败恢复，不包含“暂不支持真实重命名”。
 
-- [ ] **步骤 2：运行并确认失败**
+- [x] **步骤 2：运行并确认失败**
 
 ```powershell
+$env:PYTHONPATH="backend"
 .\.venv\Scripts\python.exe -m unittest backend.tests.test_shared_protocols -v
 ```
 
-- [ ] **步骤 3：修正文案并运行测试**
+- [x] **步骤 3：修正文案并运行测试**
 
 ```powershell
+$env:PYTHONPATH="backend"
 .\.venv\Scripts\python.exe -m unittest backend.tests.test_shared_protocols -v
 npm.cmd run backend:test
 ```
 
-- [ ] **步骤 4：提交**
+- [x] **步骤 4：提交**
 
 ```powershell
 git add backend/app/service/shared_protocols/webdav.py backend/tests/test_shared_protocols.py

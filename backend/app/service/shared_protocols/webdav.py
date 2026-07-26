@@ -187,7 +187,10 @@ class WebDavProtocol:
             requires_system_mount=False,
             can_verify_filesystem_type=False,
             future_candidate=False,
-            user_notice="当前支持 HTTPS WebDAV 连接测试、目录浏览、递归扫描、MOVE dry-run 和真实 MOVE 重命名。",
+            user_notice=(
+                "支持 HTTPS WebDAV 连接测试、目录浏览、递归扫描、MOVE dry-run、"
+                "真实 MOVE 重命名、回滚和失败恢复。"
+            ),
             remote_capabilities=(
                 RemoteProtocolCapability.BROWSE.value,
                 RemoteProtocolCapability.SCAN.value,
