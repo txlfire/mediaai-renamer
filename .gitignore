@@ -22,7 +22,7 @@ npm-cache/
 data/*
 !data/.gitkeep
 logs/
-releases/
+/releases/
 tests/integration/webdav/.tmp/
 
 # Local agent/runtime artifacts

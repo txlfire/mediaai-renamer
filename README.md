@@ -2,11 +2,11 @@
 
 MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景的影视文件扫描与安全重命名工具。项目目标是安全整理本地或服务端可访问目录中的媒体文件，并提供元数据匹配、命名规则和共享目录能力。
 
-当前版本：`0.11.11`
+当前版本：`1.0.0`
 
 最近正式发布版本：`v0.10.7`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.10.7)
 
-当前阶段：M11 WebDAV 功能开发已完成，正在执行 `v1.0.0` 稳定版发布验收。M9 已发布 `v0.9.0`，M10 已发布 `v0.10.7`。
+当前阶段：M1-M11 核心产品功能已完成，正在执行 `v1.0.0` 稳定版发布验收。
 
 ## 当前能力
 
@@ -224,6 +224,7 @@ npm run release:publish
 - M11 WebDAV 验收报告：[docs/development/m11/M11-WebDAV验收报告.md](docs/development/m11/M11-WebDAV%E9%AA%8C%E6%94%B6%E6%8A%A5%E5%91%8A.md)
 - M11 WebDAV 用户手册：[docs/manuals/M11-WebDAV用户手册.md](docs/manuals/M11-WebDAV%E7%94%A8%E6%88%B7%E6%89%8B%E5%86%8C.md)
 - WebDAV 部署说明：[docs/deployment/webdav.md](docs/deployment/webdav.md)
+- v1.0.0 发布说明：[docs/releases/v1.0.0.md](docs/releases/v1.0.0.md)
 - M5 开发计划：[docs/development/m5/M5-NAS-SMB共享目录开发计划.md](docs/development/m5/M5-NAS-SMB共享目录开发计划.md)
 - M5 验收清单：[docs/development/m5/M5-NAS-SMB共享目录验收清单.md](docs/development/m5/M5-NAS-SMB共享目录验收清单.md)
 - M5 设计手册：[docs/design/M5-design-manual.md](docs/design/M5-design-manual.md)
