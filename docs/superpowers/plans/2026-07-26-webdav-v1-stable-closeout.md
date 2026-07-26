@@ -527,7 +527,7 @@ git diff --check
 npm.cmd run check:encoding
 ```
 
-- [ ] **步骤 4：提交并推送 develop**
+- [x] **步骤 4：提交并推送 develop**
 
 ```powershell
 git add .github/workflows/webdav-integration.yml .github/workflows/docker-ghcr.yml
@@ -537,7 +537,7 @@ git push origin develop
 
 仅在 GHCR 工作流实际修改时暂存该文件。
 
-- [ ] **步骤 5：等待并核对 CI**
+- [x] **步骤 5：等待并核对 CI**
 
 ```powershell
 gh run list --workflow webdav-integration.yml --branch develop --limit 3
@@ -561,7 +561,7 @@ gh run watch <run-id> --exit-status
 - 新增：`docs/manuals/M11-WebDAV用户手册.md`
 - 新增：`docs/deployment/webdav.md`
 
-- [ ] **步骤 1：改写 M11 范围**
+- [x] **步骤 1：改写 M11 范围**
 
 明确：
 
@@ -571,18 +571,18 @@ gh run watch <run-id> --exit-status
 - 不支持 HTTP、跳过 TLS 校验、Digest 和不受信任证书。
 - FTP/FTPS/SFTP/S3/MinIO 仅是未来候选能力，无承诺排期。
 
-- [ ] **步骤 2：补齐设计、部署和用户手册**
+- [x] **步骤 2：补齐设计、部署和用户手册**
 
 部署说明必须包含：
 
 - URL 和根路径填写规则。
 - Basic/Bearer 最小权限建议。
 - CA 信任链配置。
-- 反向代理 `PROPFIND`、`MOVE`、`Destination`、`Depth`、`If-Match` 头要求。
+- 反向代理 `PROPFIND`、`MOVE`、`Destination`、`Depth`、`Overwrite` 头要求。
 - 目标覆盖禁止策略。
 - 恢复状态和人工处理边界。
 
-- [ ] **步骤 3：填写验收清单和报告**
+- [x] **步骤 3：填写验收清单和报告**
 
 报告区分：
 
@@ -593,7 +593,7 @@ gh run watch <run-id> --exit-status
 
 每项附命令、时间、结果和证据链接；不得用“计划通过”代替实际结果。
 
-- [ ] **步骤 4：文档一致性检查**
+- [x] **步骤 4：文档一致性检查**
 
 ```powershell
 rg -n "M11-2|M11-3|下一阶段.*SFTP|下一阶段.*S3|暂不支持真实重命名|Digest" README.md docs
@@ -603,7 +603,7 @@ git diff --check
 
 预期：只在历史归档或“未来候选能力/明确不支持”上下文中出现未实现协议。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```powershell
 git add README.md docs
@@ -622,7 +622,7 @@ git commit -m "docs(m11): 完成 WebDAV 稳定版文档收口"
 - 新增：`docs/work-logs/progress-2026-07-26-v1.0.0-release.md`
 - 修改：`README.md`
 
-- [ ] **步骤 1：统一版本号**
+- [x] **步骤 1：统一版本号**
 
 将运行时、前端、根包和示例配置版本统一为 `1.0.0`，并搜索遗漏：
 
@@ -630,7 +630,7 @@ git commit -m "docs(m11): 完成 WebDAV 稳定版文档收口"
 rg -n "0\.11\.11|0\.10\.7" package.json frontend/package.json backend/app/core/config.py config README.md docs
 ```
 
-- [ ] **步骤 2：编写发布说明**
+- [x] **步骤 2：编写发布说明**
 
 发布说明必须包含：
 
@@ -641,7 +641,7 @@ rg -n "0\.11\.11|0\.10\.7" package.json frontend/package.json backend/app/core/c
 - 已知限制。
 - 后续 `1.0.x` 维护策略。
 
-- [ ] **步骤 3：提交版本升级**
+- [x] **步骤 3：提交版本升级**
 
 ```powershell
 git add package.json frontend/package.json backend/app/core/config.py config/config.example.toml README.md docs/releases/v1.0.0.md docs/work-logs/progress-2026-07-26-v1.0.0-release.md
@@ -655,7 +655,7 @@ git commit -m "release: 准备 v1.0.0 稳定版"
 - 更新：`docs/development/m11/M11-WebDAV验收报告.md`
 - 更新：`docs/work-logs/progress-2026-07-26-v1.0.0-release.md`
 
-- [ ] **步骤 1：运行本机发布门槛**
+- [x] **步骤 1：运行本机发布门槛**
 
 ```powershell
 npm.cmd run backend:test
@@ -668,7 +668,7 @@ npm.cmd run release:package
 
 预期：全部退出码为 0。
 
-- [ ] **步骤 2：检查发布包内容**
+- [x] **步骤 2：检查发布包内容**
 
 确认：
 
@@ -677,7 +677,7 @@ npm.cmd run release:package
 - 不包含 SQLite 数据库、日志、临时证书、集成测试密码或真实媒体文件。
 - 记录文件名、大小和 SHA-256。
 
-- [ ] **步骤 3：验证 Compose**
+- [x] **步骤 3：验证 Compose**
 
 在有 Docker 的 GitHub Actions 或 fnOS 环境执行：
 
@@ -740,11 +740,11 @@ git pull --ff-only origin develop
 
 ## 计划自检
 
-- [ ] 与已确认设计一致，只实现 WebDAV，不实现 FTP、FTPS、SFTP、S3 或 MinIO。
-- [ ] 不支持 HTTP WebDAV、TLS 绕过、Digest 或不受信任证书。
-- [ ] 远程恢复入口与任务归档语义完全分离。
-- [ ] 所有写操作继续经过权限、确认、远程写锁、幂等和审计。
-- [ ] API 和前端不返回或显示密码、Token、密文和私钥。
-- [ ] 集成测试不接触用户媒体目录和生产凭据。
-- [ ] 发布包只携带示例配置，不携带正式配置和运行数据。
+- [x] 与已确认设计一致，只实现 WebDAV，不实现 FTP、FTPS、SFTP、S3 或 MinIO。
+- [x] 不支持 HTTP WebDAV、TLS 绕过、Digest 或不受信任证书。
+- [x] 远程恢复入口与任务归档语义完全分离。
+- [x] 所有写操作继续经过权限、确认、远程写锁、幂等和审计。
+- [x] API 和前端不返回或显示密码、Token、密文和私钥。
+- [x] 集成测试不接触用户媒体目录和生产凭据。
+- [x] 发布包只携带示例配置，不携带正式配置和运行数据。
 - [ ] 只有真实 WebDAV CI、全量测试、构建、编码、打包和发布检查全部通过后，才宣告 `v1.0.0` 完成。

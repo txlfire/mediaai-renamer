@@ -11,10 +11,19 @@ WebDAV 后端主链路、恢复前端、容器集成环境和 GitHub Actions 真
 | 范围 | 环境 | 结果 | 证据 |
 | --- | --- | --- | --- |
 | WebDAV 真实协议 10 个场景 | GitHub Actions，Python 3.13，HTTPS WsgiDAV | 10/10 通过 | Actions run `30195539240` |
-| 后端单元与服务测试 | Windows 项目虚拟环境 | 待最终发布门槛补录 | `npm.cmd run backend:test` |
-| 前端测试与构建 | Windows，项目固定 Node 运行时 | 待最终发布门槛补录 | `frontend:test` / `frontend:build` |
-| 编码和差异检查 | Windows | 待最终发布门槛补录 | `check:encoding` / `git diff --check` |
-| 发布包内容与哈希 | Windows | 待打包后补录 | `releases/` |
+| WebDAV 与 Compose | GitHub Actions，Docker | 两份 Compose 解析通过，WebDAV 10/10 通过 | Actions run `30195986444` |
+| 后端单元与服务测试 | Windows 项目虚拟环境 | 314 个执行，304 个通过，10 个容器用例按设计跳过 | `npm.cmd run backend:test` |
+| 前端测试 | Windows，固定 Node 运行时 | 17 个测试文件、78 个用例通过 | Vitest |
+| 前端类型与构建 | Windows，固定 Node 运行时 | 类型检查通过，Vite 生产构建通过 | vue-tsc / Vite |
+| 编码和差异检查 | Windows | 通过 | `check:encoding` / `git diff --check` |
+| 发布包内容与哈希 | Windows | 5 个条目，内容检查通过 | `mediaai-renamer-frontend-v1.0.0.zip` |
+
+发布包：
+
+- 大小：`487367` 字节。
+- SHA-256：`bfd3ab8da9564d2a3c8bf621e13758aeaa8b7c2f2eadb0e9bdf5fba2c674e946`。
+- 包含：前端静态文件和 `config/config.example.toml`。
+- 不包含：正式 `config.toml`、SQLite、日志、证书、私钥、测试凭据或真实媒体文件。
 
 真实协议测试覆盖：
 
@@ -46,4 +55,4 @@ WebDAV 后端主链路、恢复前端、容器集成环境和 GitHub Actions 真
 
 ## 5. 发布判定
 
-只有最终后端测试、前端测试、类型检查、构建、编码检查、打包检查、发布包内容检查和发布工作流全部通过后，才可将本报告结论更新为 `v1.0.0` 已发布。
+本地与集成自动化门槛已通过。只有 `main` 合并、标签、GitHub Release 和 GHCR 镜像工作流完成后，才可将本报告结论更新为 `v1.0.0` 已发布。
