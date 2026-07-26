@@ -9,6 +9,8 @@ on:
       - "backend/tests/integration/**"
       - "scripts/test-webdav-integration.sh"
       - "tests/integration/webdav/**"
+      - "docker-compose.yml"
+      - "docker-compose.ghcr.yml"
       - ".github/workflows/webdav-integration.yml"
   push:
     branches:
@@ -21,6 +23,8 @@ on:
       - "backend/tests/integration/**"
       - "scripts/test-webdav-integration.sh"
       - "tests/integration/webdav/**"
+      - "docker-compose.yml"
+      - "docker-compose.ghcr.yml"
       - ".github/workflows/webdav-integration.yml"
   workflow_dispatch:
 
@@ -46,6 +50,11 @@ jobs:
 
       - name: Install backend dependencies
         run: python -m pip install -r backend/requirements.txt
+
+      - name: Validate production Compose files
+        run: |
+          docker compose -f docker-compose.yml config >/dev/null
+          docker compose -f docker-compose.ghcr.yml config >/dev/null
 
       - name: Run HTTPS WebDAV integration tests
         run: bash scripts/test-webdav-integration.sh
