@@ -725,7 +725,7 @@ gh release view v1.0.0
 
 核对 GitHub Release 资产和 GHCR 标签均存在。任何工作流失败必须修复并重新发布，不得把排队或运行中状态记录为成功。
 
-- [ ] **步骤 8：切回维护分支**
+- [x] **步骤 8：切回维护分支**
 
 ```powershell
 git switch develop
