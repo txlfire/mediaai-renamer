@@ -27,8 +27,16 @@ case "${tempRoot}" in
 esac
 
 cleanup() {
+  exitCode=$?
+  trap - EXIT
+  if [[ "${exitCode}" -ne 0 ]]; then
+    mkdir -p "${root}/.codex/test-artifacts"
+    docker compose -f "${composeFile}" logs --no-color webdav \
+      >"${root}/.codex/test-artifacts/webdav-integration.log" 2>&1 || true
+  fi
   docker compose -f "${composeFile}" down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf -- "${tempRoot}"
+  exit "${exitCode}"
 }
 trap cleanup EXIT
 

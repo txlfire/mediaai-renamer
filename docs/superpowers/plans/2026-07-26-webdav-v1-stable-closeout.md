@@ -490,7 +490,7 @@ git commit -m "test(m11): 增加 WebDAV HTTPS 集成环境"
 - 新增：`.github/workflows/webdav-integration.yml`
 - 条件修改：`.github/workflows/docker-ghcr.yml`
 
-- [ ] **步骤 1：新增可重复执行工作流**
+- [x] **步骤 1：新增可重复执行工作流**
 
 触发条件：
 
@@ -511,18 +511,16 @@ git commit -m "test(m11): 增加 WebDAV HTTPS 集成环境"
 
 失败时上传 Compose 日志，但脚本必须先脱敏，日志中不得出现测试密码或证书私钥。
 
-- [ ] **步骤 2：检查 GHCR 稳定标签规则**
+- [x] **步骤 2：检查 GHCR 稳定标签规则**
 
-确认 `v1.0.0` 标签产生：
+确认 `v1.0.0` 标签为后端和前端镜像分别产生：
 
-- `ghcr.io/txlfire/mediaai-renamer:1.0.0`
-- `ghcr.io/txlfire/mediaai-renamer:1.0`
-- `ghcr.io/txlfire/mediaai-renamer:1`
-- `ghcr.io/txlfire/mediaai-renamer:latest`
+- `ghcr.io/txlfire/mediaai-renamer-backend:1.0.0`、`:1.0`、`:1`、`:latest`。
+- `ghcr.io/txlfire/mediaai-renamer-frontend:1.0.0`、`:1.0`、`:1`、`:latest`。
 
 若现有 `docker/metadata-action` 已满足，不做无关修改。
 
-- [ ] **步骤 3：静态检查工作流**
+- [x] **步骤 3：静态检查工作流**
 
 ```powershell
 git diff --check
