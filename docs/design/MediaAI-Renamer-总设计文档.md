@@ -16,6 +16,7 @@
 - M9 设计手册：[M9-design-manual.md](M9-design-manual.md)
 - M10 开发计划：[../development/m10/M10-多站点元数据源开发计划.md](../development/m10/M10-多站点元数据源开发计划.md)
 - M10 设计手册：[M10-design-manual.md](M10-design-manual.md)
+- M11 开发计划：[../development/m11/M11-远程协议扩展开发计划.md](../development/m11/M11-远程协议扩展开发计划.md)
 
 ## 2. 产品目标
 
@@ -44,7 +45,7 @@ MediaAI Renamer 用于将下载、转存或共享目录中的影视文件整理�
 | M8 | 已完成 | 命名规则高级配置二期 |
 | M9 | 已完成 | 权限、历史、回滚、审计和任务治理 |
 | M10 | 已发布 `v0.10.7` | 多站点元数据源 |
-| M11 | 已规划，未开始 | WebDAV / FTP / SFTP / S3 等远程协议扩展 |
+| M11 | 开发中（M11-1F） | WebDAV 后端闭环已完成；SFTP / S3 与协议集成验证待推进 |
 
 ## 4. 阶段回溯
 
@@ -306,7 +307,7 @@ MediaAI Renamer 用于将下载、转存或共享目录中的影视文件整理�
 
 建议继续按以下顺序推进：
 
-1. M11：WebDAV / SFTP / S3 远程协议扩展，FTPS / FTP 兼容性评估。
+1. M11：先完成 WebDAV 协议集成环境验证，再推进 SFTP、S3 和 FTPS / FTP 兼容性评估。
 
 理由：
 

@@ -1,5 +1,6 @@
 """M3 rename operation tests."""
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -294,13 +295,21 @@ class RenameOperationDryRunTest(unittest.TestCase):
                 "SELECT status FROM rename_previews WHERE id = 3"
             ).fetchone()
             remote_row = connection.execute(
-                "SELECT operation_type, source_path, target_path, status FROM remote_operation_items"
+                "SELECT operation_type, source_path, target_path, status, recovery_json "
+                "FROM remote_operation_items"
             ).fetchone()
         self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", media_row[0])
         self.assertEqual("Movie.Safe.mkv", media_row[1])
         self.assertEqual(".mkv", media_row[2])
         self.assertEqual("renamed", preview_row[0])
-        self.assertEqual(("rename", "https://nas.example/dav/Movie.2024.1080p.mkv", "https://nas.example/dav/Movie.Safe.mkv", "completed"), remote_row)
+        self.assertEqual(
+            ("rename", "https://nas.example/dav/Movie.2024.1080p.mkv", "https://nas.example/dav/Movie.Safe.mkv", "completed"),
+            remote_row[:4],
+        )
+        recovery = json.loads(remote_row[4])
+        self.assertEqual(operation.id, recovery["operation_id"])
+        self.assertEqual(executed.items[0].id, recovery["operation_item_id"])
+        self.assertEqual(3, recovery["rename_preview_id"])
 
     def test_webdav_execute_is_blocked_by_active_remote_lock(self):
         self._insert_webdav_preview()

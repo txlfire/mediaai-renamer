@@ -16,6 +16,7 @@ from app.api.pending_files import router as pending_files_router
 from app.api.rename_operations import router as rename_operations_router
 from app.api.rename_previews import router as rename_previews_router
 from app.api.rename_rollback_plans import router as rename_rollback_plans_router
+from app.api.remote_operations import router as remote_operations_router
 from app.api.scan_jobs import router as scan_jobs_router
 from app.api.settings import router as settings_router
 from app.api.shared_protocols import router as shared_protocols_router
@@ -66,6 +67,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(rename_previews_router)
     app.include_router(rename_operations_router)
     app.include_router(rename_rollback_plans_router)
+    app.include_router(remote_operations_router)
     app.include_router(pending_files_router)
     app.include_router(logs_router)
     app.include_router(operation_logs_router)

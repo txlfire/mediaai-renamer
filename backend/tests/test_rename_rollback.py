@@ -1,5 +1,6 @@
 """M9 rename rollback tests."""
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -162,7 +163,8 @@ class RenameRollbackTest(unittest.TestCase):
                 "SELECT status, message FROM rename_previews WHERE id = 9"
             ).fetchone()
             remote_row = connection.execute(
-                "SELECT operation_type, source_path, target_path, status FROM remote_operation_items "
+                "SELECT operation_type, source_path, target_path, status, recovery_json "
+                "FROM remote_operation_items "
                 "WHERE operation_type = 'rollback'"
             ).fetchone()
 
@@ -177,8 +179,12 @@ class RenameRollbackTest(unittest.TestCase):
                 "https://nas.example/dav/Movie.2024.1080p.mkv",
                 "completed",
             ),
-            remote_row,
+            remote_row[:4],
         )
+        recovery = json.loads(remote_row[4])
+        self.assertEqual(plan.id, recovery["rollback_plan_id"])
+        self.assertEqual(executed.items[0].id, recovery["rollback_item_id"])
+        self.assertEqual(9, recovery["operation_item_id"])
 
     def _insert_webdav_renamed_operation(self):
         with closing(sqlite3.connect(self.settings.database_path)) as connection:

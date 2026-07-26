@@ -475,6 +475,8 @@ def execute_rename_rollback_plan(settings: AppSettings, plan_id: int) -> RenameR
                         recovery={
                             "operation_id": plan.operation_id,
                             "operation_item_id": item.operation_item_id,
+                            "rollback_plan_id": plan_id,
+                            "rollback_item_id": item.id,
                         },
                     )
                     try:
@@ -494,6 +496,7 @@ def execute_rename_rollback_plan(settings: AppSettings, plan_id: int) -> RenameR
                                 "operation_id": plan.operation_id,
                                 "operation_item_id": item.operation_item_id,
                                 "rollback_plan_id": plan_id,
+                                "rollback_item_id": item.id,
                             },
                         )
                         release_remote_operation_lock(settings, lock_key, lock.lease_token)

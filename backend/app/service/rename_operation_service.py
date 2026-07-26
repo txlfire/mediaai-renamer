@@ -392,7 +392,11 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                         idempotency_key=f"rename-operation:{operation_id}:item:{item.id}",
                         source_path=item.source_path,
                         target_path=item.target_path,
-                        recovery={"rename_preview_id": item.rename_preview_id},
+                        recovery={
+                            "operation_id": operation_id,
+                            "operation_item_id": item.id,
+                            "rename_preview_id": item.rename_preview_id,
+                        },
                     )
                     try:
                         context = get_media_source_protocol_context(settings, media_source_id)
@@ -407,7 +411,11 @@ def execute_rename_operation(settings: AppSettings, operation_id: int) -> Rename
                             settings,
                             remote_item.id,
                             "completed",
-                            recovery={"rename_preview_id": item.rename_preview_id, "operation_id": operation_id},
+                            recovery={
+                                "operation_id": operation_id,
+                                "operation_item_id": item.id,
+                                "rename_preview_id": item.rename_preview_id,
+                            },
                         )
                         release_remote_operation_lock(settings, lock_key, lock.lease_token)
                         lock = None

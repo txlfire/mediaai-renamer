@@ -297,6 +297,19 @@ def create_remote_operation_item(
     return _row_to_item(row)
 
 
+def get_remote_operation_item(settings: AppSettings, item_id: int) -> RemoteOperationItem:
+    """查询单个远程操作明细。"""
+
+    with closing(_connect(settings)) as connection:
+        row = connection.execute(
+            "SELECT * FROM remote_operation_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("远程操作明细不存在")
+    return _row_to_item(row)
+
+
 def update_remote_operation_item_status(
     settings: AppSettings,
     item_id: int,
