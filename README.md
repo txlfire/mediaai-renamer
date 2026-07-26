@@ -4,9 +4,9 @@ MediaAI Renamer 是一个面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等�
 
 当前版本：`1.0.0`
 
-最近正式发布版本：`v0.10.7`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v0.10.7)
+最近正式发布版本：`v1.0.0`，发布页：[GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.0.0)
 
-当前阶段：M1-M11 核心产品功能已完成，正在执行 `v1.0.0` 稳定版发布验收。
+当前阶段：M1-M11 核心产品功能已完成，`v1.0.0` 已进入稳定维护期。
 
 ## 当前能力
 

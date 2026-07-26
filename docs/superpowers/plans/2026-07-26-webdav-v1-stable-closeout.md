@@ -688,7 +688,7 @@ docker compose -f docker-compose.ghcr.yml config
 
 预期：两份配置解析成功。
 
-- [ ] **步骤 4：补录验收证据并提交**
+- [x] **步骤 4：补录验收证据并提交**
 
 ```powershell
 git add docs/development/m11/M11-WebDAV验收报告.md docs/work-logs/progress-2026-07-26-v1.0.0-release.md
@@ -696,7 +696,7 @@ git commit -m "docs: 记录 v1.0.0 验收结果"
 git push origin develop
 ```
 
-- [ ] **步骤 5：合并主线并打标签**
+- [x] **步骤 5：合并主线并打标签**
 
 先确认 `develop` CI 全绿，再执行：
 
@@ -709,13 +709,13 @@ git push origin main
 git push origin v1.0.0
 ```
 
-- [ ] **步骤 6：创建 GitHub Release**
+- [x] **步骤 6：创建 GitHub Release**
 
 ```powershell
 gh release create v1.0.0 releases/mediaai-renamer-frontend-v1.0.0.zip --title "MediaAI Renamer v1.0.0" --notes-file docs/releases/v1.0.0.md
 ```
 
-- [ ] **步骤 7：等待镜像发布并核对**
+- [x] **步骤 7：等待镜像发布并核对**
 
 ```powershell
 gh run list --workflow docker-ghcr.yml --branch v1.0.0 --limit 3
@@ -747,4 +747,4 @@ git pull --ff-only origin develop
 - [x] API 和前端不返回或显示密码、Token、密文和私钥。
 - [x] 集成测试不接触用户媒体目录和生产凭据。
 - [x] 发布包只携带示例配置，不携带正式配置和运行数据。
-- [ ] 只有真实 WebDAV CI、全量测试、构建、编码、打包和发布检查全部通过后，才宣告 `v1.0.0` 完成。
+- [x] 只有真实 WebDAV CI、全量测试、构建、编码、打包和发布检查全部通过后，才宣告 `v1.0.0` 完成。

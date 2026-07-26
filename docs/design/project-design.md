@@ -17,7 +17,7 @@ MediaAI Renamer 是面向 NAS、fnOS、Emby、Jellyfin、Plex、Kodi 等场景�
 
 ## 3. 当前阶段状态
 
-M1-M11 核心产品功能已完成，正在执行 `v1.0.0` 稳定版发布验收。
+M1-M11 核心产品功能已完成，并以 `v1.0.0` 进入稳定维护期。
 
 已完成：
 

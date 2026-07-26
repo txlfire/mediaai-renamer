@@ -4,7 +4,7 @@
 
 ## 1. 结论
 
-WebDAV 后端主链路、恢复前端、容器集成环境和 GitHub Actions 真实协议测试已经完成。fnOS / 实际 NAS 的人工兼容性验证尚未执行，因此该项明确保留为部署验收项，不以自动化结果替代。
+WebDAV 后端主链路、恢复前端、容器集成环境、GitHub Actions 真实协议测试和 `v1.0.0` 稳定版发布已经完成。fnOS / 实际 NAS 的人工兼容性验证尚未执行，因此该项明确保留为部署验收项，不以自动化结果替代。
 
 ## 2. 已验证
 
@@ -17,6 +17,9 @@ WebDAV 后端主链路、恢复前端、容器集成环境和 GitHub Actions 真
 | 前端类型与构建 | Windows，固定 Node 运行时 | 类型检查通过，Vite 生产构建通过 | vue-tsc / Vite |
 | 编码和差异检查 | Windows | 通过 | `check:encoding` / `git diff --check` |
 | 发布包内容与哈希 | Windows | 5 个条目，内容检查通过 | `mediaai-renamer-frontend-v1.0.0.zip` |
+| 主线 WebDAV 与 Compose 复验 | GitHub Actions | 通过 | Actions run `30196087700` |
+| GHCR 后端和前端镜像 | GitHub Actions | 全部构建并推送 | Actions run `30196090224` |
+| GitHub Release | GitHub | 正式发布 | `https://github.com/txlfire/mediaai-renamer/releases/tag/v1.0.0` |
 
 发布包：
 
@@ -55,4 +58,4 @@ WebDAV 后端主链路、恢复前端、容器集成环境和 GitHub Actions 真
 
 ## 5. 发布判定
 
-本地与集成自动化门槛已通过。只有 `main` 合并、标签、GitHub Release 和 GHCR 镜像工作流完成后，才可将本报告结论更新为 `v1.0.0` 已发布。
+本地与集成自动化门槛、`main` 合并、`v1.0.0` 标签、GitHub Release 和 GHCR 镜像工作流全部通过，`v1.0.0` 已正式发布。fnOS / 实际 NAS 人工兼容性继续作为具体部署环境的验收项。
