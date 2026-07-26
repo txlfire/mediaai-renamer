@@ -417,7 +417,7 @@ git commit -m "fix(m11): 同步 WebDAV 稳定版能力说明"
 - 修改：`.gitignore`
 - 修改：`package.json`
 
-- [ ] **步骤 1：创建隔离 HTTPS WebDAV 服务**
+- [x] **步骤 1：创建隔离 HTTPS WebDAV 服务**
 
 容器要求：
 
@@ -427,7 +427,7 @@ git commit -m "fix(m11): 同步 WebDAV 稳定版能力说明"
 - 仅使用测试账号和临时卷，不读取项目 `config.toml`、数据库或真实媒体目录。
 - 对外暴露 `9443`，仅用于测试。
 
-- [ ] **步骤 2：先写真实协议测试**
+- [x] **步骤 2：先写真实协议测试**
 
 `test_webdav_e2e.py` 由 `MEDIAAI_WEBDAV_INTEGRATION=1` 显式启用，覆盖：
 
@@ -442,7 +442,7 @@ git commit -m "fix(m11): 同步 WebDAV 稳定版能力说明"
 9. 源目标同时存在时进入 `recovery_required`。
 10. 活跃写锁返回冲突。
 
-- [ ] **步骤 3：实现 Windows/Linux 编排脚本**
+- [x] **步骤 3：实现 Windows/Linux 编排脚本**
 
 脚本必须：
 
@@ -455,7 +455,7 @@ git commit -m "fix(m11): 同步 WebDAV 稳定版能力说明"
 - 在 `finally`/`trap` 中 `docker compose down -v`。
 - 不打印密码、Token 或私钥内容。
 
-- [ ] **步骤 4：增加 npm 命令和忽略项**
+- [x] **步骤 4：增加 npm 命令和忽略项**
 
 ```json
 "webdav:test": "powershell -ExecutionPolicy Bypass -File scripts/test-webdav-integration.ps1",
@@ -464,7 +464,7 @@ git commit -m "fix(m11): 同步 WebDAV 稳定版能力说明"
 
 忽略 `tests/integration/webdav/.tmp/`。
 
-- [ ] **步骤 5：本地静态验证**
+- [x] **步骤 5：本地静态验证**
 
 本机无 Docker 时运行：
 
@@ -476,7 +476,7 @@ npm.cmd run check:encoding
 
 预期：明确记录 Docker 不可用；编码和差异检查通过。不得把静态检查表述为真实协议测试通过。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```powershell
 git add .gitignore package.json backend/tests/integration/test_webdav_e2e.py tests/integration/webdav scripts/test-webdav-integration.ps1 scripts/test-webdav-integration.sh

@@ -1,0 +1,15 @@
+services:
+  webdav:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mediaai-webdav-test
+    environment:
+      WEBDAV_USERNAME: ${MEDIAAI_WEBDAV_TEST_USERNAME:-mediaai-test}
+      WEBDAV_PASSWORD: ${MEDIAAI_WEBDAV_TEST_PASSWORD:-mediaai-test-only-password}
+    ports:
+      - "127.0.0.1:9443:9443"
+    volumes:
+      - ./.tmp/certs:/certs
+      - ./.tmp/data:/data
+    restart: "no"

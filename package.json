@@ -20,6 +20,8 @@
     "backend:test": "powershell -ExecutionPolicy Bypass -File scripts/run-backend-tests.ps1",
     "check:encoding": "powershell -ExecutionPolicy Bypass -File scripts/check-encoding.ps1",
     "backend:test:linux": "bash scripts/run-backend-tests.sh",
+    "webdav:test": "powershell -ExecutionPolicy Bypass -File scripts/test-webdav-integration.ps1",
+    "webdav:test:linux": "bash scripts/test-webdav-integration.sh",
     "release:package": "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "release:package:linux": "bash scripts/package-release.sh",
     "release:publish": "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Publish",

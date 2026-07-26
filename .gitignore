@@ -23,6 +23,7 @@ data/*
 !data/.gitkeep
 logs/
 releases/
+tests/integration/webdav/.tmp/
 
 # Local agent/runtime artifacts
 .codex/
