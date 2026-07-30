@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   bootstrapAdmin: vi.fn(),
   changePassword: vi.fn(),
   clearAuthToken: vi.fn(),
+  fetchBootstrapStatus: vi.fn(),
   fetchCurrentUser: vi.fn(),
   getAuthToken: vi.fn(),
   login: vi.fn(),
@@ -57,8 +58,13 @@ describe("auth store", () => {
     api.getAuthToken.mockReturnValue("token-123");
     const store = useAuthStore();
 
-    await store.login("admin", "ChangeMe123!");
+    await store.login("admin", "ChangeMe123!", true);
 
+    expect(api.login).toHaveBeenCalledWith({
+      username: "admin",
+      password: "ChangeMe123!",
+      rememberLogin: true,
+    });
     expect(store.currentUser?.username).toBe("admin");
     expect(store.isAuthenticated).toBe(true);
     expect(store.hasPermission("settings:write")).toBe(true);
@@ -74,6 +80,7 @@ describe("auth store", () => {
       user,
     });
     const store = useAuthStore();
+    store.bootstrapAvailable = true;
 
     await store.bootstrapAndLogin("admin", "系统管理员", "ChangeMe123!");
 
@@ -83,6 +90,20 @@ describe("auth store", () => {
       password: "ChangeMe123!",
     });
     expect(store.currentUser?.displayName).toBe("系统管理员");
+    expect(store.bootstrapAvailable).toBe(false);
+  });
+
+  it("loads bootstrap availability and hides the entry when the request fails", async () => {
+    api.fetchBootstrapStatus
+      .mockResolvedValueOnce({ available: true })
+      .mockRejectedValueOnce(new Error("network down"));
+    const store = useAuthStore();
+
+    await store.loadBootstrapStatus();
+    expect(store.bootstrapAvailable).toBe(true);
+
+    await store.loadBootstrapStatus();
+    expect(store.bootstrapAvailable).toBe(false);
   });
 
   it("loads stored token session and clears invalid sessions", async () => {

@@ -438,6 +438,22 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         min_value=0,
         max_value=3650,
     ),
+    "auth.remember_login_days": SettingDefinition(
+        key="auth.remember_login_days",
+        category="operations",
+        default=7,
+        value_type="int",
+        description="Remember-login session duration in days",
+        min_value=1,
+        max_value=30,
+    ),
+    "auth.admin_bootstrap_enabled": SettingDefinition(
+        key="auth.admin_bootstrap_enabled",
+        category="operations",
+        default=True,
+        value_type="bool",
+        description="Allow administrator bootstrap when no local users exist",
+    ),
     "logging.retention_days": SettingDefinition(
         key="logging.retention_days",
         category="logging",

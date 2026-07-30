@@ -20,6 +20,7 @@ import {
   executeRenameOperation,
   executeRenameRollbackPlan,
   fetchAuditEvents,
+  fetchBootstrapStatus,
   fetchMetadataProviderConfigs,
   fetchSettings,
   fetchLocalDirectories,
@@ -86,6 +87,16 @@ function installLocalStorageMock() {
   });
 }
 
+function installSessionStorageMock() {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", {
+    clear: () => storage.clear(),
+    getItem: (key: string) => storage.get(key) ?? null,
+    removeItem: (key: string) => storage.delete(key),
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+}
+
 describe("getHealth", () => {
   it("uses the API base path for backend requests", () => {
     expect(apiClient.defaults.baseURL).toBe("/api");
@@ -126,10 +137,12 @@ describe("getHealth", () => {
 describe("auth API client", () => {
   beforeEach(() => {
     installLocalStorageMock();
+    installSessionStorageMock();
     localStorage.clear();
+    sessionStorage.clear();
   });
 
-  it("uses auth endpoints and persists token after login", async () => {
+  it("uses auth endpoints and stores short session token in sessionStorage", async () => {
     const calls: string[] = [];
     const user: AuthUser = {
       id: 1,
@@ -174,6 +187,8 @@ describe("auth API client", () => {
     );
     const loginResult = await login({ username: "admin", password: "ChangeMe123!" }, httpClient);
     expect(getAuthToken()).toBe("token-123");
+    expect(sessionStorage.getItem("mediaai-auth-token")).toBe("token-123");
+    expect(localStorage.getItem("mediaai-auth-token")).toBe(null);
     await fetchCurrentUser(httpClient);
     await changePassword({ currentPassword: "123456", newPassword: "ChangeMe123!" }, httpClient);
     await resetAdminPassword(httpClient);
@@ -216,6 +231,50 @@ describe("auth API client", () => {
       "GET /audit-events?event_type=auth.login&page=1&page_size=20",
       "POST /auth/logout:{}",
     ]);
+  });
+
+  it("stores remember-login token in localStorage and clears both stores on logout", async () => {
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(): Promise<{ data: T }> => ({ data: undefined as T }),
+      post: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        if (url === "/auth/login") {
+          return {
+            data: {
+              accessToken: "persistent-token",
+              tokenType: "bearer",
+              expiresAt: "2026-08-05T00:00:00+00:00",
+              user: {} as AuthUser,
+            } as T,
+          };
+        }
+        return { data: undefined as T };
+      },
+    };
+
+    await login(
+      { username: "admin", password: "ChangeMe123!", rememberLogin: true },
+      httpClient,
+    );
+
+    expect(localStorage.getItem("mediaai-auth-token")).toBe("persistent-token");
+    expect(sessionStorage.getItem("mediaai-auth-token")).toBe(null);
+
+    sessionStorage.setItem("mediaai-auth-token", "stale-token");
+    await logout(httpClient);
+
+    expect(localStorage.getItem("mediaai-auth-token")).toBe(null);
+    expect(sessionStorage.getItem("mediaai-auth-token")).toBe(null);
+  });
+
+  it("loads the minimal administrator bootstrap status", async () => {
+    const httpClient: ApiHttpClient = {
+      get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+        expect(url).toBe("/auth/bootstrap-status");
+        return { data: { available: true } as T };
+      },
+    };
+
+    await expect(fetchBootstrapStatus(httpClient)).resolves.toEqual({ available: true });
   });
 });
 

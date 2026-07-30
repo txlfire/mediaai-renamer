@@ -4,6 +4,7 @@ import {
   bootstrapAdmin,
   changePassword as changePasswordApi,
   clearAuthToken,
+  fetchBootstrapStatus,
   fetchCurrentUser,
   getAuthToken,
   login as loginApi,
@@ -16,6 +17,7 @@ import { zhCnMessages as messages } from "../locales/zh-CN";
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     currentUser: null as AuthUser | null,
+    bootstrapAvailable: false,
     loading: false,
     errorMessage: "",
   }),
@@ -25,6 +27,15 @@ export const useAuthStore = defineStore("auth", {
   actions: {
     hasPermission(permission: string) {
       return this.currentUser?.permissions.includes(permission) ?? false;
+    },
+
+    async loadBootstrapStatus() {
+      try {
+        const result = await fetchBootstrapStatus();
+        this.bootstrapAvailable = result.available;
+      } catch {
+        this.bootstrapAvailable = false;
+      }
     },
 
     clearSession(message = "") {
@@ -49,11 +60,11 @@ export const useAuthStore = defineStore("auth", {
       }
     },
 
-    async login(username: string, password: string) {
+    async login(username: string, password: string, rememberLogin = false) {
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await loginApi({ username, password });
+        const result = await loginApi({ username, password, rememberLogin });
         this.currentUser = result.user;
       } catch (error) {
         this.clearSession(error instanceof Error ? error.message : messages.auth.loginFailed);
@@ -68,6 +79,7 @@ export const useAuthStore = defineStore("auth", {
       this.errorMessage = "";
       try {
         await bootstrapAdmin({ username, displayName, password });
+        this.bootstrapAvailable = false;
         const result = await loginApi({ username, password });
         this.currentUser = result.user;
       } catch (error) {

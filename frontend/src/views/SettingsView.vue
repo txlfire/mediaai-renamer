@@ -139,6 +139,8 @@ const form = reactive({
   cleanIllegalChars: true,
   textTruncateBytes: "50",
   pathTruncateBytes: "80",
+  rememberLoginDays: "7",
+  adminBootstrapEnabled: true,
   logRetentionDays: "30",
   logLevel: "INFO",
   logPath: "logs",
@@ -614,6 +616,8 @@ function syncForm() {
   form.cleanIllegalChars = Boolean(settingValue("naming.clean_illegal_chars", true));
   form.textTruncateBytes = String(settingValue("naming.text_truncate_bytes", 50));
   form.pathTruncateBytes = String(settingValue("naming.path_truncate_bytes", 80));
+  form.rememberLoginDays = String(settingValue("auth.remember_login_days", 7));
+  form.adminBootstrapEnabled = Boolean(settingValue("auth.admin_bootstrap_enabled", true));
   form.logRetentionDays = String(settingValue("operations.log_retention_days", 30));
   form.logRetentionDays = String(settingValue("logging.retention_days", Number(form.logRetentionDays || 30)));
   form.logLevel = String(settingValue("logging.level", "INFO"));
@@ -652,6 +656,7 @@ function onlyDigits(
     | "scanBatchIntervalSeconds"
     | "textTruncateBytes"
     | "pathTruncateBytes"
+    | "rememberLoginDays"
     | "logRetentionDays"
     | "logArchiveAfterDays"
     | "logDefaultLimit"
@@ -947,6 +952,8 @@ async function importNamingTemplateFile(event: Event) {
 async function saveOperationSettings() {
   try {
     await settingsStore.saveSettings({
+      "auth.remember_login_days": Number(form.rememberLoginDays || 7),
+      "auth.admin_bootstrap_enabled": form.adminBootstrapEnabled,
       "operations.log_retention_days": Number(form.logRetentionDays || 30),
       "logging.retention_days": Number(form.logRetentionDays || 30),
       "logging.level": form.logLevel,
@@ -3078,6 +3085,24 @@ onMounted(async () => {
 
         <el-form v-else-if="activeCategory === 'operations'" label-position="top" class="settings-form">
           <div class="settings-grid">
+            <el-form-item
+              v-if="!settingsWriteDisabled"
+              :label="pageText.operations.rememberLoginDays"
+              :title="pageText.operations.rememberLoginDaysHint"
+            >
+              <el-input
+                v-model="form.rememberLoginDays"
+                maxlength="2"
+                @input="onlyDigits('rememberLoginDays')"
+              />
+            </el-form-item>
+            <el-form-item
+              v-if="!settingsWriteDisabled"
+              :label="pageText.operations.adminBootstrapEnabled"
+              :title="pageText.operations.adminBootstrapEnabledHint"
+            >
+              <el-switch v-model="form.adminBootstrapEnabled" />
+            </el-form-item>
             <el-form-item :label="pageText.operations.logRetentionDays">
               <el-input v-model="form.logRetentionDays" maxlength="4" @input="onlyDigits('logRetentionDays')" />
             </el-form-item>

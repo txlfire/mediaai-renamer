@@ -15,6 +15,7 @@ from app.service.auth_service import (
     bootstrap_admin,
     change_password,
     get_user_by_token,
+    is_admin_bootstrap_available,
     login,
     login_result_to_dict,
     logout,
@@ -39,6 +40,7 @@ class LoginRequest(BaseModel):
 
     username: str
     password: str
+    remember_login: bool = Field(default=False, alias="rememberLogin")
 
 
 class ChangePasswordRequest(BaseModel):
@@ -106,6 +108,15 @@ def require_authenticated_user():
     return dependency
 
 
+@router.get("/bootstrap-status")
+def bootstrap_status_api(request: Request):
+    """返回当前是否允许初始化首个管理员。"""
+
+    return {
+        "available": is_admin_bootstrap_available(request.app.state.settings),
+    }
+
+
 @router.post("/bootstrap-admin", status_code=201)
 def bootstrap_admin_api(payload: BootstrapAdminRequest, request: Request):
     """首次初始化本地管理员。"""
@@ -123,7 +134,7 @@ def bootstrap_admin_api(payload: BootstrapAdminRequest, request: Request):
             event_type="auth.bootstrap",
             action="bootstrap_admin",
             result="failed",
-            summary="初始化管理员失败：已存在用户",
+            summary="初始化管理员失败：当前不可用",
             target_type="user",
             target_id=payload.username,
             actor_name=payload.username,
@@ -165,7 +176,12 @@ def login_api(payload: LoginRequest, request: Request):
     """登录并返回访问 token。"""
 
     try:
-        result = login(request.app.state.settings, payload.username, payload.password)
+        result = login(
+            request.app.state.settings,
+            payload.username,
+            payload.password,
+            remember_login=payload.remember_login,
+        )
     except InvalidCredentialsError as exc:
         record_audit_event(
             request.app.state.settings,
@@ -189,7 +205,10 @@ def login_api(payload: LoginRequest, request: Request):
         target_type="user",
         target_id=result.user.id,
         actor=result.user,
-        detail={"username": result.user.username},
+        detail={
+            "username": result.user.username,
+            "remember_login": payload.remember_login,
+        },
         **_audit_request_context(request),
     )
     return login_result_to_dict(result)

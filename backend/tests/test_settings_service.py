@@ -84,6 +84,8 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual(50, effective["naming.text_truncate_bytes"])
             self.assertEqual(80, effective["naming.path_truncate_bytes"])
             self.assertEqual(30, effective["operations.log_retention_days"])
+            self.assertEqual(7, effective["auth.remember_login_days"])
+            self.assertEqual(True, effective["auth.admin_bootstrap_enabled"])
             self.assertEqual(200, effective["operations.log_default_limit"])
             self.assertEqual(True, effective["operations.force_dry_run"])
             self.assertEqual(True, effective["operations.require_second_confirmation"])
@@ -164,6 +166,8 @@ class SettingsServiceTest(unittest.TestCase):
                 {"ai.max_retries": "-1"},
                 {"ai.max_retries": "11"},
                 {"scan.minimum_file_size": "-1"},
+                {"auth.remember_login_days": "0"},
+                {"auth.remember_login_days": "31"},
                 {"ai.active_profile_id": ""},
                 {"ai.provider_profiles": [{"id": "", "provider": "deepseek", "model": "deepseek-chat"}]},
                 {"ai.provider_profiles": [{"id": "p1", "provider": "bad", "model": "m"}]},

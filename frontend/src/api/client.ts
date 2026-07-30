@@ -27,9 +27,14 @@ export type BootstrapAdminPayload = {
   password: string;
 };
 
+export type BootstrapStatus = {
+  available: boolean;
+};
+
 export type LoginPayload = {
   username: string;
   password: string;
+  rememberLogin?: boolean;
 };
 
 export type ChangePasswordPayload = {
@@ -886,23 +891,36 @@ export const apiClient = axios.create({
 
 const AUTH_TOKEN_STORAGE_KEY = "mediaai-auth-token";
 
-function canUseLocalStorage() {
-  return typeof globalThis.localStorage !== "undefined";
+function canUseStorage(storage: Storage | undefined): storage is Storage {
+  return typeof storage !== "undefined";
 }
 
 export function getAuthToken(): string | null {
-  return canUseLocalStorage() ? globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) : null;
+  const sessionToken = canUseStorage(globalThis.sessionStorage)
+    ? globalThis.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+    : null;
+  if (sessionToken) {
+    return sessionToken;
+  }
+  return canUseStorage(globalThis.localStorage)
+    ? globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+    : null;
 }
 
-export function setAuthToken(token: string) {
-  if (canUseLocalStorage()) {
-    globalThis.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+export function setAuthToken(token: string, persistent = false) {
+  clearAuthToken();
+  const storage = persistent ? globalThis.localStorage : globalThis.sessionStorage;
+  if (canUseStorage(storage)) {
+    storage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
   }
 }
 
 export function clearAuthToken() {
-  if (canUseLocalStorage()) {
+  if (canUseStorage(globalThis.localStorage)) {
     globalThis.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  }
+  if (canUseStorage(globalThis.sessionStorage)) {
+    globalThis.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
   }
 }
 
@@ -940,6 +958,17 @@ export async function bootstrapAdmin(
   }
 }
 
+export async function fetchBootstrapStatus(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<BootstrapStatus> {
+  try {
+    const response = await httpClient.get<BootstrapStatus>("/auth/bootstrap-status");
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
+}
+
 export async function login(
   payload: LoginPayload,
   httpClient: ApiHttpClient = apiClient,
@@ -947,7 +976,7 @@ export async function login(
   const post = requirePost(httpClient);
   try {
     const response = await post<LoginResult>("/auth/login", payload);
-    setAuthToken(response.data.accessToken);
+    setAuthToken(response.data.accessToken, payload.rememberLogin === true);
     return response.data;
   } catch (error) {
     throw new Error(apiErrorMessage(error));

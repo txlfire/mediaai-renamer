@@ -20,7 +20,8 @@ batch_interval_seconds = 1
 minimum_file_size = 0
 
 [auth]
-default_admin_enabled = true
+# 仅用于无人值守部署；默认关闭，首次启动通过登录页初始化管理员。
+default_admin_enabled = false
 default_admin_username = "admin"
 default_admin_display_name = "系统管理员"
 default_admin_password = "123456"

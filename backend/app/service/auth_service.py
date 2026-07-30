@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 
 from app.core.config import AppSettings
+from app.service.settings_service import get_effective_settings, update_setting_values
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 120_000
@@ -417,6 +418,11 @@ def bootstrap_admin(
         existing_count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
         if existing_count:
             raise BootstrapUnavailableError("已存在用户，不能再次初始化管理员")
+        bootstrap_enabled = bool(
+            get_effective_settings(settings)["auth.admin_bootstrap_enabled"]
+        )
+        if not bootstrap_enabled:
+            raise BootstrapUnavailableError("初始化管理员功能已关闭")
         user_id = _insert_user(
             connection,
             username,
@@ -432,7 +438,20 @@ def bootstrap_admin(
             "SELECT * FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
-    return _row_to_user(row)
+    user = _row_to_user(row)
+    update_setting_values(
+        settings,
+        {"auth.admin_bootstrap_enabled": False},
+        operator=user.username,
+    )
+    return user
+
+
+def is_admin_bootstrap_available(settings: AppSettings) -> bool:
+    """判断当前实例是否允许初始化首个管理员。"""
+
+    enabled = bool(get_effective_settings(settings)["auth.admin_bootstrap_enabled"])
+    return enabled and user_count(settings) == 0
 
 
 def ensure_default_admin(settings: AppSettings) -> AuthUser | None:
@@ -469,13 +488,22 @@ def ensure_default_admin(settings: AppSettings) -> AuthUser | None:
     return _row_to_user(row)
 
 
-def login(settings: AppSettings, username: str, password: str) -> LoginResult:
+def login(
+    settings: AppSettings,
+    username: str,
+    password: str,
+    remember_login: bool = False,
+) -> LoginResult:
     """验证用户名密码并创建会话。"""
 
     username = username.strip()
     now = _utc_now()
     now_text = now.isoformat()
-    expires_at = (now + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
+    if remember_login:
+        remember_login_days = int(get_effective_settings(settings)["auth.remember_login_days"])
+        expires_at = (now + timedelta(days=remember_login_days)).isoformat()
+    else:
+        expires_at = (now + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
     with closing(_connect(settings)) as connection:
         row = connection.execute(
             "SELECT * FROM users WHERE username = ? AND enabled = 1",

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { Lock, User } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
+import { resolvePasswordAutocomplete } from "../utils/loginPreferences";
 
 const authStore = useAuthStore();
 const route = useRoute();
@@ -15,6 +16,8 @@ const form = reactive({
   username: "admin",
   displayName: messages.auth.defaultDisplayName,
   password: "",
+  rememberPassword: false,
+  rememberLogin: false,
 });
 const passwordDialogVisible = ref(false);
 const pendingCurrentPassword = ref("");
@@ -31,7 +34,7 @@ const redirectPath = () => {
 
 async function submitLogin() {
   try {
-    await authStore.login(form.username, form.password);
+    await authStore.login(form.username, form.password, form.rememberLogin);
     await handlePostLogin(form.password);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : messages.auth.loginFailed);
@@ -43,6 +46,10 @@ async function submitBootstrap() {
     await authStore.bootstrapAndLogin(form.username, form.displayName, form.password);
     await handlePostLogin(form.password);
   } catch (error) {
+    await authStore.loadBootstrapStatus();
+    if (!authStore.bootstrapAvailable) {
+      activeTab.value = "login";
+    }
     ElMessage.error(error instanceof Error ? error.message : messages.auth.bootstrapFailed);
   }
 }
@@ -102,6 +109,13 @@ async function resetAdminPassword() {
     ElMessage.error(error instanceof Error ? error.message : messages.auth.resetAdminPasswordFailed);
   }
 }
+
+onMounted(async () => {
+  await authStore.loadBootstrapStatus();
+  if (!authStore.bootstrapAvailable) {
+    activeTab.value = "login";
+  }
+});
 </script>
 
 <template>
@@ -117,21 +131,36 @@ async function resetAdminPassword() {
 
       <el-tabs v-model="activeTab" stretch>
         <el-tab-pane :label="messages.auth.loginTab" name="login">
-          <el-form label-position="top" @submit.prevent>
+          <el-form autocomplete="on" label-position="top" @submit.prevent="submitLogin">
             <el-form-item :label="messages.auth.username">
-              <el-input v-model="form.username" :prefix-icon="User" :placeholder="messages.auth.usernamePlaceholder" />
+              <el-input
+                v-model="form.username"
+                autocomplete="username"
+                name="username"
+                :prefix-icon="User"
+                :placeholder="messages.auth.usernamePlaceholder"
+              />
             </el-form-item>
             <el-form-item :label="messages.auth.password">
               <el-input
                 v-model="form.password"
+                :autocomplete="resolvePasswordAutocomplete(form.rememberPassword)"
+                name="password"
                 :prefix-icon="Lock"
                 :placeholder="messages.auth.passwordPlaceholder"
                 show-password
                 type="password"
-                @keyup.enter="submitLogin"
               />
             </el-form-item>
-            <el-button class="login-submit" type="primary" :loading="authStore.loading" @click="submitLogin">
+            <div class="login-options">
+              <el-checkbox v-model="form.rememberPassword">
+                {{ messages.auth.rememberPassword }}
+              </el-checkbox>
+              <el-checkbox v-model="form.rememberLogin">
+                {{ messages.auth.rememberLoginWeek }}
+              </el-checkbox>
+            </div>
+            <el-button class="login-submit" native-type="submit" type="primary" :loading="authStore.loading">
               {{ messages.auth.loginButton }}
             </el-button>
             <el-button
@@ -146,7 +175,11 @@ async function resetAdminPassword() {
           </el-form>
         </el-tab-pane>
 
-        <el-tab-pane :label="messages.auth.bootstrapTab" name="bootstrap">
+        <el-tab-pane
+          v-if="authStore.bootstrapAvailable"
+          :label="messages.auth.bootstrapTab"
+          name="bootstrap"
+        >
           <el-form label-position="top" @submit.prevent>
             <el-form-item :label="messages.auth.username">
               <el-input v-model="form.username" :prefix-icon="User" :placeholder="messages.auth.usernamePlaceholder" />
@@ -255,6 +288,18 @@ async function resetAdminPassword() {
 
 .login-submit {
   width: 100%;
+}
+
+.login-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: -4px 0 16px;
+}
+
+.login-options :deep(.el-checkbox) {
+  margin-right: 0;
 }
 
 .login-reset {

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import AppSettings, AuthSettings, LoggingSettings
 from app.main import create_app
+from app.service.settings_service import update_setting_values
 
 
 class AuthApiTest(unittest.TestCase):
@@ -87,6 +88,135 @@ class AuthApiTest(unittest.TestCase):
                 ).fetchone()[0]
             self.assertNotEqual("ChangeMe123!", password_hash)
             self.assertTrue(password_hash.startswith("pbkdf2_sha256$"))
+
+    def test_bootstrap_status_is_available_only_before_first_admin_is_created(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            client = self.build_client(Path(temp_dir))
+
+            initial_response = client.get("/api/auth/bootstrap-status")
+            bootstrap_response = client.post(
+                "/api/auth/bootstrap-admin",
+                json={
+                    "username": "admin",
+                    "displayName": "系统管理员",
+                    "password": "ChangeMe123!",
+                },
+            )
+            completed_response = client.get("/api/auth/bootstrap-status")
+
+            self.assertEqual(200, initial_response.status_code)
+            self.assertEqual({"available": True}, initial_response.json())
+            self.assertEqual(201, bootstrap_response.status_code)
+            self.assertEqual({"available": False}, completed_response.json())
+
+    def test_bootstrap_admin_rejects_disabled_policy_even_when_user_table_is_empty(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            settings = AppSettings(
+                data_dir=root,
+                database_path=root / "mediaai.sqlite3",
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+            client = TestClient(create_app(settings))
+            update_setting_values(
+                settings,
+                {"auth.admin_bootstrap_enabled": False},
+                operator="system",
+            )
+
+            status_response = client.get("/api/auth/bootstrap-status")
+            bootstrap_response = client.post(
+                "/api/auth/bootstrap-admin",
+                json={
+                    "username": "admin",
+                    "displayName": "系统管理员",
+                    "password": "ChangeMe123!",
+                },
+            )
+
+            self.assertEqual({"available": False}, status_response.json())
+            self.assertEqual(409, bootstrap_response.status_code)
+            self.assertIn("初始化管理员功能已关闭", bootstrap_response.json()["detail"])
+
+    def test_existing_user_keeps_bootstrap_unavailable_when_policy_is_reenabled(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            settings = AppSettings(
+                data_dir=root,
+                database_path=root / "mediaai.sqlite3",
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+            client = TestClient(create_app(settings))
+            client.post(
+                "/api/auth/bootstrap-admin",
+                json={
+                    "username": "admin",
+                    "displayName": "系统管理员",
+                    "password": "ChangeMe123!",
+                },
+            )
+            update_setting_values(
+                settings,
+                {"auth.admin_bootstrap_enabled": True},
+                operator="admin",
+            )
+
+            status_response = client.get("/api/auth/bootstrap-status")
+            duplicate_response = client.post(
+                "/api/auth/bootstrap-admin",
+                json={
+                    "username": "other",
+                    "displayName": "其他管理员",
+                    "password": "ChangeMe123!",
+                },
+            )
+
+            self.assertEqual({"available": False}, status_response.json())
+            self.assertEqual(409, duplicate_response.status_code)
+
+    def test_login_uses_short_session_by_default_and_configured_long_session_when_requested(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            settings = AppSettings(
+                data_dir=root,
+                database_path=root / "mediaai.sqlite3",
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+            )
+            client = TestClient(create_app(settings))
+            client.post(
+                "/api/auth/bootstrap-admin",
+                json={
+                    "username": "admin",
+                    "displayName": "系统管理员",
+                    "password": "ChangeMe123!",
+                },
+            )
+
+            short_response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "ChangeMe123!"},
+            )
+            update_setting_values(
+                settings,
+                {"auth.remember_login_days": 10},
+                operator="admin",
+            )
+            long_response = client.post(
+                "/api/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "ChangeMe123!",
+                    "rememberLogin": True,
+                },
+            )
+
+            self.assertEqual(200, short_response.status_code)
+            self.assertEqual(200, long_response.status_code)
+            now = datetime.now(timezone.utc)
+            short_expiry = datetime.fromisoformat(short_response.json()["expiresAt"])
+            long_expiry = datetime.fromisoformat(long_response.json()["expiresAt"])
+            self.assertAlmostEqual(24, (short_expiry - now).total_seconds() / 3600, delta=0.1)
+            self.assertAlmostEqual(10, (long_expiry - now).total_seconds() / 86400, delta=0.1)
 
     def test_default_admin_is_created_with_default_password_when_enabled(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
