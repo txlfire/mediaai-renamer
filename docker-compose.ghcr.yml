@@ -1,7 +1,7 @@
 services:
-  backend:
-    image: ghcr.io/txlfire/mediaai-renamer-backend:${MEDIAAI_IMAGE_TAG:-v0.5.3}
-    container_name: mediaai-renamer-backend
+  mediaai:
+    image: ghcr.io/txlfire/mediaai-renamer:${MEDIAAI_IMAGE_TAG:-latest}
+    container_name: mediaai-renamer
     restart: unless-stopped
     volumes:
       - ./data:/app/data
@@ -11,12 +11,4 @@ services:
       # - /vol1/1000/Movies:/app/media/Movies
     ports:
       - "8970:8970"
-
-  frontend:
-    image: ghcr.io/txlfire/mediaai-renamer-frontend:${MEDIAAI_IMAGE_TAG:-v0.5.3}
-    container_name: mediaai-renamer-frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "8971:80"
+      - "8971:8970"

@@ -1,9 +1,9 @@
 services:
-  backend:
+  mediaai:
     build:
       context: .
-      dockerfile: docker/Dockerfile.backend
-    container_name: mediaai-renamer-backend
+      dockerfile: docker/Dockerfile
+    container_name: mediaai-renamer
     restart: unless-stopped
     volumes:
       - ./data:/app/data
@@ -11,14 +11,4 @@ services:
       - ./config:/app/config:ro
     ports:
       - "8970:8970"
-
-  frontend:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.frontend
-    container_name: mediaai-renamer-frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "8971:80"
+      - "8971:8970"
