@@ -2,7 +2,7 @@
 
 ## 目标
 
-将正式 Docker 发布从前端、后端两个镜像和两个容器收敛为一个镜像、一个容器，同时保持本地开发时前后端独立启动的工作方式不变。
+将正式发布从前端、后端分离结构收敛为统一 ZIP 发布包和一个 Docker 镜像、一个容器，同时保持本地开发时前后端独立启动的工作方式不变。
 
 ## 方案选择
 
@@ -36,14 +36,23 @@
 - 旧双容器升级时先执行 `docker compose down`，再使用新 Compose 启动，避免旧容器占用端口。
 - 本地源码开发仍使用 Vite `5173` 和 FastAPI `8970`，不受正式发布结构影响。
 
+## 标准 ZIP 发布包
+
+- 发布文件统一命名为 `mediaai-renamer-v<version>.zip`。
+- 包内包含 `backend/`、`frontend-dist/` 和 `config/config.example.toml`。
+- 不打包 `config/config.toml`、数据库、日志、测试、缓存或本地依赖。
+- FastAPI 默认从发布包根目录的 `frontend-dist/` 读取页面，因此解压后只需启动后端进程，不需要额外静态服务器。
+- GitHub Release 只上传统一 ZIP，不再生成或上传 `mediaai-renamer-frontend-*` 文件。
+
 ## 代码与发布改动
 
 1. 新增统一 Dockerfile，包含 Node 构建阶段和 Python 运行阶段。
 2. 后端新增可测试的 SPA 静态资源挂载逻辑。
 3. `docker-compose.yml` 与 `docker-compose.ghcr.yml` 改为单服务。
 4. GHCR 工作流改为构建并发布单一镜像。
-5. 更新发布技能、fnOS 部署文档及相关镜像名称说明。
-6. 旧 `Dockerfile.backend`、`Dockerfile.frontend` 和 `nginx.conf` 在切换完成后删除，避免继续维护两套正式发布路径。
+5. Windows 与 Linux 打包脚本改为生成前后端统一 ZIP。
+6. 更新发布技能、fnOS 部署文档及相关镜像名称说明。
+7. 旧 `Dockerfile.backend`、`Dockerfile.frontend` 和 `nginx.conf` 在切换完成后删除，避免继续维护两套正式发布路径。
 
 ## 路由与错误处理
 
@@ -64,6 +73,7 @@
    - `http://<host>:8971/api/health`
    - `http://<host>:8970/api/health`
 6. 重启容器后数据库、日志和配置仍可用。
+7. 统一 ZIP 中包含后端、前端构建产物和示例配置，且不包含正式配置或运行数据。
 
 ## 发布边界
 

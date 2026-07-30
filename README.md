@@ -56,7 +56,7 @@ M6 AI 使用边界：
 - Docker Web：`http://localhost:8971`
 - 本地开发前端：`http://127.0.0.1:5173`
 
-前端通过同源 `/api` 访问后端。开发环境由 Vite 代理转发，Docker 环境由前端容器转发。
+前端通过同源 `/api` 访问后端。开发环境由 Vite 代理转发；正式 Docker 镜像只运行一个 FastAPI 容器，由 FastAPI 同时提供 Vue 页面和 API。
 
 ## 本地启动
 
@@ -109,6 +109,8 @@ GET http://127.0.0.1:8970/api/health
 
 ## Docker 启动
 
+正式 Docker 发布只有一个 `mediaai` 服务和一个 `ghcr.io/txlfire/mediaai-renamer:<tag>` 镜像。
+
 源码构建启动：
 
 ```powershell
@@ -126,7 +128,8 @@ docker compose -f docker-compose.ghcr.yml up -d
 
 ```text
 Web: http://localhost:8971
-API: http://localhost:8970
+Web 同源 API: http://localhost:8971/api/health
+兼容 API: http://localhost:8970/api/health
 ```
 
 fnOS / NAS 部署建议使用 GHCR 镜像方式，详见 [docs/deployment/fnos-ghcr-docker.md](docs/deployment/fnos-ghcr-docker.md)。

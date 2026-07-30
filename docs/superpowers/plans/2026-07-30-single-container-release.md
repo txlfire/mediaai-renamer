@@ -28,6 +28,9 @@
 - 修改 `docs/development/development-guide.md`：更新 Docker 运行结构，保留源码开发说明。
 - 修改 `docs/development/common-tasks.md`：更新常用 Docker 命令和镜像名称。
 - 修改 `scripts/dev-docker.sh`：更新 GHCR 单镜像示例版本表达。
+- 修改 `scripts/package-release.ps1`：Windows 生成前后端统一 ZIP。
+- 修改 `scripts/package-release.sh`：Linux 生成前后端统一 ZIP。
+- 修改 `scripts/README-zh.md`：更新统一发布包结构和文件名。
 
 ### 任务 1：为 FastAPI 添加可测试的 SPA 静态托管
 
@@ -314,6 +317,62 @@ git add docker docker-compose.yml docker-compose.ghcr.yml
 git commit -m "build: 合并前后端 Docker 镜像"
 ```
 
+### 任务 2B：生成前后端统一 ZIP 发布包
+
+**文件：**
+- 修改：`scripts/package-release.ps1`
+- 修改：`scripts/package-release.sh`
+- 修改：`scripts/README-zh.md`
+- 修改：`docs/development/common-tasks.md`
+
+- [ ] **步骤 1：调整统一包目录**
+
+两套脚本都生成 `mediaai-renamer-v<version>.zip`，包内结构固定为：
+
+```text
+backend/
+  app/
+  requirements.txt
+frontend-dist/
+config/
+  config.example.toml
+```
+
+只复制 `backend/app` 和 `backend/requirements.txt`，不复制后端测试、缓存、数据库、日志或正式 `config.toml`。
+
+- [ ] **步骤 2：生成 Windows 统一包**
+
+使用新版 Node 运行时执行：
+
+```powershell
+$env:PATH = "C:\Users\txlfi\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;$env:PATH"
+powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+```
+
+预期：生成 `releases/mediaai-renamer-v1.0.0.zip`。
+
+- [ ] **步骤 3：验证发布包内容**
+
+运行：
+
+```powershell
+$archive = "releases/mediaai-renamer-v1.0.0.zip"
+tar -tf $archive
+```
+
+预期：包含 `backend/app/`、`backend/requirements.txt`、`frontend-dist/index.html` 和 `config/config.example.toml`；不包含 `config/config.toml`、`backend/tests`、`data` 或 `logs`。
+
+- [ ] **步骤 4：更新 Linux 脚本和文档引用**
+
+确保 Windows、Linux 脚本生成相同目录结构和文件名，并把 `scripts/README-zh.md`、`docs/development/common-tasks.md` 中旧的 `mediaai-renamer-frontend-*` 更新为统一包名称。
+
+- [ ] **步骤 5：提交统一包改造**
+
+```powershell
+git add scripts/package-release.ps1 scripts/package-release.sh scripts/README-zh.md docs/development/common-tasks.md
+git commit -m "build: 合并前后端发布包"
+```
+
 ### 任务 3：将 GHCR 调整为单镜像发布
 
 **文件：**
@@ -508,4 +567,3 @@ docker compose -p mediaai-single-test -f docker-compose.yml down
 git add docs/work-logs/progress-2026-07-30-single-container-release.md
 git commit -m "test: 记录单容器发布验收结果"
 ```
-
