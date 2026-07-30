@@ -3,6 +3,8 @@
 负责加载配置、初始化日志和数据库，并注册 API 路由。
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from app.api.audit import router as audit_router
@@ -30,11 +32,16 @@ from app.service.auth_service import ensure_default_admin
 from app.service.log_service import cleanup_logs
 from app.service.operation_log_service import cleanup_operation_logs
 from app.service.scan_service import recover_interrupted_scan_jobs
+from app.web import mount_frontend
 
 logger = get_logger(__name__)
 
 
-def create_app(settings: AppSettings | None = None) -> FastAPI:
+def create_app(
+    settings: AppSettings | None = None,
+    *,
+    frontend_dir: Path | None = None,
+) -> FastAPI:
     """创建 FastAPI 应用实例。
 
     Returns:
@@ -74,6 +81,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(tasks_router)
     app.include_router(settings_router)
     app.include_router(external_submission_blocks_router)
+    frontend_mounted = mount_frontend(app, frontend_dir)
+    logger.info("前端静态资源%s挂载", "已" if frontend_mounted else "未")
     logger.info("FastAPI 应用创建完成")
     return app
 
