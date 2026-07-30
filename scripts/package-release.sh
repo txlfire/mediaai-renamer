@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 用途：在 Linux/macOS 环境构建前端发布包，可选上传到 GitHub Release。
-# 关键步骤：解析参数 -> 确定版本 -> 构建前端 -> 复制 dist 和示例配置 -> 压缩 artifact -> 可选发布。
+# 用途：在 Linux/macOS 环境构建前后端统一发布包，可选上传到 GitHub Release。
+# 关键步骤：解析参数 -> 确定版本 -> 构建前端 -> 复制后端、dist 和示例配置 -> 压缩 artifact -> 可选发布。
 set -euo pipefail
 
 VERSION=""
@@ -77,7 +77,7 @@ fi
 TAG="v$CLEAN_VERSION"
 DIST_DIR="$ROOT/frontend/dist"
 RELEASE_DIR="$ROOT/releases"
-ARTIFACT="$RELEASE_DIR/mediaai-renamer-frontend-$TAG.zip"
+ARTIFACT="$RELEASE_DIR/mediaai-renamer-$TAG.zip"
 PACKAGE_ROOT="$RELEASE_DIR/package-$TAG"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
@@ -93,10 +93,26 @@ fi
 mkdir -p "$RELEASE_DIR"
 rm -f "$ARTIFACT"
 rm -rf "$PACKAGE_ROOT"
-mkdir -p "$PACKAGE_ROOT/config"
+mkdir -p "$PACKAGE_ROOT/backend" "$PACKAGE_ROOT/frontend-dist" "$PACKAGE_ROOT/config"
+# 合并后端运行代码和前端构建产物，不打包测试、缓存或本地依赖。
+mkdir -p "$PACKAGE_ROOT/backend/app"
+(cd "$ROOT/backend/app" && tar --exclude="__pycache__" --exclude="*.pyc" -cf - .) \
+  | (cd "$PACKAGE_ROOT/backend/app" && tar -xf -)
+cp "$ROOT/backend/requirements.txt" "$PACKAGE_ROOT/backend/requirements.txt"
+cp -R "$DIST_DIR"/. "$PACKAGE_ROOT/frontend-dist"/
 # 正式包只带示例配置，避免把本地正式配置 config.toml 打进包。
-cp -R "$DIST_DIR"/. "$PACKAGE_ROOT"/
 cp "$ROOT/config/config.example.toml" "$PACKAGE_ROOT/config/config.example.toml"
+
+for required_file in \
+  "backend/app/main.py" \
+  "backend/requirements.txt" \
+  "frontend-dist/index.html" \
+  "config/config.example.toml"; do
+  if [[ ! -f "$PACKAGE_ROOT/$required_file" ]]; then
+    echo "Required package file is missing before compression: $required_file" >&2
+    exit 1
+  fi
+done
 
 # 优先使用系统 zip；没有 zip 时用 Python 标准库兜底。
 if command -v zip >/dev/null 2>&1; then

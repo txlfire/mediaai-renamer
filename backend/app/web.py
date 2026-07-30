@@ -33,7 +33,9 @@ def resolve_frontend_dir(frontend_dir: Path | None = None) -> Path:
 
     if frontend_dir is not None:
         return frontend_dir
-    return Path(os.getenv("MEDIAAI_FRONTEND_DIR", "/app/frontend-dist"))
+    release_root = Path(__file__).resolve().parents[2]
+    default_dir = release_root / "frontend-dist"
+    return Path(os.getenv("MEDIAAI_FRONTEND_DIR", str(default_dir)))
 
 
 def mount_frontend(app: FastAPI, frontend_dir: Path | None = None) -> bool:

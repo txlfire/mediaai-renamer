@@ -7,8 +7,8 @@ param(
     [switch]$SkipBuild
 )
 
-# Purpose: build the frontend release artifact on Windows and optionally publish it.
-# Flow: resolve version -> build frontend -> copy dist/example config -> zip -> publish.
+# Purpose: build the unified frontend/backend release artifact on Windows and optionally publish it.
+# Flow: resolve version -> build frontend -> copy backend/dist/example config -> zip -> publish.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -22,6 +22,19 @@ function Invoke-NativeCommand {
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
+function Copy-DirectoryTree {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    & robocopy $Source $Destination /E /XD __pycache__ /XF *.pyc /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -gt 7) {
+        throw "Directory copy failed with exit code ${LASTEXITCODE}: $Source -> $Destination"
     }
 }
 
@@ -47,7 +60,7 @@ if ([string]::IsNullOrWhiteSpace($CleanVersion)) {
 $Tag = "v$CleanVersion"
 $DistDir = Join-Path $Root "frontend\dist"
 $ReleaseDir = Join-Path $Root "releases"
-$Artifact = Join-Path $ReleaseDir "mediaai-renamer-frontend-$Tag.zip"
+$Artifact = Join-Path $ReleaseDir "mediaai-renamer-$Tag.zip"
 $PackageRoot = Join-Path $ReleaseDir "package-$Tag"
 
 if (-not $SkipBuild) {
@@ -64,10 +77,30 @@ if (Test-Path $PackageRoot) {
     Remove-Item -Path $PackageRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
-# Include only example config; never package local config.toml.
-Copy-Item -Path (Join-Path $DistDir "*") -Destination $PackageRoot -Recurse -Force
+# 合并后端运行代码和前端构建产物，不打包测试、缓存或本地依赖。
+New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "backend") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "frontend-dist") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "config") | Out-Null
-Copy-Item -Path (Join-Path $Root "config\config.example.toml") -Destination (Join-Path $PackageRoot "config\config.example.toml") -Force
+[System.IO.File]::Copy(
+    (Join-Path $Root "config\config.example.toml"),
+    (Join-Path $PackageRoot "config\config.example.toml"),
+    $true
+)
+Copy-DirectoryTree (Join-Path $Root "backend\app") (Join-Path $PackageRoot "backend\app")
+Copy-Item -Path (Join-Path $Root "backend\requirements.txt") -Destination (Join-Path $PackageRoot "backend\requirements.txt") -Force
+Copy-Item -Path (Join-Path $DistDir "*") -Destination (Join-Path $PackageRoot "frontend-dist") -Recurse -Force
+
+$RequiredPackageFiles = @(
+    "backend\app\main.py",
+    "backend\requirements.txt",
+    "frontend-dist\index.html",
+    "config\config.example.toml"
+)
+foreach ($RelativePath in $RequiredPackageFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $RelativePath))) {
+        throw "Required package file is missing before compression: $RelativePath"
+    }
+}
 
 # Assemble the artifact in a temporary package directory, then clean it.
 Compress-Archive -Path (Join-Path $PackageRoot "*") -DestinationPath $Artifact -Force

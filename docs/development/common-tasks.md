@@ -150,7 +150,7 @@ bash scripts/package-release.sh --version 0.3.0
 输出文件：
 
 ```text
-releases/mediaai-renamer-frontend-v<version>.zip
+releases/mediaai-renamer-v<version>.zip
 ```
 
 ## 4. 发布到 GitHub Releases

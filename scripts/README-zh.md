@@ -178,7 +178,8 @@
   - 默认执行 `npm.cmd run frontend:build`。
   - 将 `frontend/dist` 复制到临时打包目录。
   - 只复制 `config/config.example.toml`，不打包正式配置 `config.toml`。
-  - 压缩为 `releases/mediaai-renamer-frontend-vX.Y.Z.zip`。
+- 将 `backend/app`、`backend/requirements.txt`、`frontend/dist` 和示例配置合并为统一发布包。
+- 压缩为 `releases/mediaai-renamer-vX.Y.Z.zip`。
   - 使用 `-Publish` 时通过 `gh` 创建或更新 GitHub Release。
 
 ### `package-release.sh`

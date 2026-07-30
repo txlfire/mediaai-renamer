@@ -3,11 +3,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.main import create_app
+from app.web import resolve_frontend_dir
 
 
 class FrontendHostingTest(unittest.TestCase):
@@ -96,6 +98,15 @@ class FrontendHostingTest(unittest.TestCase):
 
         self.assertEqual(200, client.get("/api/health").status_code)
         self.assertEqual(404, client.get("/").status_code)
+
+    def test_default_frontend_dir_is_relative_to_release_root(self):
+        """统一 ZIP 未设置环境变量时应从发布包根目录加载页面。"""
+
+        with patch.dict("os.environ", {}, clear=True):
+            directory = resolve_frontend_dir()
+
+        expected = Path(__file__).resolve().parents[2] / "frontend-dist"
+        self.assertEqual(expected, directory)
 
 
 if __name__ == "__main__":
