@@ -61,6 +61,8 @@ GET http://127.0.0.1:8970/api/health
 
 ## 3. Docker 启动
 
+正式 Docker 结构只有一个 `mediaai` 服务。统一镜像由 Node 构建阶段生成 Vue 页面，再由 FastAPI 同时提供页面和 API；本地源码开发仍保持 Vite 与 Uvicorn 独立运行。
+
 源码构建启动：
 
 ```powershell
@@ -78,7 +80,8 @@ docker compose -f docker-compose.ghcr.yml up -d
 
 ```text
 Web: http://localhost:8971
-API: http://localhost:8970
+Web 同源 API: http://localhost:8971/api/health
+兼容 API: http://localhost:8970/api/health
 ```
 
 fnOS 推荐使用镜像方式部署，避免在 NAS 上执行前后端构建。详细步骤见 `docs/deployment/fnos-ghcr-docker.md`。
@@ -236,7 +239,7 @@ batch_interval_seconds = 1
 - LLM 日志可以记录 token 数、模型名、耗时和费用估算。
 - 批量重命名日志可以记录原路径和目标路径，但后续如果路径中包含账号或凭据必须脱敏。
 
-Docker 部署时，`./logs` 会挂载到后端容器的 `/app/logs`，便于 NAS 页面查看和导出。
+Docker 部署时，`./logs` 会挂载到统一容器的 `/app/logs`，便于 NAS 页面查看和导出。
 
 ## 10. 提交前检查
 
@@ -253,7 +256,9 @@ npm audit --audit-level=moderate
 如果 Docker 相关文件有变化，还需要在具备 Docker 的环境中执行：
 
 ```powershell
-docker compose up --build
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
 ```
 
 如果变更 Docker 镜像发布流程，还需要检查：

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 用途：Docker Compose 一键管理容器化前后端服务。
+# 用途：Docker Compose 一键管理统一容器服务。
 # 关键步骤：选择 compose 文件 -> 根据动作执行 up/stop/down/restart/status/logs。
 set -euo pipefail
 
@@ -53,7 +53,7 @@ case "$ACTION" in
     ;;
   *)
     echo "Usage: COMPOSE_FILE=docker-compose.yml bash scripts/dev-docker.sh {start|stop|restart|down|status|logs}" >&2
-    echo "Example: COMPOSE_FILE=docker-compose.ghcr.yml MEDIAAI_IMAGE_TAG=v0.6.9 bash scripts/dev-docker.sh start" >&2
+    echo "Example: COMPOSE_FILE=docker-compose.ghcr.yml MEDIAAI_IMAGE_TAG=v1.0.0 bash scripts/dev-docker.sh start" >&2
     exit 2
     ;;
 esac

@@ -243,13 +243,14 @@ docker compose -f docker-compose.ghcr.yml up -d
 
 ```text
 Web: http://localhost:8971
-API: http://localhost:8970
+Web 同源 API: http://localhost:8971/api/health
+兼容 API: http://localhost:8970/api/health
 ```
 
 指定镜像版本：
 
 ```bash
-MEDIAAI_IMAGE_TAG=v0.5.3 docker compose -f docker-compose.ghcr.yml up -d
+MEDIAAI_IMAGE_TAG=v1.0.0 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 fnOS 部署说明见：
@@ -263,8 +264,7 @@ docs/deployment/fnos-ghcr-docker.md
 推送 `main` 或 `v*` 标签时，GitHub Actions 会自动构建并推送：
 
 ```text
-ghcr.io/txlfire/mediaai-renamer-backend:<tag>
-ghcr.io/txlfire/mediaai-renamer-frontend:<tag>
+ghcr.io/txlfire/mediaai-renamer:<tag>
 ```
 
 版本标签示例：
@@ -278,7 +278,8 @@ git push origin v0.5.4
 
 ```bash
 cd /vol1/1000/docker/mediaai-renamer
-export MEDIAAI_IMAGE_TAG=v0.5.4
+export MEDIAAI_IMAGE_TAG=v1.0.0
+docker compose -f docker-compose.ghcr.yml down --remove-orphans
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
 ```
