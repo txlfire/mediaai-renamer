@@ -14,18 +14,8 @@ permissions:
 
 jobs:
   build-and-push:
-    name: Build and push ${{ matrix.service }} image
+    name: Build and push unified image
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: backend
-            dockerfile: docker/Dockerfile.backend
-            image_suffix: backend
-          - service: frontend
-            dockerfile: docker/Dockerfile.frontend
-            image_suffix: frontend
 
     steps:
       - name: Checkout
@@ -45,7 +35,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}-${{ matrix.image_suffix }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -59,9 +49,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          cache-from: type=gha,scope=mediaai
+          cache-to: type=gha,mode=max,scope=mediaai
