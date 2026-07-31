@@ -1,5 +1,6 @@
 services:
   mediaai:
+    image: mediaai-renamer:local
     build:
       context: .
       dockerfile: docker/Dockerfile

@@ -250,7 +250,7 @@ Web 同源 API: http://localhost:8971/api/health
 指定镜像版本：
 
 ```bash
-MEDIAAI_IMAGE_TAG=v1.0.0 docker compose -f docker-compose.ghcr.yml up -d
+MEDIAAI_IMAGE_TAG=v1.0.1 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 fnOS 部署说明见：
@@ -278,7 +278,7 @@ git push origin v0.5.4
 
 ```bash
 cd /vol1/1000/docker/mediaai-renamer
-export MEDIAAI_IMAGE_TAG=v1.0.0
+export MEDIAAI_IMAGE_TAG=v1.0.1
 docker compose -f docker-compose.ghcr.yml down --remove-orphans
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d

@@ -75,7 +75,7 @@ cp config.example.toml config/config.toml
 在 Compose 同级创建 `.env` 固定版本：
 
 ```bash
-MEDIAAI_IMAGE_TAG=v1.0.0
+MEDIAAI_IMAGE_TAG=v1.0.1
 ```
 
 启动并检查：
@@ -144,3 +144,25 @@ docker compose -f docker-compose.ghcr.yml logs --tail=100 mediaai
 - 真实重命名前先执行 dry-run。
 
 GHCR 在部分 NAS 网络环境中下载较慢时，可以为 Docker daemon 配置代理，或在可信客户端通过代理下载并校验镜像后再导入 fnOS。
+
+## 8. 从源码构建单容器
+
+将项目源码放到部署目录后执行：
+
+```bash
+cd /vol1/1000/docker/mediaai-renamer
+docker compose -f docker-compose.yml build
+docker compose -f docker-compose.yml up -d
+docker compose -f docker-compose.yml ps
+```
+
+源码 Compose 生成 `mediaai-renamer:local` 镜像，并只启动
+`mediaai-renamer` 一个容器。`data/`、`logs/` 和 `config/` 继续使用宿主机目录。
+
+若 fnOS 的默认镜像站返回 `401 Unauthorized`，需先修复 Docker daemon
+镜像源，或为 daemon 配置可访问 Docker Hub 的 HTTP/HTTPS 代理。代理只用于
+下载基础镜像和构建依赖，不应写入最终镜像环境。构建后可用以下命令检查：
+
+```bash
+docker inspect mediaai-renamer:local --format '{{json .Config.Env}}'
+```

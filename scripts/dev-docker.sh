@@ -53,7 +53,7 @@ case "$ACTION" in
     ;;
   *)
     echo "Usage: COMPOSE_FILE=docker-compose.yml bash scripts/dev-docker.sh {start|stop|restart|down|status|logs}" >&2
-    echo "Example: COMPOSE_FILE=docker-compose.ghcr.yml MEDIAAI_IMAGE_TAG=v1.0.0 bash scripts/dev-docker.sh start" >&2
+    echo "Example: COMPOSE_FILE=docker-compose.ghcr.yml MEDIAAI_IMAGE_TAG=v1.0.1 bash scripts/dev-docker.sh start" >&2
     exit 2
     ;;
 esac
