@@ -9,6 +9,8 @@ MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、�
 
 当前稳定版本为 `v1.0.1`。项目已进入稳定维护阶段，后续以问题修复、兼容性和使用体验优化为主。
 
+当前开发分支的全项目审查修复尚未发布：分页、一次性外部提交授权、扫描/安全重命名/回滚/待处理迁移后台受理、外部HTTP共享速率与并发预算、独立凭据密钥及依赖哈希锁等进度见[修复计划](docs/development/reviews/remediation-plan-2026-10-01.md)。开发分支验证不代表稳定镜像已经包含这些改动。
+
 ## 核心能力
 
 ### 媒体源与扫描
@@ -93,6 +95,8 @@ Web: http://<NAS_IP>:8971
 
 容器只能访问已映射的宿主机目录。请在 Compose 的 `volumes` 中添加媒体目录映射，并在系统中填写容器内路径：
 
+Compose 默认将仓库同级的 `media/` 挂载到 `/app/media`，用于目录选择和基础测试。正式媒体库建议增加独立的只读或读写映射：
+
 ```yaml
 services:
   mediaai:
@@ -118,18 +122,22 @@ Copy-Item config/config.example.toml config/config.toml
 
 `config/config.toml`、数据库、日志、媒体路径、密码、Token 和 API Key 均不应提交到 Git。生产环境建议同时限制配置文件权限，并定期备份 `data/`。
 
+当前开发分支使用独立凭据密钥：优先读取环境秘密 `MEDIAAI_CREDENTIAL_KEY`，否则使用配置的 `credential_key_file` 或默认 `data/secrets/credentials.key`。数据库备份与密钥备份分别保管，恢复时必须成对使用；缺失原密钥时不能用新密钥替换，也不能清空旧凭据。此说明不用于推断旧稳定版本的加密格式。
+
 ## 本地开发
 
 环境要求：
 
 - Python 3.11 或更高版本。
-- Node.js 20 或更高版本。
+- Node.js 20.19+ 或 22.12+；当前本机验证使用 Node 24.15.0，不能使用 Node 16。
 - npm。
 
 Windows 后台启动与停止：
 
 ```powershell
-npm install
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r backend/requirements.lock
+npm ci
 npm run dev:start
 npm run dev:stop
 ```
@@ -137,12 +145,16 @@ npm run dev:stop
 Linux 后台启动与停止：
 
 ```bash
-npm install
+python3 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r backend/requirements.lock
+npm ci
 npm run dev:start:linux
 npm run dev:stop:linux
 ```
 
 开发环境默认地址：
+
+首次安装创建虚拟环境；已有环境不必重复创建。`backend/requirements.txt` 是直接依赖输入，`backend/requirements.lock` 固定传递依赖并校验下载哈希，CI、Docker 和发布包使用锁文件。镜像源缺包时可在安装命令增加 `--index-url https://pypi.org/simple`，不必修改全局 pip 配置。Windows Python3.11.15及3.12独立哈希环境完整回归通过；真实Linux运行仍需CI/容器验收。
 
 ```text
 前端: http://127.0.0.1:5173
@@ -174,6 +186,7 @@ npm run check:encoding
 - [开发指南](docs/development/development-guide.md)
 - [常用命令与脚本](docs/development/common-tasks.md)
 - [系统设计](docs/design/project-design.md)
+- [全项目审查导航与修复进度](docs/development/reviews/README.md)
 - [v1.0.1 发布说明](docs/releases/v1.0.1.md)
 - [历史文档归档](docs/archive/README.md)
 

@@ -178,7 +178,7 @@
   - 默认执行 `npm.cmd run frontend:build`。
   - 将 `frontend/dist` 复制到临时打包目录。
   - 只复制 `config/config.example.toml`，不打包正式配置 `config.toml`。
-- 将 `backend/app`、`backend/requirements.txt`、`frontend/dist` 和示例配置合并为统一发布包。
+- 将 `backend/app`、`backend/requirements.txt`、`backend/requirements.lock`、`frontend/dist` 和示例配置合并为统一发布包。
 - 压缩为 `releases/mediaai-renamer-vX.Y.Z.zip`。
   - 使用 `-Publish` 时通过 `gh` 创建或更新 GitHub Release。
 
@@ -208,6 +208,6 @@
 ## 常见问题
 
 - 端口仍被占用：先执行停止脚本；如果仍失败，Windows 可能需要管理员终端，Linux/macOS 可能需要 `sudo`。
-- 后端依赖缺失：创建虚拟环境并安装 `backend/requirements.txt`。
+- 后端依赖缺失：创建虚拟环境并执行 `python -m pip install --require-hashes -r backend/requirements.lock`；镜像缺包时单次指定官方PyPI，不修改全局设置。
 - 前端依赖缺失：在项目根目录执行 `npm install`。
 - 发布包中找不到正式配置：这是预期行为，正式发布包只包含 `config.example.toml`。

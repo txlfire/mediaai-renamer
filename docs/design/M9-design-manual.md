@@ -310,10 +310,13 @@ POST /api/auth/logout
 GET /api/auth/me
 POST /api/auth/bootstrap-admin
 POST /api/auth/change-password
-POST /api/auth/reset-admin-password
 ```
 
-首次启动时允许创建首个管理员。`config/config.toml` 可启用默认 `admin` 初始化，默认密码为 `123456`，账号会被标记为必须改密；用户登录后如果未改密，每次登录都应提示修改。隐藏恢复接口 `reset-admin-password` 仅在配置文件显式开启时可用，用于将 `admin` 重置为默认密码并重新要求改密。
+首次启动时允许创建首个管理员。`config/config.toml` 可启用默认 `admin` 初始化，默认密码为 `123456`，账号会被标记为必须改密；用户登录后如果未改密，每次登录都应提示修改，不新增业务操作限制。改密和密码重置必须在同一数据库事务内撤销该用户的全部旧会话；改密成功后重新登录。
+
+管理员应急恢复只通过服务机器上的本机命令执行，仍要求配置文件显式开启 `admin_password_reset_enabled`。恢复前持久化审计意图，恢复后要求改密并撤销旧会话；普通页面不提供恢复入口。本机恢复使用已有数据库，不能因配置缺失而初始化另一个实例。
+
+所有业务 API 在管理员初始化前后均要求登录，初始化状态不是绕过鉴权的条件。文件/运行日志读取与导出需要 `audit:read`，清理需要 `settings:write`；媒体源目录浏览与连接测试需要 `source:write`；待处理删除/清空需要 `scan:run`，迁移需要 `rename:execute`，AI 提交需要 `metadata:submit`；预览生成/编辑/排除/候选回填及重命名 dry-run 需要 `rename:execute`。配置测试及其结果保存需要 `settings:write`。远程恢复根据持久化操作类型分别验证 `rename:execute` 或 `rollback:execute`，不能由请求参数选择权限。
 
 ### 7.2 用户管理
 

@@ -4,6 +4,16 @@
 
 ## 1. 本地启动
 
+首次安装后端依赖：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r backend/requirements.lock
+npm ci
+```
+
+Linux使用 `python3 -m venv .venv` 与 `.venv/bin/python -m pip install --require-hashes -r backend/requirements.lock`。已有虚拟环境不必重复创建。更新直接依赖后，用 `uv pip compile backend/requirements.txt --python-version 3.11 --universal --generate-hashes --no-annotate --output-file backend/requirements.lock` 更新锁，再验证完整回归；不把解析成功当最低版本运行通过。uv只用于维护锁，用户安装不需要uv。
+
 启动后端：
 
 ```powershell
