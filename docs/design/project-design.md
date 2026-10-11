@@ -320,6 +320,8 @@ AI候选保存在对应预览/返回结果中，不虚列独立的AI任务表。
 
 ## 13. 设计与验收入口
 
+> `docs/development/reviews/` 与 `design-plans/` 为**双方互审产物，本地保留、不入版本库**，因此在仓库视图中不可见；下列路径以本机检出为准。
+
 - [代码审查与缺口](../development/reviews/code-review-2026-09-30.md)和[设计审查](../development/reviews/design-review-2026-09-30.md)记录历史差异及验证门禁，不作为当前功能完成清单。
 - [实施计划](../development/reviews/remediation-plan-2026-10-01.md)维护已确认政策、接续顺序、迁移兼容与最新证据；各阶段手册按实际可用操作编写，未发布分支和稳定版本分别说明。
 - [fnOS部署](../deployment/fnos-ghcr-docker.md)与[用户手册](../manuals/MediaAI-Renamer-用户手册.md)提供操作说明。正式升级、回退、真实NAS/NFS、组合缩放、Linux/Docker和性能验收必须有独立证据，不能用本机单测替代。

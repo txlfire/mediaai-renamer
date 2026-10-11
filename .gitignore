@@ -40,6 +40,10 @@ tests/integration/webdav/.tmp/
 .hallmark/
 docs/development/m5/backups/
 
+# 审查交流与设计计划：双方互审产物，本地保留、不入库
+docs/development/reviews/
+design-plans/
+
 # OS / editor
 .DS_Store
 Thumbs.db

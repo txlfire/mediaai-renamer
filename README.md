@@ -9,7 +9,9 @@ MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、�
 
 当前开发版本为 `1.1.0`，最新已发布稳定版本为 `v1.0.1`。项目已进入稳定维护阶段，后续以问题修复、兼容性和使用体验优化为主。
 
-当前开发分支的全项目审查修复尚未发布：分页、一次性外部提交授权、扫描/安全重命名/回滚/待处理迁移后台受理、外部HTTP共享速率与并发预算、独立凭据密钥及依赖哈希锁等进度见[修复计划](docs/development/reviews/remediation-plan-2026-10-01.md)。开发分支验证不代表稳定镜像已经包含这些改动。
+当前开发分支的全项目审查修复尚未发布：分页、一次性外部提交授权、扫描/安全重命名/回滚/待处理迁移后台受理、外部HTTP共享速率与并发预算、独立凭据密钥及依赖哈希锁等进度见修复计划（`docs/development/reviews/remediation-plan-2026-10-01.md`）。开发分支验证不代表稳定镜像已经包含这些改动。
+
+> 注：`docs/development/reviews/` 与 `design-plans/` 为双方互审产物，**本地保留、不入版本库**，因此在仓库视图中不可见；本机检出中路径有效。
 
 ## 核心能力
 
@@ -186,7 +188,7 @@ npm run check:encoding
 - [开发指南](docs/development/development-guide.md)
 - [常用命令与脚本](docs/development/common-tasks.md)
 - [系统设计](docs/design/project-design.md)
-- [全项目审查导航与修复进度](docs/development/reviews/README.md)
+- [全项目审查导航与修复进度](docs/development/reviews/README.md)（**本地保留，仓库视图中不可见**）
 - [v1.0.1 发布说明](docs/releases/v1.0.1.md)
 - [历史文档归档](docs/archive/README.md)
 

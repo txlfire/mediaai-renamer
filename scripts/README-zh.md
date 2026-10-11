@@ -2,7 +2,13 @@
 
 本文档说明 `scripts/` 目录下每个脚本的用途、推荐调用方式和关键执行步骤。脚本默认应在项目根目录通过 `npm` 命令或直接路径调用。
 
-自动化审核工具还必须遵守 [Harness 开发服务启动规约](../docs/development/reviews/discussions/harness-development-service-startup.md)：不得绕过项目脚本直接启动 `uvicorn` 或 Vite，隔离实例不得复用标准端口，验证结束必须停止并清理。
+自动化审核工具还必须遵守开发服务启动规约。该规约全文位于 `docs/development/reviews/discussions/harness-development-service-startup.md`（**本地保留、不入版本库**，故在此内联关键约定）：
+
+- 开发服务**必须通过项目脚本管理**。Windows 用 `npm.cmd run dev:windows -- start|status|restart|stop`；不得自行拼接 `uvicorn`、Vite、`Start-Process`、`cmd /c` 或 WMI 命令，也不得让子进程脱离任务生命周期长期驻留。
+- **标准实例**使用默认配置和默认开发数据库，端口 `5173/8970`。
+- **隔离验证实例**必须使用独立端口（例如前端 `5183`、后端 `8981`）与独立配置/数据目录（`.codex/test-artifacts/<任务名>/`），**不得占用标准实例端口**，并在验证结束时停止；否则会出现"浏览器命中错误实例、表现为账号密码失效"的实例串线事故（2026-10-11 已发生过一次）。
+- 启动后**不能只以端口可连接判定成功**：须核对后端健康接口与前端代理健康接口均 `status=ok` 且 `version` 一致，并检查 `.codex/run-logs/backend.pid`、`frontend.pid` 与两个启动错误日志。
+- 端口冲突时先执行 `stop` 与 `status`，再用 `Get-NetTCPConnection` 与 `Get-CimInstance Win32_Process` 核对占用进程命令行；**归属不明确时不强杀**，改用独立端口。
 
 ## 开发服务启停
 
