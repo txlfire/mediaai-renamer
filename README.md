@@ -7,7 +7,7 @@ MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、�
 [![Vue](https://img.shields.io/badge/Vue-3-42b883)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-4c566a)](LICENSE)
 
-当前稳定版本为 `v1.0.1`。项目已进入稳定维护阶段，后续以问题修复、兼容性和使用体验优化为主。
+当前开发版本为 `1.1.0`，最新已发布稳定版本为 `v1.0.1`。项目已进入稳定维护阶段，后续以问题修复、兼容性和使用体验优化为主。
 
 当前开发分支的全项目审查修复尚未发布：分页、一次性外部提交授权、扫描/安全重命名/回滚/待处理迁移后台受理、外部HTTP共享速率与并发预算、独立凭据密钥及依赖哈希锁等进度见[修复计划](docs/development/reviews/remediation-plan-2026-10-01.md)。开发分支验证不代表稳定镜像已经包含这些改动。
 
