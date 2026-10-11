@@ -23,11 +23,222 @@ class DatabaseMigrationTest(unittest.TestCase):
             logging=LoggingSettings(log_dir=root / "logs", console_output=False),
         )
 
+    def test_schema_34_remote_operations_gain_recovery_fencing_columns(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            root.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '34')")
+                connection.execute(
+                    "CREATE TABLE remote_operation_items ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, media_source_id INTEGER NOT NULL, "
+                    "operation_type TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, "
+                    "source_path TEXT NOT NULL, target_path TEXT, source_version TEXT, target_version TEXT, "
+                    "status TEXT NOT NULL DEFAULT 'pending', error_message TEXT, recovery_json TEXT, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO remote_operation_items "
+                    "(media_source_id, operation_type, idempotency_key, source_path, status, created_at, updated_at) "
+                    "VALUES (1, 'rename', 'legacy', '/source', 'failed', 'now', 'now')"
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(remote_operation_items)")
+                }
+                migrated = connection.execute(
+                    "SELECT recovery_generation, recovery_token, recovery_phase, recovery_heartbeat_at "
+                    "FROM remote_operation_items WHERE idempotency_key = 'legacy'"
+                ).fetchone()
+                schemaVersion = connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+
+            self.assertTrue({
+                "recovery_generation", "recovery_token", "recovery_phase", "recovery_heartbeat_at"
+            }.issubset(columns))
+            self.assertEqual((0, None, "idle", None), migrated)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schemaVersion)
+
+    def test_schema_35_file_tasks_gain_execution_owner_columns(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                for table in ("rename_operations", "rename_rollback_plans", "pending_move_tasks"):
+                    connection.execute(f"ALTER TABLE {table} DROP COLUMN execution_instance_id")
+                    connection.execute(f"ALTER TABLE {table} DROP COLUMN execution_started_at")
+                connection.execute("UPDATE app_meta SET value='35' WHERE key='schema_version'")
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                for table in ("rename_operations", "rename_rollback_plans", "pending_move_tasks"):
+                    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                    self.assertTrue({"execution_instance_id", "execution_started_at"}.issubset(columns))
+                self.assertEqual(str(CURRENT_SCHEMA_VERSION), connection.execute(
+                    "SELECT value FROM app_meta WHERE key='schema_version'"
+                ).fetchone()[0])
+
+    def test_v27_scan_context_upgrade_preserves_history_without_guessing_actor(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                for column in ("policy_json", "actor_id", "actor_name"):
+                    connection.execute(f"ALTER TABLE scan_jobs DROP COLUMN {column}")
+                connection.execute("INSERT INTO scan_jobs(media_source_id,status,batch_size,batch_interval_seconds,created_at) VALUES(1,'completed',2,0,'old')")
+                connection.execute("UPDATE app_meta SET value='27' WHERE key='schema_version'")
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute("SELECT status,policy_json,actor_id,actor_name FROM scan_jobs").fetchone()
+                self.assertEqual(("completed", None, None, None), row)
+                self.assertEqual(str(CURRENT_SCHEMA_VERSION), connection.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()[0])
+
+    def test_v28_queue_columns_are_nullable_and_migration_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                for column in ("execution_token", "execution_expires_at", "audit_context_json", "execution_pid"):
+                    connection.execute(f"ALTER TABLE scan_jobs DROP COLUMN {column}")
+                connection.execute("INSERT INTO scan_jobs(media_source_id,status,batch_size,batch_interval_seconds,created_at) VALUES(1,'completed',1,0,'old')")
+                connection.execute("UPDATE app_meta SET value='28' WHERE key='schema_version'")
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(("completed", None, None, None), connection.execute(
+                    "SELECT status,execution_token,execution_expires_at,audit_context_json FROM scan_jobs").fetchone())
+
     def legacy_encrypt_secret(self, settings: AppSettings, secret: str) -> str:
         raw = secret.encode("utf-8")
         key = hashlib.sha256(str(settings.database_path).encode("utf-8")).digest()
         encrypted = bytes(value ^ key[index % len(key)] for index, value in enumerate(raw))
         return base64.urlsafe_b64encode(encrypted).decode("ascii")
+
+    def test_v26_adds_audit_intents_idempotently_without_modifying_history(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("DROP TABLE file_action_audit_intents")
+                connection.execute("UPDATE app_meta SET value = '26' WHERE key = 'schema_version'")
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(file_action_audit_intents)")}
+                self.assertIn("outcome_json", columns)
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM file_action_audit_intents").fetchone()[0])
+                self.assertEqual(str(CURRENT_SCHEMA_VERSION), connection.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0])
+
+    def test_v21_rename_items_gain_nullable_snapshot_without_backfilling_old_plans(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("ALTER TABLE rename_operation_items DROP COLUMN snapshot_json")
+                connection.execute("UPDATE app_meta SET value = '21' WHERE key = 'schema_version'")
+                connection.execute(
+                    "INSERT INTO rename_operation_items (operation_id, rename_preview_id, source_path, "
+                    "target_path, status, created_at, updated_at) VALUES (1, 1, 'old', 'new', 'ready', 'now', 'now')"
+                )
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                row = connection.execute("SELECT source_path, snapshot_json FROM rename_operation_items").fetchone()
+                version = connection.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0]
+            self.assertEqual(("old", None), row)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), version)
+
+    def test_v22_database_adds_empty_local_action_journal_idempotently(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("DROP TABLE local_file_actions")
+                connection.execute("UPDATE app_meta SET value = '22' WHERE key = 'schema_version'")
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM local_file_actions").fetchone()[0])
+                self.assertEqual(str(CURRENT_SCHEMA_VERSION), connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'",
+                ).fetchone()[0])
+
+    def test_v23_journal_gains_nullable_target_identity_without_losing_intent(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("ALTER TABLE local_file_actions DROP COLUMN target_identity_json")
+                connection.execute("UPDATE app_meta SET value = '23' WHERE key = 'schema_version'")
+                connection.execute(
+                    "INSERT INTO local_file_actions (media_source_id, action_type, record_id, source_path, target_path, "
+                    "source_key, target_key, identity_json, status, created_at, updated_at) "
+                    "VALUES (1, 'rename', 1, 'source', 'target', 'source', 'target', '[1,2,3,4]', 'prepared', 'now', 'now')"
+                )
+                connection.commit()
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(("prepared", "[1,2,3,4]", None), connection.execute(
+                    "SELECT status, identity_json, target_identity_json FROM local_file_actions",
+                ).fetchone())
+
+    def test_v24_rollback_snapshot_is_nullable_and_old_plan_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("ALTER TABLE rename_rollback_items DROP COLUMN snapshot_json")
+                connection.execute("UPDATE app_meta SET value = '24' WHERE key = 'schema_version'")
+                connection.execute(
+                    "INSERT INTO rename_rollback_items (plan_id, operation_item_id, current_path, rollback_path, "
+                    "status, created_at, updated_at) VALUES (1, 1, 'new', 'old', 'ready', 'now', 'now')"
+                )
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(("new", "ready", None), connection.execute(
+                    "SELECT current_path, status, snapshot_json FROM rename_rollback_items",
+                ).fetchone())
+                self.assertEqual(str(CURRENT_SCHEMA_VERSION), connection.execute(
+                    "SELECT value FROM app_meta WHERE key = 'schema_version'",
+                ).fetchone()[0])
+
+    def test_v25_source_lifecycle_columns_do_not_invent_retirement_history(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("ALTER TABLE media_sources DROP COLUMN deleted_at")
+                connection.execute("ALTER TABLE media_sources DROP COLUMN retired_root")
+                connection.execute("ALTER TABLE scan_jobs DROP COLUMN source_invalidated_at")
+                connection.execute("DROP TABLE media_source_history")
+                connection.execute("UPDATE app_meta SET value = '25' WHERE key = 'schema_version'")
+                connection.execute("INSERT INTO media_sources (name, path, enabled, created_at, updated_at) VALUES ('old', 'old-root', 1, 'now', 'now')")
+                connection.commit()
+            ensure_database(settings)
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(("old-root", 1, None, None), connection.execute(
+                    "SELECT path, enabled, deleted_at, retired_root FROM media_sources",
+                ).fetchone())
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM media_source_history").fetchone()[0])
 
     def test_existing_m3_database_is_migrated_to_current_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -590,9 +801,9 @@ class DatabaseMigrationTest(unittest.TestCase):
                     "SELECT value FROM app_meta WHERE key = 'schema_version'"
                 ).fetchone()[0]
 
-            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertTrue(str(row[0]).startswith("v3:"))
             self.assertNotEqual(legacy_secret, row[0])
-            self.assertEqual(2, row[1])
+            self.assertEqual(3, row[1])
             self.assertEqual("old-smb-password", decrypt_secret(settings, row[0]))
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
 
@@ -792,6 +1003,80 @@ class DatabaseMigrationTest(unittest.TestCase):
             self.assertIn("last_scan_job_id", index_columns)
             self.assertIn("rename_preview_id", index_columns)
             self.assertEqual(str(CURRENT_SCHEMA_VERSION), schema_version)
+
+    def test_schema_36_local_actions_gain_entry_and_phase_evidence_without_guessing_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '36')")
+                connection.execute(
+                    "CREATE TABLE local_file_actions ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, media_source_id INTEGER NOT NULL, "
+                    "action_type TEXT NOT NULL, record_id INTEGER NOT NULL, "
+                    "source_path TEXT NOT NULL, target_path TEXT NOT NULL, "
+                    "source_key TEXT NOT NULL, target_key TEXT NOT NULL, "
+                    "identity_json TEXT NOT NULL, target_identity_json TEXT, "
+                    "status TEXT NOT NULL, message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO local_file_actions "
+                    "(media_source_id, action_type, record_id, source_path, target_path, source_key, target_key, "
+                    "identity_json, status, created_at, updated_at) "
+                    "VALUES (1, 'rename', 1, 'C:/Media/Movie.mkv', 'C:/Media/movie.mkv', "
+                    "'c:/media/movie.mkv', 'c:/media/movie.mkv', '[1,2,3,4]', 'prepared', 'now', 'now')"
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(local_file_actions)")}
+                row = connection.execute(
+                    "SELECT source_entry_name, target_entry_name, action_phase FROM local_file_actions WHERE id=1"
+                ).fetchone()
+                schemaVersion = connection.execute(
+                    "SELECT value FROM app_meta WHERE key='schema_version'"
+                ).fetchone()[0]
+            self.assertTrue({"source_entry_name", "target_entry_name", "action_phase"}.issubset(columns))
+            self.assertEqual((None, None, "intent_recorded"), row)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schemaVersion)
+
+    def test_schema_37_audit_intents_gain_review_fields_without_inventing_outcomes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO app_meta (key, value) VALUES ('schema_version', '37')")
+                connection.execute(
+                    "CREATE TABLE file_action_audit_intents ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,task_type TEXT NOT NULL,task_id INTEGER NOT NULL,"
+                    "context_json TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',last_error_type TEXT,"
+                    "outcome_json TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO file_action_audit_intents "
+                    "(task_type,task_id,context_json,status,created_at,updated_at) "
+                    "VALUES ('rename_operation',1,'{}','pending','now','now')"
+                )
+                connection.commit()
+
+            ensure_database(settings)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(file_action_audit_intents)")}
+                row = connection.execute(
+                    "SELECT status,request_phase,outcome_json,closed_at,closed_by,close_reason,close_evidence "
+                    "FROM file_action_audit_intents WHERE id=1"
+                ).fetchone()
+                schemaVersion = connection.execute(
+                    "SELECT value FROM app_meta WHERE key='schema_version'"
+                ).fetchone()[0]
+            self.assertTrue({"request_phase", "closed_at", "closed_by", "close_reason", "close_evidence"}.issubset(columns))
+            self.assertEqual(("pending", "legacy_unknown", None, None, None, None, None), row)
+            self.assertEqual(str(CURRENT_SCHEMA_VERSION), schemaVersion)
 
 
 if __name__ == "__main__":

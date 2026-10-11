@@ -50,15 +50,16 @@ stop_port() {
   fi
 }
 
-require_command node "Install Node.js, then run npm install."
-require_command npm "Install npm, then run npm install."
-require_file "$PYTHON" "Create the virtual environment and install backend dependencies: python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt"
+require_command node "Install Node.js, then run npm ci."
+require_command npm "Install npm, then run npm ci."
+require_file "$PYTHON" "Create the virtual environment and install backend dependencies: python3 -m venv .venv && .venv/bin/pip install --require-hashes -r backend/requirements.lock"
 require_file "$ROOT/backend/app/main.py" "Run this script from the project root."
 require_file "$ROOT/backend/requirements.txt" "Backend dependency manifest is missing."
-require_file "$VITE_ENTRY" "Frontend dependencies are missing. Run npm install."
+require_file "$ROOT/backend/requirements.lock" "Backend dependency lock is missing."
+require_file "$VITE_ENTRY" "Frontend dependencies are missing. Run npm ci."
 
 # 验证后端关键依赖已安装，避免 uvicorn 启动后立即退出。
-"$PYTHON" -c "import uvicorn, fastapi" >/dev/null 2>&1 || fail "Backend Python dependencies are incomplete. Run .venv/bin/pip install -r backend/requirements.txt"
+"$PYTHON" -c "import uvicorn, fastapi" >/dev/null 2>&1 || fail "Backend Python dependencies are incomplete. Run .venv/bin/pip install --require-hashes -r backend/requirements.lock"
 
 mkdir -p "$LOG_DIR"
 # 启动前清理旧服务，保证端口和 PID 文件处于一致状态。

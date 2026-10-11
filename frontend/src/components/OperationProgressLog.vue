@@ -7,14 +7,16 @@ defineProps<{
   text: string;
   logs: string[];
   summary?: string;
+  status?: "success" | "warning" | "error";
+  indeterminate?: boolean;
 }>();
 </script>
 
 <template>
   <div v-if="visible" class="operation-progress-log">
-    <el-progress :percentage="percentage" />
+    <el-progress :percentage="percentage" :indeterminate="indeterminate" :show-text="!indeterminate" />
     <div class="operation-progress-text">{{ text }}</div>
-    <el-alert v-if="summary" :title="summary" type="success" show-icon :closable="false" />
+    <el-alert v-if="summary" :title="summary" :type="status || 'success'" show-icon :closable="false" />
     <el-collapse v-if="logs.length" class="operation-log-collapse">
       <el-collapse-item :title="messages.common.viewDetailedLogs" name="logs">
         <div class="operation-log-panel">

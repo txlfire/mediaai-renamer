@@ -54,6 +54,8 @@ class LocalDirectoryListing:
     current_path: str | None
     parent_path: str | None
     entries: list[LocalDirectoryEntry]
+    runtime_environment: str | None = None
+    root_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,7 @@ class RenameOperation:
     created_at: str
     updated_at: str
     items: list[RenameOperationItem]
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -229,3 +232,6 @@ class RenameRollbackPlan:
     created_at: str
     updated_at: str
     items: list[RenameRollbackItem]
+    rolled_back_count: int = 0
+    failed_count: int = 0
+    error_message: str | None = None

@@ -38,6 +38,7 @@ class ConnectionTestResult:
     readable: bool | None = None
     writable: bool | None = None
     filesystem_type: str | None = None
+    indeterminate: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,9 @@ class SharedPathContext:
     local_mount_path: str | None = None
     connection_timeout_seconds: int = 5
     nfs_operation_timeout_seconds: int = 30
+    root_url: str | None = None
+    expected_source_version: str | None = None
+    conditional_move_status: str = "unknown"
 
 
 @dataclass(frozen=True)

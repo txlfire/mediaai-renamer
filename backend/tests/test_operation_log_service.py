@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
@@ -12,6 +13,7 @@ from app.service.operation_log_service import (
     cleanup_operation_logs,
     list_operation_logs,
     record_operation_log,
+    cleanup_operation_logs_best_effort,
 )
 from app.service.settings_service import update_setting_values
 
@@ -38,6 +40,58 @@ class OperationLogServiceTest(unittest.TestCase):
             )
             connection.commit()
             return int(cursor.lastrowid)
+
+    def test_cursor_pages_return_every_log_without_skipping(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            taskId = self.insert_scan_job(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                for index in range(7):
+                    record_operation_log(settings, task_type=TASK_TYPE_SCAN_JOB, task_id=taskId,
+                                         level=LEVEL_INFO, stage="progress", message=str(index), connection=connection)
+                connection.commit()
+            cursor = 0
+            seen = []
+            for _ in range(4):
+                page = list_operation_logs(settings, task_type=TASK_TYPE_SCAN_JOB, task_id=taskId, after_id=cursor, limit=2)
+                seen.extend(item.message for item in page.items)
+                self.assertGreaterEqual(page.latest_id, cursor)
+                cursor = page.latest_id
+            self.assertEqual([str(index) for index in range(7)], seen)
+            empty = list_operation_logs(settings, task_type=TASK_TYPE_SCAN_JOB, task_id=taskId, after_id=cursor, limit=2)
+            self.assertEqual(cursor, empty.latest_id)
+            self.assertEqual([], empty.items)
+
+    def test_serialization_connection_and_cleanup_failures_are_auxiliary(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            kwargs = dict(task_type=TASK_TYPE_SCAN_JOB, task_id=1, level=LEVEL_INFO, stage="test", message="test")
+            self.assertIsNone(record_operation_log(settings, **kwargs, detail={"unsupported": object()}))
+            with patch("app.service.operation_log_service._connect", side_effect=sqlite3.OperationalError("connect failed")):
+                self.assertIsNone(record_operation_log(settings, **kwargs))
+            with patch("app.service.operation_log_service.cleanup_operation_logs", side_effect=RuntimeError("cleanup failed")):
+                self.assertIsNotNone(record_operation_log(settings, **kwargs))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM operation_logs").fetchone()[0])
+            with patch("app.service.operation_log_service.cleanup_operation_logs", side_effect=RuntimeError("cleanup failed")):
+                self.assertIsNone(cleanup_operation_logs_best_effort(settings))
+
+    def test_running_rename_and_rollback_are_reported_as_running(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("INSERT INTO rename_operations (id, status, mode, total_count, created_at, updated_at) VALUES (1, 'running', 'safe_rename', 1, 'now', 'now')")
+                connection.execute("INSERT INTO rename_rollback_plans (id, operation_id, status, item_count, created_at, updated_at) VALUES (1, 1, 'running', 1, 'now', 'now')")
+                connection.commit()
+            for taskType in ("rename_operation", "rollback_plan"):
+                page = list_operation_logs(settings, task_type=taskType, task_id=1)
+                self.assertTrue(page.running)
+                self.assertFalse(page.cleared)
+                self.assertIn("正在等待", page.message)
 
     def test_record_and_list_operation_logs_sanitizes_sensitive_detail(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -63,7 +63,10 @@ export const useAppStore = defineStore("app", {
     applyThemeMode() {
       this.resolvedTheme = resolveTheme(this.themeMode);
       if (typeof document !== "undefined") {
-        document.documentElement.dataset.theme = this.resolvedTheme;
+        // 方案轴（亮/暗）写入 data-scheme。配色轴（palette）为独立属性 data-palette，
+        // 两轴正交：styles.css 的 :root 与 :root[data-scheme="dark"] 承担中性色，
+        // :root[data-palette="…"] 承担点缀色。详见 design.md「主题架构」。
+        document.documentElement.dataset.scheme = this.resolvedTheme;
       }
     },
 

@@ -5,13 +5,12 @@ from collections.abc import Callable
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app.service.audit_service import record_audit_event
+from app.service.audit_service import AuditWriteContext, record_audit_event
 from app.service.auth_service import (
     AuthServiceError,
     BootstrapUnavailableError,
     InvalidCredentialsError,
     InvalidSessionError,
-    ResetAdminPasswordDisabledError,
     bootstrap_admin,
     change_password,
     get_user_by_token,
@@ -19,9 +18,7 @@ from app.service.auth_service import (
     login,
     login_result_to_dict,
     logout,
-    reset_admin_password,
     user_to_dict,
-    user_count,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -67,17 +64,12 @@ def _audit_request_context(request: Request) -> dict[str, str | None]:
 
 
 def require_permission(permission: str) -> Callable:
-    """创建用户权限校验依赖。
-
-    兼容策略：用户表为空时允许访问，避免旧实例在初始化管理员前被锁死。
-    """
+    """创建用户权限校验依赖；初始化前也不能匿名访问业务接口。"""
 
     def dependency(
         request: Request,
         authorization: str | None = Header(default=None),
     ):
-        if user_count(request.app.state.settings) == 0:
-            return None
         token = _extract_bearer_token(authorization)
         try:
             user = get_user_by_token(request.app.state.settings, token)
@@ -91,14 +83,12 @@ def require_permission(permission: str) -> Callable:
 
 
 def require_authenticated_user():
-    """校验用户已登录；用户表为空时兼容放行。"""
+    """校验用户已登录；仅初始化及登录入口允许匿名调用。"""
 
     def dependency(
         request: Request,
         authorization: str | None = Header(default=None),
     ):
-        if user_count(request.app.state.settings) == 0:
-            return None
         token = _extract_bearer_token(authorization)
         try:
             return get_user_by_token(request.app.state.settings, token)
@@ -127,6 +117,7 @@ def bootstrap_admin_api(payload: BootstrapAdminRequest, request: Request):
             payload.username,
             payload.display_name,
             payload.password,
+            auditContext=AuditWriteContext(ipAddress=request.client.host if request.client else None, userAgent=request.headers.get("user-agent")),
         )
     except BootstrapUnavailableError as exc:
         record_audit_event(
@@ -156,18 +147,6 @@ def bootstrap_admin_api(payload: BootstrapAdminRequest, request: Request):
             **_audit_request_context(request),
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="auth.bootstrap",
-        action="bootstrap_admin",
-        result="success",
-        summary=f"初始化管理员：{user.username}",
-        target_type="user",
-        target_id=user.id,
-        actor=user,
-        detail={"username": user.username, "display_name": user.display_name},
-        **_audit_request_context(request),
-    )
     return user_to_dict(user)
 
 
@@ -181,6 +160,7 @@ def login_api(payload: LoginRequest, request: Request):
             payload.username,
             payload.password,
             remember_login=payload.remember_login,
+            auditContext=AuditWriteContext(ipAddress=request.client.host if request.client else None, userAgent=request.headers.get("user-agent")),
         )
     except InvalidCredentialsError as exc:
         record_audit_event(
@@ -196,21 +176,6 @@ def login_api(payload: LoginRequest, request: Request):
             **_audit_request_context(request),
         )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="auth.login",
-        action="login",
-        result="success",
-        summary=f"登录成功：{result.user.username}",
-        target_type="user",
-        target_id=result.user.id,
-        actor=result.user,
-        detail={
-            "username": result.user.username,
-            "remember_login": payload.remember_login,
-        },
-        **_audit_request_context(request),
-    )
     return login_result_to_dict(result)
 
 
@@ -230,6 +195,7 @@ def change_password_api(
             user.id,
             payload.current_password,
             payload.new_password,
+            auditContext=AuditWriteContext(user, request.client.host if request.client else None, request.headers.get("user-agent")),
         )
     except InvalidSessionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -237,44 +203,14 @@ def change_password_api(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AuthServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="auth.password",
-        action="change_password",
-        result="success",
-        summary=f"用户修改密码：{updated_user.username}",
-        target_type="user",
-        target_id=updated_user.id,
-        actor=updated_user,
-        detail={"username": updated_user.username},
-        **_audit_request_context(request),
-    )
     return user_to_dict(updated_user)
 
 
 @router.post("/reset-admin-password")
 def reset_admin_password_api(request: Request):
-    """隐藏恢复接口：按配置将 admin 密码重置为默认密码。"""
+    """兼容旧地址，但禁止通过匿名 HTTP 接口恢复管理员密码。"""
 
-    try:
-        user = reset_admin_password(request.app.state.settings)
-    except ResetAdminPasswordDisabledError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except AuthServiceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="auth.password",
-        action="reset_admin_password",
-        result="success",
-        summary="隐藏接口已重置 admin 密码",
-        target_type="user",
-        target_id=user.id,
-        actor_name="system",
-        detail={"username": user.username},
-        **_audit_request_context(request),
-    )
-    return user_to_dict(user)
+    raise HTTPException(status_code=403, detail="HTTP 密码恢复已关闭，请在服务所在机器使用本机恢复命令")
 
 
 @router.post("/logout", status_code=204)
@@ -290,19 +226,7 @@ def logout_api(
         actor = get_user_by_token(request.app.state.settings, token)
     except InvalidSessionError:
         actor = None
-    logout(request.app.state.settings, token)
-    record_audit_event(
-        request.app.state.settings,
-        event_type="auth.logout",
-        action="logout",
-        result="success",
-        summary=f"退出登录：{actor.username if actor is not None else 'unknown'}",
-        target_type="user",
-        target_id=actor.id if actor is not None else None,
-        actor=actor,
-        actor_name=None if actor is not None else "unknown",
-        **_audit_request_context(request),
-    )
+    logout(request.app.state.settings, token, auditContext=AuditWriteContext(actor, request.client.host if request.client else None, request.headers.get("user-agent")))
     return Response(status_code=204)
 
 

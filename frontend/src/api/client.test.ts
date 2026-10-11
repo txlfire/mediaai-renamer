@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiClient,
   archiveTask,
+  closeFileActionAuditIntent,
   bootstrapAdmin,
   changePassword,
   fetchCurrentUser,
   getAuthToken,
+  setAuthToken,
+  exportRuntimeLogs,
   applyAiParseCandidate,
   applyRenamePreviewMetadataCandidate,
   bulkDeleteMediaSources,
@@ -18,28 +21,40 @@ import {
   createUser,
   deleteMediaSource,
   executeRenameOperation,
+  acceptRenameOperation,
   executeRenameRollbackPlan,
+  acceptRenameRollbackPlan,
   fetchAuditEvents,
+  fetchAuditIntentCapacity,
   fetchBootstrapStatus,
   fetchMetadataProviderConfigs,
+  fetchAiReadiness,
   fetchSettings,
   fetchLocalDirectories,
   fetchLogs,
   fetchMediaFiles,
+  fetchMediaFilesPage,
   fetchMediaSourceDirectories,
   fetchMediaSources,
+  fetchMediaSourcesPage,
+  fetchFileActionAuditIntents,
   fetchOperationLogs,
   fetchRemoteOperations,
   fetchSharedProtocolCapabilities,
   fetchTasks,
+  fetchTasksPage,
   fetchPendingFiles,
+  fetchPendingFilesPage,
   fetchUsers,
   fetchRenameOperation,
   fetchRenameRollbackPlan,
   fetchRenameRollbackPlans,
   fetchRenamePreviewMetadataCandidates,
   fetchRenamePreviews,
+  fetchRenamePreviewsPage,
+  fetchRenamePreviewSelection,
   fetchScanJobs,
+  fetchScanJobsPage,
   generateRenamePreviews,
   getHealth,
   login,
@@ -50,6 +65,7 @@ import {
   matchRenamePreviewsMetadataWithAiFallback,
   matchAllUnmatchedMetadataWithAiFallback,
   movePendingFiles,
+  acceptPendingMove, fetchPendingMove, findPendingMove,
   parseRenamePreviewWithAi,
   parseRenamePreviewsWithAi,
   parsePendingFileWithAi,
@@ -66,6 +82,7 @@ import {
   testMediaSourceConnection,
   testNamingTemplate,
   testMediaSourceConnectionPayload,
+  verifyWebDavConditionalMove,
   testMetadataProviderConfig,
   testTmdbSettings,
   updateMetadataProviderConfig,
@@ -73,9 +90,85 @@ import {
   updateMediaSource,
   updateRenamePreview,
   updateUser,
+  prepareExternalSubmission,
+  submitExternalSubmission,
+  fetchExternalSubmissionOutcome,
   type ApiHttpClient,
   type AuthUser,
 } from "./client";
+
+describe("one-time external submission", () => {
+  it("accepts rollback through the async endpoint and reads the same plan", async () => {
+    const post = vi.fn().mockResolvedValue({ data: { id: 17, status: "queued" } });
+    const get = vi.fn().mockResolvedValue({ data: { id: 17, status: "executed", rolled_back_count: 2 } });
+    const httpClient = { post, get };
+    expect((await acceptRenameRollbackPlan(17, httpClient)).status).toBe("queued");
+    expect(post).toHaveBeenCalledWith("/rename-rollback-plans/17/execute-async", {});
+    expect((await fetchRenameRollbackPlan(17, httpClient)).rolled_back_count).toBe(2);
+    expect(get).toHaveBeenCalledWith("/rename-rollback-plans/17");
+  });
+  it("prepares a snapshot, submits once with a bounded timeout, and reads results without replay", async () => {
+    const post = vi.fn().mockResolvedValue({ data: { id: "synthetic-grant" } });
+    const get = vi.fn().mockResolvedValue({ data: { status: "completed" } });
+    const httpClient: ApiHttpClient = { get, post };
+    await prepareExternalSubmission(17, httpClient);
+    await submitExternalSubmission(17, "synthetic-grant", "risk accepted", httpClient);
+    await fetchExternalSubmissionOutcome(17, httpClient);
+    expect(post.mock.calls).toEqual([
+      ["/external-submission-blocks/17/prepare", {}],
+      ["/external-submission-blocks/17/submit", { authorization_id: "synthetic-grant", override_reason: "risk accepted" }, { timeout: 120000 }],
+    ]);
+    expect(get).toHaveBeenCalledWith("/external-submission-blocks/17/outcome");
+  });
+
+  it("does not automatically retry a failed submit", async () => {
+    const post = vi.fn().mockRejectedValue(new Error("synthetic timeout"));
+    const httpClient: ApiHttpClient = { get: vi.fn(), post };
+    await expect(submitExternalSubmission(17, "synthetic-grant", "risk accepted", httpClient)).rejects.toThrow("synthetic timeout");
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("server scan-job pagination", () => {
+  it("queries active tasks independently of history and preserves the legacy endpoint", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 10 } });
+    const httpClient: ApiHttpClient = { get };
+    await fetchScanJobsPage({ media_source_id: 1, page: 1, page_size: 10, active_only: true }, httpClient);
+    expect(get).toHaveBeenCalledWith("/scan-jobs/page?media_source_id=1&page=1&page_size=10&active_only=true");
+    await fetchScanJobsPage({ active_only: false }, httpClient);
+    expect(get).toHaveBeenLastCalledWith("/scan-jobs/page?active_only=false");
+    await fetchScanJobs({}, httpClient);
+    expect(get).toHaveBeenLastCalledWith("/scan-jobs");
+  });
+});
+
+describe("server governance and source pagination", () => {
+  it("passes governance filters and page sorting to the new endpoint", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { items: [], total: 1000, page: 2, page_size: 10 } });
+    await fetchTasksPage({ page: 2, page_size: 10, include_archived: false, sort_by: "task_id", sort_order: "asc" }, { get });
+    expect(get).toHaveBeenCalledWith("/tasks/page?page=2&page_size=10&include_archived=false&sort_by=task_id&sort_order=asc");
+  });
+  it("encodes remote source search without changing the legacy array endpoint", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 50 } });
+    await fetchMediaSourcesPage({ page: 1, q: "%_ source", enabled_only: true }, { get });
+    expect(get).toHaveBeenCalledWith("/media-sources/page?page=1&q=%25_+source&enabled_only=true");
+    await fetchMediaSources({ get });
+    expect(get).toHaveBeenLastCalledWith("/media-sources");
+  });
+});
+
+describe("server scan-result pagination", () => {
+  it("sends page, bounded size, filters and backend sort without changing the legacy endpoint", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { items: [], total: 1000, page: 2, page_size: 50 } });
+    const httpClient: ApiHttpClient = { get };
+    const result = await fetchMediaFilesPage({ media_source_id: 1, scan_job_id: 2, page: 2, page_size: 50,
+      sort_by: "file_size", sort_order: "desc" }, httpClient);
+    expect(get).toHaveBeenCalledWith("/media-files/page?media_source_id=1&scan_job_id=2&page=2&page_size=50&sort_by=file_size&sort_order=desc");
+    expect(result.total).toBe(1000);
+    await fetchMediaFiles({ scan_job_id: 2 }, httpClient);
+    expect(get).toHaveBeenLastCalledWith("/media-files?scan_job_id=2");
+  });
+});
 
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
@@ -86,6 +179,39 @@ function installLocalStorageMock() {
     setItem: (key: string, value: string) => storage.set(key, value),
   });
 }
+
+describe("audit completion response notice", () => {
+  it("keeps the real response and only signals pending audit headers", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    try {
+      const response = await apiClient.get("/audit-notice-test", {
+        adapter: async (config) => ({
+          config, status: 200, statusText: "OK", data: { status: "completed", renamed_count: 1 },
+          headers: { "x-mediaai-audit-state": "pending" },
+        }),
+      });
+      expect(response.data).toEqual({ status: "completed", renamed_count: 1 });
+      expect(dispatchEvent).toHaveBeenCalledTimes(1);
+      expect(dispatchEvent.mock.calls[0][0].type).toBe("mediaai:audit-pending");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not warn when the audit completion header is absent", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    try {
+      await apiClient.get("/audit-notice-test", {
+        adapter: async (config) => ({ config, status: 200, statusText: "OK", data: {}, headers: {} }),
+      });
+      expect(dispatchEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 function installSessionStorageMock() {
   const storage = new Map<string, string>();
@@ -140,6 +266,31 @@ describe("auth API client", () => {
     installSessionStorageMock();
     localStorage.clear();
     sessionStorage.clear();
+  });
+
+  it("downloads runtime logs through the authenticated client", async () => {
+    setAuthToken("synthetic-export-token");
+    const oldAdapter = apiClient.defaults.adapter;
+    const requests: Array<{ url?: string; auth: unknown; responseType?: string }> = [];
+    apiClient.defaults.adapter = async (config) => {
+      requests.push({ url: config.url, auth: config.headers.Authorization, responseType: config.responseType });
+      return { config, data: "bounded log text", headers: {}, status: 200, statusText: "OK" };
+    };
+    try {
+      await expect(exportRuntimeLogs()).resolves.toBe("bounded log text");
+      expect(requests).toEqual([{ url: "/logs/export", auth: "Bearer synthetic-export-token", responseType: "text" }]);
+    } finally {
+      apiClient.defaults.adapter = oldAdapter;
+    }
+  });
+
+  it("keeps a visible omission notice when runtime log tails are truncated", async () => {
+    const client: ApiHttpClient = { get: async <T>() => ({ data: {
+      items: [{ file: "app.log", message: "latest" }], message: "tail truncated",
+    } as T }) };
+    await expect(fetchLogs(client)).resolves.toEqual([
+      { file: "日志提示", message: "tail truncated" }, { file: "app.log", message: "latest" },
+    ]);
   });
 
   it("uses auth endpoints and stores short session token in sessionStorage", async () => {
@@ -447,6 +598,7 @@ describe("media source API client", () => {
     await fetchLocalDirectories("D:/media", httpClient);
     await fetchSharedProtocolCapabilities(httpClient);
     await testMediaSourceConnection(1, httpClient);
+    await verifyWebDavConditionalMove(1, httpClient);
     await testMediaSourceConnectionPayload({ path: "D:/new", path_type: "local" }, httpClient);
     await fetchMediaSourceDirectories(1, "D:/media", httpClient);
 
@@ -460,6 +612,7 @@ describe("media source API client", () => {
       "GET /media-sources/local-directories?path=D%3A%2Fmedia",
       "GET /shared-protocols",
       "POST /media-sources/1/test-connection:{}",
+      "POST /media-sources/1/verify-conditional-move:{}",
       'POST /media-sources/test-connection:{"path":"D:/new","path_type":"local"}',
       "GET /media-sources/1/directories?path=D%3A%2Fmedia",
     ]);
@@ -512,6 +665,16 @@ describe("media source API client", () => {
       httpClient,
     );
     await recoverRemoteOperation(9, httpClient);
+    await fetchFileActionAuditIntents(
+      { page: 1, page_size: 50, status: "review_required" },
+      httpClient,
+    );
+    await fetchAuditIntentCapacity(httpClient);
+    await closeFileActionAuditIntent(
+      7,
+      { reason: "已核对", evidence: "维护记录" },
+      httpClient,
+    );
 
     expect(calls).toEqual([
       'POST /scan-jobs:{"media_source_id":1,"scan_mode":"full"}',
@@ -524,6 +687,9 @@ describe("media source API client", () => {
       'PATCH /tasks/scan_job/1/archive:{"archived":true,"reason":"已处理"}',
       "GET /remote-operations?page=2&page_size=50&media_source_id=1&operation_type=rollback&status=failed",
       "POST /remote-operations/9/recover:{}",
+      "GET /tasks/audit-intents?page=1&page_size=50&status=review_required",
+      "GET /tasks/audit-intents/capacity",
+      'POST /tasks/audit-intents/7/close:{"reason":"已核对","evidence":"维护记录"}',
     ]);
   });
 });
@@ -626,6 +792,7 @@ describe("rename operation API client", () => {
     await createRenameDryRun([1, 2], httpClient);
     await fetchRenameOperation(10, httpClient);
     await executeRenameOperation(10, httpClient);
+    await acceptRenameOperation(10, httpClient);
     await createRenameRollbackPlan(10, httpClient);
     await fetchRenameRollbackPlans(10, httpClient);
     await fetchRenameRollbackPlan(20, httpClient);
@@ -636,6 +803,7 @@ describe("rename operation API client", () => {
       'POST /rename-operations/dry-run:{"rename_preview_ids":[1,2]}',
       "GET /rename-operations/10",
       "POST /rename-operations/10/execute:{}",
+      "POST /rename-operations/10/execute-async:{}",
       "POST /rename-operations/10/rollback-plan:{}",
       "GET /rename-rollback-plans?operation_id=10",
       "GET /rename-rollback-plans/20",
@@ -665,6 +833,7 @@ describe("settings API client", () => {
 
     await fetchSettings(httpClient);
     await fetchMetadataProviderConfigs(httpClient);
+    await fetchAiReadiness(httpClient);
     await updateSettings({ "tmdb.timeout_ms": 12000 }, httpClient);
     await updateSettings({ "privacy.custom_sensitive_words": ["自定义"] }, httpClient);
     await updateMetadataProviderConfig(
@@ -685,6 +854,7 @@ describe("settings API client", () => {
     expect(calls).toEqual([
       "GET /settings",
       "GET /settings/metadata-providers",
+      "GET /settings/ai/readiness",
       'PUT /settings:{"values":{"tmdb.timeout_ms":12000}}',
       'PUT /settings:{"values":{"privacy.custom_sensitive_words":["自定义"]}}',
       'PUT /settings/metadata-providers/bangumi:{"enabled":true,"priority":30,"base_url":"https://api.bgm.tv","api_key":"token","timeout_seconds":10,"max_retries":1}',
@@ -714,6 +884,20 @@ describe("settings API client", () => {
 });
 
 describe("pending file API client", () => {
+  it("uses independent bounded read endpoints without submitting mutations", async () => {
+    const calls: string[] = [];
+    const httpClient: ApiHttpClient = { get: async <T = unknown>(url: string): Promise<{ data: T }> => {
+      calls.push(url); return { data: {} as T };
+    } };
+    await fetchPendingFilesPage({ scan_job_id: 2, page: 3, page_size: 50 }, httpClient);
+    await fetchRenamePreviewsPage({ scan_job_id: 2, keyword: "a & b", page: 2, page_size: 10 }, httpClient);
+    await fetchRenamePreviewSelection({ scan_job_id: 2, status: "edited", action: "rename" }, httpClient);
+    expect(calls).toEqual([
+      "/pending-files/page?scan_job_id=2&page=3&page_size=50",
+      "/rename-previews/page?scan_job_id=2&keyword=a+%26+b&page=2&page_size=10",
+      "/rename-previews/selection?scan_job_id=2&status=edited&action=rename",
+    ]);
+  });
   it("uses pending file endpoints", async () => {
     const calls: string[] = [];
     const httpClient: ApiHttpClient = {
@@ -736,6 +920,9 @@ describe("pending file API client", () => {
     await parsePendingFileWithAi(1, httpClient);
     await clearPendingFiles({ scan_job_id: 2 }, httpClient);
     await movePendingFiles([1, 2], "D:/pending", httpClient);
+    await acceptPendingMove([1, 2], "D:/pending", "synthetic-request", httpClient);
+    await fetchPendingMove(3, httpClient);
+    await findPendingMove("synthetic-request", httpClient);
 
     expect(calls).toEqual([
       "GET /pending-files?scan_job_id=2",
@@ -743,6 +930,9 @@ describe("pending file API client", () => {
       "POST /pending-files/1/ai-parse:{}",
       "POST /pending-files/clear?scan_job_id=2:{}",
       'POST /pending-files/move:{"ids":[1,2],"target_directory":"D:/pending"}',
+      'POST /pending-files/move-async:{"ids":[1,2],"target_directory":"D:/pending","request_id":"synthetic-request"}',
+      "GET /pending-files/moves/3",
+      "GET /pending-files/moves/by-request/synthetic-request",
     ]);
   });
 });

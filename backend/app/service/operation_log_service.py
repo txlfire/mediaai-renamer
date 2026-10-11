@@ -12,11 +12,13 @@ from typing import Any
 from app.core.config import AppSettings
 from app.core.logger import get_logger
 from app.service.audit_service import sanitize_audit_detail
+from app.utils.redaction import redactUrlCredentials
 from app.service.settings_service import get_effective_settings
 
 TASK_TYPE_SCAN_JOB = "scan_job"
 TASK_TYPE_RENAME_OPERATION = "rename_operation"
 TASK_TYPE_ROLLBACK_PLAN = "rollback_plan"
+TASK_TYPE_PENDING_MOVE = "pending_move"
 LEVEL_DEBUG = "debug"
 LEVEL_INFO = "info"
 LEVEL_WARNING = "warning"
@@ -63,6 +65,7 @@ class OperationLogCleanupSummary:
 
     deleted: int
     bytes_deleted: int
+    budget_exhausted: bool = False
 
 
 def _utc_now_text() -> str:
@@ -98,10 +101,10 @@ def _row_to_operation_log(row: sqlite3.Row) -> OperationLogItem:
         task_id=int(row["task_id"]),
         level=str(row["level"]),
         stage=str(row["stage"]),
-        message=str(row["message"]),
+        message=redactUrlCredentials(str(row["message"])),
         progress_current=int(row["progress_current"]) if row["progress_current"] is not None else None,
         progress_total=int(row["progress_total"]) if row["progress_total"] is not None else None,
-        detail=detail,
+        detail=sanitize_audit_detail(detail),
         approx_bytes=int(row["approx_bytes"]),
         created_at=str(row["created_at"]),
     )
@@ -142,6 +145,8 @@ def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -
         table = "rename_operations"
     elif task_type == TASK_TYPE_ROLLBACK_PLAN:
         table = "rename_rollback_plans"
+    elif task_type == TASK_TYPE_PENDING_MOVE:
+        table = "pending_move_tasks"
     else:
         return False
     row = connection.execute(f"SELECT 1 FROM {table} WHERE id = ?", (task_id,)).fetchone()
@@ -149,10 +154,22 @@ def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -
 
 
 def _task_running(connection: sqlite3.Connection, task_type: str, task_id: int) -> bool:
-    if task_type == TASK_TYPE_SCAN_JOB:
-        row = connection.execute("SELECT status FROM scan_jobs WHERE id = ?", (task_id,)).fetchone()
-        return bool(row and row["status"] == "running")
-    return False
+    table = {
+        TASK_TYPE_SCAN_JOB: "scan_jobs", TASK_TYPE_RENAME_OPERATION: "rename_operations",
+        TASK_TYPE_ROLLBACK_PLAN: "rename_rollback_plans",
+        TASK_TYPE_PENDING_MOVE: "pending_move_tasks",
+    }.get(task_type)
+    if table is None:
+        return False
+    row = connection.execute(f"SELECT status FROM {table} WHERE id = ?", (task_id,)).fetchone()
+    return bool(row and row["status"] in {"queued", "running"})
+
+
+def _warnLogFailure(exc: Exception) -> None:
+    try:
+        logger.warning("任务运行日志降级 error_type=%s", type(exc).__name__)
+    except Exception:  # noqa: BLE001 - 降级日志自身失败不能再次影响业务。
+        pass
 
 
 def record_operation_log(
@@ -170,16 +187,18 @@ def record_operation_log(
 ) -> OperationLogItem | None:
     """写入任务运行日志；失败时只记录应用日志，不中断主流程。"""
 
-    now = _utc_now_text()
-    detail_json = (
-        json.dumps(sanitize_audit_detail(detail), ensure_ascii=False, separators=(",", ":"))
-        if detail is not None
-        else None
-    )
-    approx_bytes = len(message.encode("utf-8")) + (len(detail_json.encode("utf-8")) if detail_json else 0)
     owns_connection = connection is None
-    target_connection = connection or _connect(settings)
+    target_connection = connection
     try:
+        now = _utc_now_text()
+        detail_json = (
+            json.dumps(sanitize_audit_detail(detail), ensure_ascii=False, separators=(",", ":"))
+            if detail is not None else None
+        )
+        message = redactUrlCredentials(message)
+        approx_bytes = len(message.encode("utf-8")) + (len(detail_json.encode("utf-8")) if detail_json else 0)
+        if target_connection is None:
+            target_connection = _connect(settings)
         cursor = target_connection.execute(
             "INSERT INTO operation_logs "
             "(task_type, task_id, level, stage, message, progress_current, progress_total, "
@@ -205,17 +224,21 @@ def record_operation_log(
             (int(cursor.lastrowid),),
         ).fetchone()
         item = _row_to_operation_log(row)
-        if owns_connection:
-            cleanup_operation_logs(settings)
         return item
     except Exception as exc:  # noqa: BLE001 - 运行日志不能影响主业务。
-        if owns_connection:
-            target_connection.rollback()
-        logger.warning("写入任务运行日志失败: %s", exc)
+        if owns_connection and target_connection is not None:
+            try:
+                target_connection.rollback()
+            except Exception as rollbackExc:  # noqa: BLE001 - 保留主业务继续执行。
+                _warnLogFailure(rollbackExc)
+        _warnLogFailure(exc)
         return None
     finally:
-        if owns_connection:
-            target_connection.close()
+        if owns_connection and target_connection is not None:
+            try:
+                target_connection.close()
+            except Exception as closeExc:  # noqa: BLE001 - 关闭日志连接失败也只降级。
+                _warnLogFailure(closeExc)
 
 
 def list_operation_logs(
@@ -242,7 +265,8 @@ def list_operation_logs(
             (task_type, task_id, max(0, int(after_id)), safe_limit),
         ).fetchall()
         total = int(total_row["total"]) if total_row else 0
-        latest_id = int(total_row["latest_id"]) if total_row else 0
+        # 游标只确认已返回的最后一条；任务最大 ID 不能代表已消费分页。
+        latest_id = int(rows[-1]["id"]) if rows else max(0, int(after_id))
         exists = _task_exists(connection, task_type, task_id)
         running = _task_running(connection, task_type, task_id)
 
@@ -250,8 +274,9 @@ def list_operation_logs(
     cleared = False
     if total == 0:
         if exists:
-            cleared = True
-            message = "该任务暂无运行日志，或日志已按保留策略清理。"
+            cleared = not running
+            message = ("任务运行中，正在等待运行日志。" if running
+                       else "该任务暂无运行日志，或日志已按保留策略清理。")
         else:
             message = "任务不存在或日志不可用。"
 
@@ -267,19 +292,31 @@ def list_operation_logs(
 
 
 def export_operation_logs_text(settings: AppSettings, *, task_type: str, task_id: int) -> str:
-    """导出指定任务的运行日志文本。"""
+    """按 ID 顺序导出，最多 10000 行/1MB；超长历史条目不读入 Python 正文。"""
 
+    lines = []
+    totalBytes = 0
+    truncated = False
     with closing(_connect(settings)) as connection:
         rows = connection.execute(
-            "SELECT * FROM operation_logs WHERE task_type = ? AND task_id = ? ORDER BY id",
+            "SELECT created_at, level, stage, CASE WHEN LENGTH(message) > 16384 THEN '[单条日志超过导出上限，已省略]' ELSE message END AS message "
+            "FROM operation_logs WHERE task_type = ? AND task_id = ? ORDER BY id LIMIT 10001",
             (task_type, task_id),
-        ).fetchall()
-    if not rows:
+        )
+        for row in rows:
+            line = redactUrlCredentials(f"[{row['created_at']}] [{str(row['level']).upper()}] [{row['stage']}] {row['message']}")
+            size = len(line.encode("utf-8")) + 1
+            if len(lines) >= 10000 or totalBytes + size > 1024 * 1024 - 512:
+                truncated = True
+                break
+            lines.append(line)
+            totalBytes += size
+    if not lines:
+        if truncated:
+            return "首条日志超过安全导出上限，未导出原始内容。\n"
         return "该任务暂无运行日志，或日志已按保留策略清理。\n"
-    lines = []
-    for row in rows:
-        item = _row_to_operation_log(row)
-        lines.append(f"[{item.created_at}] [{item.level.upper()}] [{item.stage}] {item.message}")
+    if truncated:
+        lines.insert(0, "[导出达到10000行或1MB上限，后续内容未导出；请通过日志分页继续查看。]")
     return "\n".join(lines) + "\n"
 
 
@@ -320,10 +357,11 @@ def _trim_by_size(
     params: tuple[object, ...],
     max_bytes: int,
     batch_size: int,
+    maxDeletes: int,
 ) -> tuple[int, int]:
     deleted = 0
     bytes_deleted = 0
-    while True:
+    while deleted < maxDeletes:
         row = connection.execute(
             f"SELECT COALESCE(SUM(approx_bytes), 0) AS total_bytes FROM operation_logs WHERE {where_sql}",
             params,
@@ -337,7 +375,7 @@ def _trim_by_size(
             f"{where_sql} AND level NOT IN (?, ?, ?)",
             (*params, *PROTECTED_LEVELS),
             bytes_to_delete=excess,
-            batch_size=batch_size,
+            batch_size=min(batch_size, maxDeletes - deleted),
         )
         if count == 0:
             count, size = _delete_selected_rows(
@@ -345,13 +383,22 @@ def _trim_by_size(
                 where_sql,
                 params,
                 bytes_to_delete=excess,
-                batch_size=batch_size,
+                batch_size=min(batch_size, maxDeletes - deleted),
             )
         if count == 0:
             break
         deleted += count
         bytes_deleted += size
     return deleted, bytes_deleted
+
+
+def cleanup_operation_logs_best_effort(settings: AppSettings) -> OperationLogCleanupSummary | None:
+    """业务收尾只尽力清理，管理 API 仍使用严格清理函数并报告失败。"""
+    try:
+        return cleanup_operation_logs(settings)
+    except Exception as exc:  # noqa: BLE001 - 已提交业务不能因辅助清理失败伪报未执行。
+        _warnLogFailure(exc)
+        return None
 
 
 def cleanup_operation_logs(settings: AppSettings) -> OperationLogCleanupSummary:
@@ -384,26 +431,30 @@ def cleanup_operation_logs(settings: AppSettings) -> OperationLogCleanupSummary:
             params=(),
             max_bytes=max_total_bytes,
             batch_size=batch_size,
+            maxDeletes=max(0, batch_size - deleted),
         )
         deleted += total_deleted
         bytes_deleted += total_bytes
 
         task_rows = connection.execute(
             "SELECT task_type, task_id FROM operation_logs "
-            "GROUP BY task_type, task_id HAVING COALESCE(SUM(approx_bytes), 0) > ?",
-            (max_task_bytes,),
-        ).fetchall()
+            "GROUP BY task_type, task_id HAVING COALESCE(SUM(approx_bytes), 0) > ? LIMIT ?",
+            (max_task_bytes, max(0, batch_size - deleted)),
+        ).fetchall() if deleted < batch_size else []
         for row in task_rows:
+            if deleted >= batch_size:
+                break
             task_deleted, task_bytes = _trim_by_size(
                 connection,
                 where_sql="task_type = ? AND task_id = ?",
                 params=(str(row["task_type"]), int(row["task_id"])),
                 max_bytes=max_task_bytes,
                 batch_size=batch_size,
+                maxDeletes=max(0, batch_size - deleted),
             )
             deleted += task_deleted
             bytes_deleted += task_bytes
 
         connection.commit()
 
-    return OperationLogCleanupSummary(deleted=deleted, bytes_deleted=bytes_deleted)
+    return OperationLogCleanupSummary(deleted=deleted, bytes_deleted=bytes_deleted, budget_exhausted=deleted >= batch_size)

@@ -1,13 +1,15 @@
 import tempfile
 import unittest
 import sqlite3
+import json
 from contextlib import closing
 from unittest.mock import patch
 from pathlib import Path
 
 from app.core.config import AppSettings, LoggingSettings, ScanSettings
 from app.core.database import ensure_database
-from app.service.media_source_service import create_media_source
+from app.service.media_source_service import create_media_source, update_media_source
+from app.service.shared_protocols.base import ConnectionTestResult
 from app.service.pending_file_service import list_pending_files
 from app.service.preview_service import generate_rename_previews, list_rename_previews
 from app.service.scan_service import (
@@ -19,9 +21,187 @@ from app.service.scan_service import (
     run_full_scan,
 )
 from app.service.settings_service import update_setting_values
+from app.service.operation_log_service import list_operation_logs
 
 
 class ScanServiceTest(unittest.TestCase):
+    def test_local_scan_reports_progress_before_reading_the_next_file(self):
+        from app.service.scan_service import _stat_with_nfs_retry
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            mediaRoot = root / "media"
+            mediaRoot.mkdir()
+            for name in ("a.mkv", "b.mkv"):
+                (mediaRoot / name).write_bytes(b"video")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "stream", mediaRoot)
+            update_setting_values(settings, {"scan.batch_size": 1, "scan.batch_interval_seconds": 0})
+            observed = []
+
+            def inspectBeforeStat(path, retryCount, timeoutSeconds):
+                if path.name == "b.mkv":
+                    with closing(sqlite3.connect(settings.database_path)) as connection:
+                        jobId = connection.execute("SELECT MAX(id) FROM scan_jobs").fetchone()[0]
+                        self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM media_files").fetchone()[0])
+                    page = list_operation_logs(settings, task_type="scan_job", task_id=jobId)
+                    observed.extend(item.progress_current for item in page.items if item.stage == "scan_progress")
+                return _stat_with_nfs_retry(path, retryCount, timeoutSeconds)
+
+            with patch("app.service.scan_service._stat_with_nfs_retry", side_effect=inspectBeforeStat):
+                job = run_full_scan(settings, source.id)
+            self.assertEqual([1], observed)
+            self.assertEqual(2, job.video_count)
+
+    def test_scan_audit_failure_prevents_task_creation(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            media.mkdir()
+            (media / "movie.mkv").write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "audit", media, True)
+            with patch("app.service.scan_service.record_audit_event", side_effect=sqlite3.OperationalError("synthetic audit outage")):
+                with self.assertRaises(sqlite3.OperationalError):
+                    run_full_scan(settings, source.id)
+            self.assertEqual([], list_scan_jobs(settings))
+            self.assertEqual([], list_media_files(settings))
+
+    def test_scan_completion_audit_failure_rolls_back_published_results(self):
+        from app.service.audit_service import record_audit_event
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            media.mkdir()
+            (media / "movie.mkv").write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "audit", media, True)
+
+            def failSuccessfulCompletion(*args, **kwargs):
+                if kwargs["result"] == "success":
+                    raise sqlite3.OperationalError("synthetic final audit outage")
+                return record_audit_event(*args, **kwargs)
+
+            with patch("app.service.scan_service.record_audit_event", side_effect=failSuccessfulCompletion):
+                with self.assertRaises(sqlite3.OperationalError):
+                    run_full_scan(settings, source.id)
+            self.assertEqual([], list_media_files(settings))
+            self.assertEqual("failed", list_scan_jobs(settings)[0].status)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                events = connection.execute("SELECT result FROM audit_events WHERE target_type='scan_job' ORDER BY id").fetchall()
+                self.assertEqual([("pending",), ("failed",)], events)
+
+    def test_progress_logs_are_readable_before_business_results_are_published(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            mediaRoot = root / "media"
+            mediaRoot.mkdir()
+            for name in ("a.mkv", "b.mkv"):
+                (mediaRoot / name).write_bytes(b"video")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "source", mediaRoot)
+            update_setting_values(settings, {"scan.batch_size": 1, "scan.batch_interval_seconds": 1})
+            observed = []
+
+            def inspectProgress(_):
+                with closing(sqlite3.connect(settings.database_path, timeout=0.2)) as connection:
+                    jobId = connection.execute("SELECT id FROM scan_jobs ORDER BY id DESC LIMIT 1").fetchone()[0]
+                    self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM media_files").fetchone()[0])
+                    self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM scan_file_index").fetchone()[0])
+                    page = list_operation_logs(settings, task_type="scan_job", task_id=jobId)
+                    self.assertTrue(page.running)
+                    observed.append([item.progress_current for item in page.items if item.stage == "scan_progress"])
+
+            with patch("app.service.scan_service.time.sleep", side_effect=inspectProgress):
+                job = run_full_scan(settings, source.id)
+            self.assertEqual([[1], [1, 2]], observed)
+            self.assertEqual("completed", job.status)
+            self.assertEqual(2, len(list_media_files(settings, scan_job_id=job.id)))
+
+    def test_progress_survives_failure_while_staged_business_results_are_discarded(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            mediaRoot = root / "media"
+            mediaRoot.mkdir()
+            (mediaRoot / "a.mkv").write_bytes(b"video")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "source", mediaRoot)
+            update_setting_values(settings, {"scan.batch_size": 1, "scan.batch_interval_seconds": 1})
+            with patch("app.service.scan_service.time.sleep", side_effect=RuntimeError("controlled interruption")):
+                with self.assertRaisesRegex(RuntimeError, "controlled interruption"):
+                    run_full_scan(settings, source.id)
+            job = list_scan_jobs(settings, media_source_id=source.id)[0]
+            page = list_operation_logs(settings, task_type="scan_job", task_id=job.id)
+            self.assertEqual("failed", job.status)
+            self.assertIn("scan_progress", [item.stage for item in page.items])
+            self.assertIn("scan_failed", [item.stage for item in page.items])
+            self.assertEqual([], list_media_files(settings, scan_job_id=job.id))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM scan_file_index").fetchone()[0])
+
+    def test_cleanup_failure_does_not_rollback_completed_scan_or_mask_primary_error(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            mediaRoot = root / "media"
+            mediaRoot.mkdir()
+            (mediaRoot / "a.mkv").write_bytes(b"video")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "source", mediaRoot)
+            with patch("app.service.scan_service.cleanup_operation_logs", side_effect=RuntimeError("controlled cleanup failure")):
+                job = run_full_scan(settings, source.id)
+            self.assertEqual("completed", job.status)
+            self.assertEqual(1, len(list_media_files(settings, scan_job_id=job.id)))
+            page = list_operation_logs(settings, task_type="scan_job", task_id=job.id)
+            self.assertIn("log_cleanup_failed", [item.stage for item in page.items])
+
+    def test_concurrent_index_write_is_not_overwritten_by_staged_scan(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            mediaRoot = root / "media"
+            mediaRoot.mkdir()
+            mediaFile = mediaRoot / "a.mkv"
+            mediaFile.write_bytes(b"video")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "source", mediaRoot)
+            update_setting_values(settings, {"scan.batch_size": 1, "scan.batch_interval_seconds": 1})
+
+            def independentWrite(_):
+                with closing(sqlite3.connect(settings.database_path, timeout=0.2)) as connection:
+                    _upsert_scan_file_index(connection, source.id, 999, mediaFile, mediaRoot, 999, "external", "active", "external")
+                    connection.commit()
+
+            with patch("app.service.scan_service.time.sleep", side_effect=independentWrite):
+                with self.assertRaisesRegex(ValueError, "索引已被其他操作修改"):
+                    run_full_scan(settings, source.id)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual((999, "external"), connection.execute("SELECT file_size, updated_at FROM scan_file_index").fetchone())
+
+    def test_source_change_between_readiness_and_scan_claim_never_creates_job(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            oldRoot, newRoot = root / "old", root / "new"
+            oldRoot.mkdir()
+            newRoot.mkdir()
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "source", oldRoot)
+
+            def changeSource(*args):
+                update_media_source(settings, source.id, "changed", newRoot, True, clear_history_on_path_change=True)
+                return ConnectionTestResult(True, "ready")
+
+            with patch("app.service.shared_protocols.local.LocalProtocol.check_scan_ready", side_effect=changeSource):
+                with self.assertRaisesRegex(ValueError, "媒体源已变化"):
+                    run_full_scan(settings, source.id)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0])
+
     def build_settings(self, root: Path) -> AppSettings:
         return AppSettings(
             data_dir=root,
@@ -205,6 +385,124 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(1, job.missing_count)
             self.assertEqual(2, job.indexed_count)
             self.assertEqual({"changed.mkv", "new.mkv"}, {file.file_name for file in files})
+
+    def test_narrower_scan_scope_does_not_mark_excluded_history_missing(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            (media / "season").mkdir(parents=True)
+            (media / "season" / "nested.mkv").write_bytes(b"media")
+            (media / ".hidden.mkv").write_bytes(b"media")
+            (media / "visible.mkv").write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "scope", media, True)
+            update_setting_values(settings, {"scan.skip_hidden_files": False})
+            run_full_scan(settings, source.id)
+            update_setting_values(settings, {"scan.skip_hidden_files": True, "scan.recursive": False})
+            job = run_full_scan(settings, source.id, scan_mode="incremental")
+            self.assertEqual(0, job.missing_count)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                statuses = dict(connection.execute("SELECT normalized_path, status FROM scan_file_index WHERE media_source_id=?", (source.id,)))
+            self.assertEqual("active", statuses["season/nested.mkv"])
+            self.assertEqual("active", statuses[".hidden.mkv"])
+
+    def test_read_error_does_not_mark_previous_file_missing(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            media.mkdir()
+            (media / "movie.mkv").write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "partial", media, True)
+            run_full_scan(settings, source.id)
+            with patch("app.service.scan_service._stat_with_nfs_retry", side_effect=TimeoutError("synthetic timeout")):
+                job = run_full_scan(settings, source.id, scan_mode="incremental")
+            self.assertEqual("partial_completed", job.status)
+            self.assertEqual(0, job.missing_count)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                status = connection.execute("SELECT status FROM scan_file_index WHERE media_source_id=?", (source.id,)).fetchone()[0]
+            self.assertEqual("active", status)
+
+    def test_subdirectory_enumeration_error_does_not_publish_missing_indexes(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            (media / "season").mkdir(parents=True)
+            (media / "season" / "movie.mkv").write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "scope error", media, True)
+            run_full_scan(settings, source.id)
+
+            def unreadableWalk(path, *, onerror, followlinks):
+                onerror(PermissionError(13, "synthetic denied"))
+                return iter(())
+
+            with patch("app.service.scan_service.os.walk", side_effect=unreadableWalk):
+                with self.assertRaises(PermissionError):
+                    run_full_scan(settings, source.id, scan_mode="incremental")
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                status = connection.execute("SELECT status FROM scan_file_index WHERE media_source_id=?", (source.id,)).fetchone()[0]
+            self.assertEqual("active", status)
+            self.assertEqual("failed", max(list_scan_jobs(settings), key=lambda job: job.id).status)
+
+    def test_incremental_scan_rechecks_both_directions_of_size_policy_change(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            media.mkdir()
+            (media / "movie.mkv").write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "policy", media, True)
+            update_setting_values(settings, {"scan.minimum_file_size": 100})
+            first = run_full_scan(settings, source.id)
+            self.assertEqual(0, first.video_count)
+            update_setting_values(settings, {"scan.minimum_file_size": 0})
+            second = run_full_scan(settings, source.id, scan_mode="incremental")
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                firstPolicy = json.loads(connection.execute("SELECT policy_json FROM scan_jobs WHERE id=?", (first.id,)).fetchone()[0])
+                secondPolicy = json.loads(connection.execute("SELECT policy_json FROM scan_jobs WHERE id=?", (second.id,)).fetchone()[0])
+            self.assertEqual(100, firstPolicy["minimum_file_size"])
+            self.assertEqual(0, secondPolicy["minimum_file_size"])
+            self.assertEqual(1, secondPolicy["version"])
+            self.assertEqual([], list_pending_files(settings))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual("removed", connection.execute("SELECT status FROM pending_files WHERE scan_job_id=?", (first.id,)).fetchone()[0])
+            self.assertEqual(1, second.video_count)
+            self.assertEqual(1, second.changed_count)
+            self.assertEqual(0, second.skipped_count)
+            update_setting_values(settings, {"scan.minimum_file_size": 100})
+            third = run_full_scan(settings, source.id, scan_mode="incremental")
+            self.assertEqual(0, third.video_count)
+            self.assertEqual(1, third.changed_count)
+            self.assertEqual(0, third.skipped_count)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual("ignored", connection.execute("SELECT status FROM scan_file_index WHERE media_source_id=?", (source.id,)).fetchone()[0])
+
+    def test_reclassification_preserves_inflight_pending_move(self):
+        from app.service.local_file_action_service import prepareLocalFileAction
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            media = root / "media"
+            media.mkdir()
+            movie = media / "movie.mkv"
+            movie.write_bytes(b"media")
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(settings, "inflight", media, True)
+            update_setting_values(settings, {"scan.minimum_file_size": 100})
+            run_full_scan(settings, source.id)
+            pending = list_pending_files(settings)[0]
+            prepareLocalFileAction(settings, mediaSourceId=source.id, actionType="pending_move", recordId=pending.id,
+                                   sourcePath=str(movie), targetPath=str(root / "held.mkv"))
+            update_setting_values(settings, {"scan.minimum_file_size": 0})
+            run_full_scan(settings, source.id, scan_mode="incremental")
+            self.assertEqual("moving", list_pending_files(settings)[0].status)
+            self.assertTrue(movie.exists())
+            self.assertFalse((root / "held.mkv").exists())
 
     def test_run_full_scan_uses_hot_scan_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -406,7 +704,7 @@ class ScanServiceTest(unittest.TestCase):
             self.assertTrue(all(int(row["last_scan_job_id"]) == first_job.id for row in rows))
             self.assertTrue(all(str(row["status"]) == "active" for row in rows))
 
-    def test_incremental_scan_does_not_reclassify_historical_small_file_after_threshold_change(self):
+    def test_incremental_scan_reclassifies_historical_small_file_after_threshold_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             media_dir = root / "media"
@@ -428,11 +726,11 @@ class ScanServiceTest(unittest.TestCase):
             )
             second_job = run_full_scan(settings, source.id, scan_mode="incremental")
 
-            self.assertEqual("completed", second_job.status)
-            self.assertEqual(1, second_job.skipped_count)
-            self.assertEqual(0, second_job.warning_count)
+            self.assertEqual("partial_completed", second_job.status)
+            self.assertEqual(0, second_job.skipped_count)
+            self.assertEqual(1, second_job.warning_count)
             self.assertEqual(0, second_job.video_count)
-            self.assertEqual([], list_pending_files(settings, scan_job_id=second_job.id))
+            self.assertEqual(1, len(list_pending_files(settings, scan_job_id=second_job.id)))
 
     def test_webdav_scan_persists_video_files_and_uses_etag_for_incremental_skip(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -466,8 +764,8 @@ class ScanServiceTest(unittest.TestCase):
                 def __exit__(self, exc_type, exc, traceback):
                     return False
 
-                def read(self):
-                    return self.body
+                def read(self, size=-1):
+                    return self.body if size < 0 else self.body[:size]
 
             root_xml = """<?xml version="1.0" encoding="utf-8"?>
             <d:multistatus xmlns:d="DAV:">
@@ -542,6 +840,23 @@ class ScanServiceTest(unittest.TestCase):
             self.assertEqual(0, second_job.video_count)
             self.assertEqual(2, second_job.skipped_count)
             self.assertEqual([], second_files)
+
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                originalIndexes = connection.execute("SELECT * FROM scan_file_index ORDER BY id").fetchall()
+
+            def incompleteChildListing(request, timeout=5):
+                if request.full_url.endswith("/Show/"):
+                    return FakeResponse('<d:multistatus xmlns:d="DAV:"/>')
+                return FakeResponse(root_xml)
+
+            with patch("app.service.shared_protocols.webdav.urlopen", side_effect=incompleteChildListing):
+                with self.assertRaisesRegex(ValueError, "响应不完整"):
+                    run_full_scan(settings, source.id, scan_mode="incremental")
+            latestJob = max(list_scan_jobs(settings), key=lambda job: job.id)
+            self.assertEqual("failed", latestJob.status)
+            self.assertEqual([], list_media_files(settings, scan_job_id=latestJob.id))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(originalIndexes, connection.execute("SELECT * FROM scan_file_index ORDER BY id").fetchall())
 
     def test_recover_interrupted_scan_jobs_marks_running_jobs_failed(self):
         with tempfile.TemporaryDirectory() as temp_dir:

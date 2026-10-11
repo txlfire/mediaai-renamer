@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -47,7 +48,7 @@ class PermissionGuardTest(unittest.TestCase):
             )
             connection.commit()
 
-    def test_settings_write_stays_compatible_before_user_bootstrap(self):
+    def test_settings_write_is_rejected_before_user_bootstrap(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             client = self.build_client(Path(temp_dir))
 
@@ -56,7 +57,26 @@ class PermissionGuardTest(unittest.TestCase):
                 json={"values": {"tmdb.timeout_ms": "12000"}},
             )
 
+            self.assertEqual(401, response.status_code)
+
+    def test_log_storage_requires_audit_permission_and_does_not_cleanup(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tempDir:
+            root = Path(tempDir)
+            client = self.build_client(root)
+            token = self.bootstrap_and_login(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            rotated = root / "logs" / "app.log.1"
+            rotated.write_bytes(b"retained log")
+            with patch("app.service.log_service.cleanup_logs", side_effect=AssertionError("read must not cleanup")):
+                self.assertEqual(401, client.get("/api/logs/storage").status_code)
+                self.update_permissions(root, ["settings:write"])
+                self.assertEqual(403, client.get("/api/logs/storage", headers=headers).status_code)
+                self.update_permissions(root, ["audit:read"])
+                response = client.get("/api/logs/storage", headers=headers)
             self.assertEqual(200, response.status_code)
+            self.assertGreaterEqual(response.json()["managed_file_bytes"], len(b"retained log"))
+            self.assertIn("database_reusable_bytes", response.json())
+            self.assertEqual(b"retained log", rotated.read_bytes())
 
     def test_settings_write_requires_matching_user_permission_after_bootstrap(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -184,6 +204,36 @@ class PermissionGuardTest(unittest.TestCase):
             self.assertEqual(401, unauthenticated_response.status_code)
             self.assertEqual(403, forbidden_response.status_code)
             self.assertEqual(200, allowed_response.status_code)
+
+    def test_settings_details_require_settings_permission_but_ai_readiness_only_requires_login(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            root = Path(temp_dir)
+            client = self.build_client(root)
+            token = self.bootstrap_and_login(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            protected_endpoints = [
+                "/api/settings",
+                "/api/settings/metadata-providers",
+                "/api/settings/tmdb/test-result",
+                "/api/settings/imdb/test-result",
+                "/api/settings/ai/test-result",
+                "/api/settings/naming/export",
+            ]
+
+            self.update_permissions(root, ["metadata:submit"])
+            for endpoint in protected_endpoints:
+                with self.subTest(endpoint=endpoint):
+                    self.assertEqual(403, client.get(endpoint, headers=headers).status_code)
+
+            readiness = client.get("/api/settings/ai/readiness", headers=headers)
+            self.assertEqual(200, readiness.status_code)
+            self.assertEqual({"ready", "status", "tested_at", "message"}, set(readiness.json()))
+            self.assertNotIn("config_snapshot", readiness.json())
+
+            self.update_permissions(root, ["settings:write"])
+            for endpoint in protected_endpoints:
+                with self.subTest(allowed_endpoint=endpoint):
+                    self.assertEqual(200, client.get(endpoint, headers=headers).status_code)
 
     def test_rename_execute_requires_rename_permission_after_bootstrap(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:

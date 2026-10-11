@@ -7,7 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from api_test_support import authenticatedClient as TestClient
 
 from app.core.config import AppSettings, LoggingSettings, ScanSettings
 from app.core.database import ensure_database
@@ -198,6 +198,16 @@ class RenamePreviewServiceTest(RenamePreviewTestCase):
         self.assertEqual("Matrix.Custom.mkv", updated.current_target_name)
         self.assertEqual("edited", updated.status)
         self.assertEqual("The.Matrix.1999.1080p.mkv", self.media_file.name)
+
+    def test_update_preview_reads_back_only_the_updated_record(self):
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+
+        with patch("app.service.preview_service.list_rename_previews", side_effect=AssertionError("禁止全表返读")):
+            updated = update_rename_preview(self.settings, preview.id, "Matrix.Direct")
+
+        self.assertEqual(preview.id, updated.id)
+        self.assertEqual("Matrix.Direct.mkv", updated.current_target_name)
 
     def test_filters_by_media_type_and_keyword(self):
         generate_rename_previews(self.settings)

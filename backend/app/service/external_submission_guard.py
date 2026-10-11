@@ -2,10 +2,15 @@
 
 from contextlib import closing
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from threading import Lock
+import hashlib
+import json
 import re
 import sqlite3
 
 from app.core.config import AppSettings
+from app.service.audit_service import AuditWriteContext, record_audit_event
 from app.schema.external_submission import (
     ExternalSubmissionBlockList,
     ExternalSubmissionBlockRecord,
@@ -27,6 +32,27 @@ BLOCK_DECISION_STATUSES = {
     BLOCK_STATUS_OVERRIDE_SUBMITTED,
     BLOCK_STATUS_ARCHIVED,
 }
+BLOCK_EXECUTION_STATUSES = {"override_submitting", "override_completed", "override_failed", "override_unknown"}
+
+
+def submissionPayloadFingerprint(sourceModule, sourceId, fileName, filePath, title, target, parsed) -> str:
+    payload = [sourceModule, sourceId, fileName, filePath, title, target, parsed]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+@dataclass
+class ExternalSubmissionPermit:
+    """仅由已消费授权构造的进程内能力，不接受客户端直接提供。"""
+    fingerprint: str
+    used: bool = False
+    lock: Lock = field(default_factory=Lock, repr=False)
+
+    def consume(self, fingerprint: str) -> bool:
+        with self.lock:
+            if self.used or fingerprint != self.fingerprint:
+                raise ValueError("外部提交授权范围不匹配或已使用")
+            self.used = True
+            return True
 
 
 def _utc_now() -> str:
@@ -50,7 +76,12 @@ def _normalize_words(words: list[str] | tuple[str, ...]) -> list[str]:
 def get_sensitive_words(settings: AppSettings) -> list[str]:
     """Return default and custom sensitive words in matching order."""
 
-    effective = get_effective_settings(settings)
+    return sensitiveWordsFromEffective(get_effective_settings(settings))
+
+
+def sensitiveWordsFromEffective(effective: dict[str, object]) -> list[str]:
+    """Return words from one already captured effective-settings snapshot."""
+
     default_enabled = bool(effective.get("privacy.default_sensitive_words_enabled"))
     default_value = effective.get("privacy.default_sensitive_words")
     default_words = default_value if isinstance(default_value, list) else DEFAULT_MEDIA_RISK_SENSITIVE_WORDS
@@ -201,8 +232,23 @@ def _matches_sensitive_word(combined_text: str, word: str) -> bool:
 
 
 def _match_sensitive_words(settings: AppSettings, values: list[str | None]) -> list[str]:
+    return matchSensitiveWordsFromEffective(get_effective_settings(settings), values)
+
+
+def matchSensitiveWordsFromEffective(
+    effective: dict[str, object],
+    values: list[str | None],
+) -> list[str]:
+    """Match values against one immutable effective-settings snapshot."""
+
     combined_text = "\n".join(str(value or "") for value in values).casefold()
-    return [word for word in get_sensitive_words(settings) if _matches_sensitive_word(combined_text, word)]
+    return [word for word in sensitiveWordsFromEffective(effective) if _matches_sensitive_word(combined_text, word)]
+
+
+def maskSensitiveWords(words: list[str]) -> list[str]:
+    """Return display-safe evidence without exposing configured words."""
+
+    return [_mask_word(word) for word in words]
 
 
 def check_external_submission(
@@ -213,9 +259,16 @@ def check_external_submission(
     file_path: str,
     match_title: str | None,
     target_service: str,
+    *,
+    authorization: ExternalSubmissionPermit | None = None,
+    parsedPayload: dict | None = None,
 ) -> ExternalSubmissionCheckResult:
     """Check and record whether one external submission should be blocked."""
 
+    if authorization is not None:
+        authorization.consume(submissionPayloadFingerprint(source_module, source_record_id, file_name, file_path,
+                                                            match_title, target_service, parsedPayload))
+        return ExternalSubmissionCheckResult(allowed=True, matched_words=[], message=None)
     matched_words = _match_sensitive_words(settings, [file_name, file_path, match_title])
     if not matched_words:
         return ExternalSubmissionCheckResult(allowed=True, matched_words=[], message=None)
@@ -249,7 +302,7 @@ def list_external_submission_blocks(
     conditions: list[str] = []
     params: list[object] = []
     if status:
-        if status not in BLOCK_DECISION_STATUSES:
+        if status not in BLOCK_DECISION_STATUSES | BLOCK_EXECUTION_STATUSES:
             raise ValueError(f"不支持的拦截记录状态: {status}")
         conditions.append("status = ?")
         params.append(status)
@@ -288,6 +341,8 @@ def update_external_submission_block_decision(
     user_decision: str | None,
     override_reason: str | None,
     operator: str,
+    *,
+    auditContext: AuditWriteContext | None = None,
 ) -> ExternalSubmissionBlockRecord:
     """Persist a user's decision for one external submission block record."""
 
@@ -295,18 +350,24 @@ def update_external_submission_block_decision(
         raise ValueError(f"不支持的拦截记录状态: {status}")
     if status == BLOCK_STATUS_OVERRIDE_SUBMITTED and not (override_reason or "").strip():
         raise ValueError("无视规则继续提交必须填写风险确认原因")
+    if status == BLOCK_STATUS_OVERRIDE_SUBMITTED:
+        raise ValueError("仅修改状态不会提交；请使用一次性确认提交接口")
 
     now = _utc_now()
+    context = auditContext or AuditWriteContext()
     decision_text = (user_decision or "").strip() or _default_decision_text(status)
     reason_text = (override_reason or "").strip() or None
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
         exists = connection.execute(
-            "SELECT id FROM external_submission_blocks WHERE id = ?",
+            "SELECT id,target_service,status FROM external_submission_blocks WHERE id = ?",
             (block_id,),
         ).fetchone()
         if exists is None:
             raise LookupError("外部提交拦截记录不存在")
+        if exists["status"] in {"override_submitting", "override_unknown"}:
+            raise ValueError("执行中或未知结果的记录不可修改，请先人工核查")
 
         connection.execute(
             "UPDATE external_submission_blocks "
@@ -322,6 +383,12 @@ def update_external_submission_block_decision(
                 block_id,
             ),
         )
+        record_audit_event(settings, event_type="external_submission.decision", action="update_external_submission_block",
+            result="success", summary=f"保存外部提交拦截决定：{status}", target_type="external_submission_block",
+            target_id=block_id, actor=context.actor, actor_name=operator if context.actor is None else None,
+            ip_address=context.ipAddress, user_agent=context.userAgent,
+            detail={"status": status, "user_decision": decision_text, "override_reason": reason_text,
+                    "target_service": exists["target_service"], "submission_executed": False}, connection=connection)
         connection.commit()
         return _get_block_record(connection, block_id)
 

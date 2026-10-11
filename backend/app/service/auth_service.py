@@ -8,9 +8,13 @@ import hmac
 import json
 import secrets
 import sqlite3
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.service.audit_service import AuditWriteContext
 
 from app.core.config import AppSettings
-from app.service.settings_service import get_effective_settings, update_setting_values
+from app.service.settings_service import get_effective_settings, SETTING_DEFINITIONS
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 120_000
@@ -94,6 +98,29 @@ def _connect(settings: AppSettings) -> sqlite3.Connection:
     connection = sqlite3.connect(settings.database_path)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def cleanupExpiredSessions(settings: AppSettings, *, limit: int = 200) -> dict:
+    """有界删除明确过期会话，不删审计、用户或尚未过期的撤销记录。"""
+    if not 1 <= limit <= 1000:
+        raise ValueError("会话清理数量必须为1至1000")
+    cutoff = _utc_now_text()
+    with closing(sqlite3.connect(settings.database_path, timeout=0.25)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        candidates = connection.execute(
+            "SELECT id FROM user_sessions WHERE julianday(expires_at) <= julianday(?) "
+            "ORDER BY julianday(expires_at), id LIMIT ?", (cutoff, limit + 1),
+        ).fetchall()
+        ids = [int(row[0]) for row in candidates[:limit]]
+        removed = 0
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            removed = connection.execute(
+                f"DELETE FROM user_sessions WHERE id IN ({placeholders}) "
+                "AND julianday(expires_at) <= julianday(?)", [*ids, cutoff],
+            ).rowcount
+        connection.commit()
+    return {"removed_count": removed, "has_more": len(candidates) > limit}
 
 
 def _user_columns(connection: sqlite3.Connection) -> set[str]:
@@ -297,6 +324,36 @@ def _ensure_settings_writer_remains(
         raise AuthServiceError("至少需要保留一个启用且具备系统设置权限的用户")
 
 
+def _recordUserMaintenanceAudit(settings: AppSettings, connection: sqlite3.Connection, userId: int,
+                                action: str, label: str, auditContext: "AuditWriteContext | None") -> None:
+    # 审计服务依赖 AuthUser，此处延迟导入避免模块初始化循环。
+    from app.service.audit_service import AuditWriteContext, record_audit_event
+    context = auditContext or AuditWriteContext()
+    row = connection.execute("SELECT * FROM users WHERE id = ?", (userId,)).fetchone()
+    detail = {"username": row["username"]}
+    if action != "reset_user_password":
+        detail.update(display_name=row["display_name"], enabled=bool(row["enabled"]),
+                      permissions=list(_parse_permissions(row["permissions_json"])))
+    record_audit_event(settings, event_type="user.manage", action=action, result="success",
+                       summary=f"{label}：{row['username']}", target_type="user", target_id=userId,
+                       actor=context.actor, actor_name="system" if context.actor is None else None,
+                       ip_address=context.ipAddress, user_agent=context.userAgent, detail=detail,
+                       connection=connection)
+
+
+def _recordAuthAudit(settings: AppSettings, connection: sqlite3.Connection, user: AuthUser | None,
+                     eventType: str, action: str, label: str, auditContext: "AuditWriteContext | None",
+                     *, detail: dict | None = None, actorName: str | None = None) -> None:
+    from app.service.audit_service import AuditWriteContext, record_audit_event
+    context = auditContext or AuditWriteContext()
+    actor = None if actorName else (context.actor or user)
+    record_audit_event(settings, event_type=eventType, action=action, result="success",
+                       summary=f"{label}：{user.username if user else 'unknown'}", target_type="user",
+                       target_id=user.id if user else None, actor=actor, actor_name=actorName or ("unknown" if actor is None else None),
+                       ip_address=context.ipAddress, user_agent=context.userAgent,
+                       detail=detail or ({"username": user.username} if user else None), connection=connection)
+
+
 def create_user(
     settings: AppSettings,
     username: str,
@@ -304,6 +361,8 @@ def create_user(
     password: str,
     permissions: list[str],
     enabled: bool,
+    *,
+    auditContext: "AuditWriteContext | None" = None,
 ) -> AuthUser:
     """创建本地用户。"""
 
@@ -327,6 +386,7 @@ def create_user(
             )
         except sqlite3.IntegrityError as exc:
             raise UserConflictError("用户名已存在") from exc
+        _recordUserMaintenanceAudit(settings, connection, user_id, "create_user", "创建用户", auditContext)
         connection.commit()
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return _row_to_user(row)
@@ -338,6 +398,8 @@ def update_user(
     display_name: str,
     permissions: list[str],
     enabled: bool,
+    *,
+    auditContext: "AuditWriteContext | None" = None,
 ) -> AuthUser:
     """更新用户显示名称、启用状态和权限。"""
 
@@ -345,6 +407,7 @@ def update_user(
     normalized_permissions = _validate_permissions(permissions)
     now = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise UserNotFoundError("用户不存在")
@@ -367,6 +430,7 @@ def update_user(
                 "WHERE user_id = ? AND revoked_at IS NULL",
                 (now, user_id),
             )
+        _recordUserMaintenanceAudit(settings, connection, user_id, "update_user", "更新用户", auditContext)
         connection.commit()
         updated_row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
@@ -375,12 +439,14 @@ def update_user(
     return _row_to_user(updated_row)
 
 
-def reset_user_password(settings: AppSettings, user_id: int, new_password: str) -> AuthUser:
+def reset_user_password(settings: AppSettings, user_id: int, new_password: str, *,
+                        auditContext: "AuditWriteContext | None" = None) -> AuthUser:
     """重置用户密码，并要求用户下次登录后修改。"""
 
     password = _validate_password(new_password)
     now = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise UserNotFoundError("用户不存在")
@@ -394,6 +460,7 @@ def reset_user_password(settings: AppSettings, user_id: int, new_password: str) 
             "WHERE user_id = ? AND revoked_at IS NULL",
             (now, user_id),
         )
+        _recordUserMaintenanceAudit(settings, connection, user_id, "reset_user_password", "重置用户密码", auditContext)
         connection.commit()
         updated_row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
@@ -407,6 +474,8 @@ def bootstrap_admin(
     username: str,
     display_name: str,
     password: str,
+    *,
+    auditContext: "AuditWriteContext | None" = None,
 ) -> AuthUser:
     """首次启动时创建本地管理员。"""
 
@@ -415,6 +484,7 @@ def bootstrap_admin(
     display_name = display_name.strip() or username
     now = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         existing_count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
         if existing_count:
             raise BootstrapUnavailableError("已存在用户，不能再次初始化管理员")
@@ -433,17 +503,20 @@ def bootstrap_admin(
             now,
             now,
         )
-        connection.commit()
         row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
-    user = _row_to_user(row)
-    update_setting_values(
-        settings,
-        {"auth.admin_bootstrap_enabled": False},
-        operator=user.username,
-    )
+        user = _row_to_user(row)
+        definition = SETTING_DEFINITIONS["auth.admin_bootstrap_enabled"]
+        connection.execute(
+            "INSERT INTO system_settings (key, category, value, description, sensitive, operator, created_at, updated_at) "
+            "VALUES (?, ?, 'false', ?, 0, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = 'false', operator = excluded.operator, updated_at = excluded.updated_at",
+            (definition.key, definition.category, definition.description, user.username, now, now),
+        )
+        _recordAuthAudit(settings, connection, user, "auth.bootstrap", "bootstrap_admin", "初始化管理员", auditContext,
+                         detail={"username": user.username, "display_name": user.display_name, "bootstrap_enabled": False})
+        connection.commit()
     return user
 
 
@@ -467,6 +540,7 @@ def ensure_default_admin(settings: AppSettings) -> AuthUser | None:
     display_name = settings.auth.default_admin_display_name.strip() or username
     now = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         existing_count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
         if existing_count:
             return None
@@ -480,6 +554,9 @@ def ensure_default_admin(settings: AppSettings) -> AuthUser | None:
             None,
             now,
         )
+        row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        _recordAuthAudit(settings, connection, _row_to_user(row), "auth.bootstrap", "create_default_admin",
+                         "创建默认管理员", None, actorName="local_initialization")
         connection.commit()
         row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
@@ -493,6 +570,8 @@ def login(
     username: str,
     password: str,
     remember_login: bool = False,
+    *,
+    auditContext: "AuditWriteContext | None" = None,
 ) -> LoginResult:
     """验证用户名密码并创建会话。"""
 
@@ -505,6 +584,7 @@ def login(
     else:
         expires_at = (now + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM users WHERE username = ? AND enabled = 1",
             (username,),
@@ -522,11 +602,13 @@ def login(
             "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
             (now_text, now_text, int(row["id"])),
         )
-        connection.commit()
         user_row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
             (int(row["id"]),),
         ).fetchone()
+        _recordAuthAudit(settings, connection, _row_to_user(user_row), "auth.login", "login", "登录成功", auditContext,
+                         detail={"username": username, "remember_login": remember_login})
+        connection.commit()
     return LoginResult(
         access_token=access_token,
         token_type="bearer",
@@ -556,16 +638,20 @@ def get_user_by_token(settings: AppSettings, access_token: str) -> AuthUser:
     return _row_to_user(row)
 
 
-def logout(settings: AppSettings, access_token: str) -> None:
+def logout(settings: AppSettings, access_token: str, *, auditContext: "AuditWriteContext | None" = None) -> None:
     """吊销当前访问 token。"""
 
     now_text = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT u.* FROM users u JOIN user_sessions s ON s.user_id = u.id WHERE s.token_hash = ?",
+                                 (_hash_token(access_token),)).fetchone()
         connection.execute(
             "UPDATE user_sessions SET revoked_at = ? "
             "WHERE token_hash = ? AND revoked_at IS NULL",
             (now_text, _hash_token(access_token)),
         )
+        _recordAuthAudit(settings, connection, _row_to_user(row) if row else None, "auth.logout", "logout", "退出登录", auditContext)
         connection.commit()
 
 
@@ -574,12 +660,15 @@ def change_password(
     user_id: int,
     current_password: str,
     new_password: str,
+    *,
+    auditContext: "AuditWriteContext | None" = None,
 ) -> AuthUser:
     """修改当前用户密码。"""
 
     new_password = _validate_new_password(new_password, settings.auth.default_admin_password)
     now_text = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM users WHERE id = ? AND enabled = 1",
             (user_id,),
@@ -591,11 +680,16 @@ def change_password(
             "password_changed_at = ?, updated_at = ? WHERE id = ?",
             (_hash_password(new_password), now_text, now_text, user_id),
         )
-        connection.commit()
+        connection.execute(
+            "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            (now_text, user_id),
+        )
         updated_row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
+        _recordAuthAudit(settings, connection, _row_to_user(updated_row), "auth.password", "change_password", "用户修改密码", auditContext)
+        connection.commit()
     return _row_to_user(updated_row)
 
 
@@ -609,6 +703,7 @@ def reset_admin_password(settings: AppSettings) -> AuthUser:
     display_name = settings.auth.default_admin_display_name.strip() or username
     now = _utc_now_text()
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM users WHERE username = ?",
             (username,),
@@ -637,11 +732,17 @@ def reset_admin_password(settings: AppSettings) -> AuthUser:
                     user_id,
                 ),
             )
-        connection.commit()
+        connection.execute(
+            "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            (now, user_id),
+        )
         updated_row = connection.execute(
             "SELECT * FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
+        _recordAuthAudit(settings, connection, _row_to_user(updated_row), "auth.password", "reset_admin_password",
+                         "本机已恢复管理员密码并撤销旧会话", None, actorName="local-recovery")
+        connection.commit()
     return _row_to_user(updated_row)
 
 

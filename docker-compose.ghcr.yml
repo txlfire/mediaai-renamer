@@ -7,8 +7,10 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config:/app/config:ro
-      # fnOS / NAS 媒体目录示例：左侧改为宿主机真实路径，右侧作为系统内媒体源路径填写。
-      # - /vol1/1000/Movies:/app/media/Movies
+      # 默认测试目录；可在宿主机的 ./media 下创建子目录后通过页面选择。
+      - ./media:/app/media
+      # 正式媒体目录示例：左侧改为宿主机真实路径，右侧填写容器内路径。
+      # - /path/to/movies:/app/media/Movies
     ports:
       - "8970:8970"
       - "8971:8970"

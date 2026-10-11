@@ -19,4 +19,4 @@ else
   PYTHON="python"
 fi
 
-"$PYTHON" -m unittest discover backend/tests -v
+"$PYTHON" backend/run_tests.py

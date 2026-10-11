@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.auth import require_permission
-from app.service.audit_service import record_audit_event
+from app.service.audit_service import AuditWriteContext
 from app.service.auth_service import (
     AuthServiceError,
     UserConflictError,
@@ -44,11 +44,8 @@ class UserPasswordResetRequest(BaseModel):
     password: str
 
 
-def _audit_request_context(request: Request) -> dict[str, str | None]:
-    return {
-        "ip_address": request.client.host if request.client else None,
-        "user_agent": request.headers.get("user-agent"),
-    }
+def _auditContext(request: Request, currentUser) -> AuditWriteContext:
+    return AuditWriteContext(currentUser, request.client.host if request.client else None, request.headers.get("user-agent"))
 
 
 @router.get("")
@@ -80,28 +77,12 @@ def create_user_api(
             payload.password,
             payload.permissions,
             payload.enabled,
+            auditContext=_auditContext(request, current_user),
         )
     except UserConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AuthServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="user.manage",
-        action="create_user",
-        result="success",
-        summary=f"创建用户：{user.username}",
-        target_type="user",
-        target_id=user.id,
-        actor=current_user,
-        detail={
-            "username": user.username,
-            "display_name": user.display_name,
-            "enabled": user.enabled,
-            "permissions": list(user.permissions),
-        },
-        **_audit_request_context(request),
-    )
     return user_to_dict(user)
 
 
@@ -121,28 +102,12 @@ def update_user_api(
             payload.display_name,
             payload.permissions,
             payload.enabled,
+            auditContext=_auditContext(request, current_user),
         )
     except UserNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AuthServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="user.manage",
-        action="update_user",
-        result="success",
-        summary=f"更新用户：{user.username}",
-        target_type="user",
-        target_id=user.id,
-        actor=current_user,
-        detail={
-            "username": user.username,
-            "display_name": user.display_name,
-            "enabled": user.enabled,
-            "permissions": list(user.permissions),
-        },
-        **_audit_request_context(request),
-    )
     return user_to_dict(user)
 
 
@@ -156,21 +121,9 @@ def reset_user_password_api(
     """重置用户密码。"""
 
     try:
-        user = reset_user_password(request.app.state.settings, user_id, payload.password)
+        user = reset_user_password(request.app.state.settings, user_id, payload.password, auditContext=_auditContext(request, current_user))
     except UserNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AuthServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="user.manage",
-        action="reset_user_password",
-        result="success",
-        summary=f"重置用户密码：{user.username}",
-        target_type="user",
-        target_id=user.id,
-        actor=current_user,
-        detail={"username": user.username},
-        **_audit_request_context(request),
-    )
     return user_to_dict(user)

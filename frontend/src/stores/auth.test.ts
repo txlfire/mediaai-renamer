@@ -2,6 +2,12 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAuthStore } from "./auth";
+import { useMediaStore } from "./media";
+import { usePaginationStore } from "./pagination";
+import { usePendingFileStore } from "./pendingFiles";
+import { usePreviewStore } from "./preview";
+import { useRenameOperationStore } from "./renameOperation";
+import { useTableSortStore } from "./tableSort";
 
 const api = vi.hoisted(() => ({
   bootstrapAdmin: vi.fn(),
@@ -127,16 +133,42 @@ describe("auth store", () => {
       user,
     });
     const store = useAuthStore();
+    const mediaStore = useMediaStore();
+    const previewStore = usePreviewStore();
+    const pendingStore = usePendingFileStore();
+    const renameStore = useRenameOperationStore();
+    const paginationStore = usePaginationStore();
+    const tableSortStore = useTableSortStore();
     await store.login("admin", "ChangeMe123!");
+    mediaStore.mediaFiles = [{ id: 1 } as never];
+    previewStore.previews = [{ id: 2 } as never];
+    previewStore.filters = { scan_job_id: 9 };
+    pendingStore.pendingFiles = [{ id: 3 } as never];
+    pendingStore.moveVersion = 4;
+    renameStore.currentOperation = { id: 5 } as never;
+    renameStore.executionVersion = 6;
+    renameStore.rollbackVersion = 7;
+    paginationStore.setPage("rename-previews", 3);
+    tableSortStore.setSort("rename-previews", "id", "descending");
 
     await store.logout();
 
     expect(api.logout).toHaveBeenCalled();
     expect(api.clearAuthToken).toHaveBeenCalled();
     expect(store.currentUser).toBe(null);
+    expect(mediaStore.mediaFiles).toEqual([]);
+    expect(previewStore.previews).toEqual([]);
+    expect(previewStore.filters).toEqual({});
+    expect(pendingStore.pendingFiles).toEqual([]);
+    expect(pendingStore.moveVersion).toBe(5);
+    expect(renameStore.currentOperation).toBe(null);
+    expect(renameStore.executionVersion).toBe(7);
+    expect(renameStore.rollbackVersion).toBe(8);
+    expect(paginationStore.pages).toEqual({});
+    expect(tableSortStore.sorts).toEqual({});
   });
 
-  it("changes password and clears the prompt flag", async () => {
+  it("changes password and clears the revoked session", async () => {
     api.changePassword.mockResolvedValue({
       ...user,
       mustChangePassword: false,
@@ -150,7 +182,20 @@ describe("auth store", () => {
       currentPassword: "123456",
       newPassword: "ChangeMe123!",
     });
-    expect(store.currentUser?.mustChangePassword).toBe(false);
+    expect(store.currentUser).toBe(null);
+    expect(api.clearAuthToken).toHaveBeenCalled();
+  });
+
+  it("keeps the existing session when password validation fails", async () => {
+    api.changePassword.mockRejectedValue(new Error("invalid password"));
+    const store = useAuthStore();
+    store.currentUser = user;
+
+    await expect(store.changePassword("wrong", "ChangeMe123!")).rejects.toThrow("invalid password");
+
+    expect(store.currentUser).toEqual(user);
+    expect(api.clearAuthToken).not.toHaveBeenCalled();
+    expect(store.loading).toBe(false);
   });
 
   it("calls hidden admin password reset endpoint", async () => {

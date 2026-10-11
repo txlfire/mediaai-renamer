@@ -4,7 +4,7 @@ import {
   bulkDeleteMediaSources,
   cleanupLogs,
   createMediaSource,
-  createScanJob,
+  acceptScanJob,
   deleteMediaSource,
   fetchLogs,
   fetchMediaFiles,
@@ -28,6 +28,7 @@ import {
   type ScanModeSuggestion,
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useAuthStore } from "./auth";
 
 export const useMediaStore = defineStore("media", {
   state: () => ({
@@ -38,6 +39,7 @@ export const useMediaStore = defineStore("media", {
     logItems: [] as LogItem[],
     loading: false,
     errorMessage: "",
+    scanRefreshFailed: false,
     logDrawerVisible: false,
   }),
   actions: {
@@ -89,16 +91,22 @@ export const useMediaStore = defineStore("media", {
       return this.scanModeSuggestion;
     },
 
-    async startScan(mediaSourceId: number, scanMode: ScanMode = "full") {
+    async startScan(mediaSourceId: number, scanMode: ScanMode = "full", refreshHistory = true) {
       this.loading = true;
       this.errorMessage = "";
+      this.scanRefreshFailed = false;
       try {
-        await createScanJob(mediaSourceId, scanMode);
-        await Promise.all([
+        const job = await acceptScanJob(mediaSourceId, scanMode);
+        if (!refreshHistory) return job;
+        this.scanJobs = [...this.scanJobs.filter((item) => item.id !== job.id), job];
+        const refreshes = [
           this.loadScanJobs({ media_source_id: mediaSourceId }),
-          this.loadLogs(),
           this.loadScanModeSuggestion(mediaSourceId),
-        ]);
+        ];
+        if (useAuthStore().hasPermission("audit:read")) refreshes.push(this.loadLogs());
+        const results = await Promise.allSettled(refreshes);
+        this.scanRefreshFailed = results.some((item) => item.status === "rejected");
+        return job;
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.scanJobFailed;
       } finally {

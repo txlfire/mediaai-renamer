@@ -23,3 +23,5 @@ class AiParseResult:
     candidates: list[AiParseCandidate]
     response_ms: int | None = None
     usage: dict[str, object] = field(default_factory=dict)
+    error_type: str | None = None
+    http_status: int | None = None

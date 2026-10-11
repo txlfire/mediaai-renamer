@@ -9,6 +9,7 @@ import time
 
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate
+from app.service.external_request_budget_service import openExternalRequest, clientRequestDeadline, ExternalBudgetWaitError, ExternalBudgetUnavailable
 
 
 BANGUMI_API_BASE_URL = "https://api.bgm.tv"
@@ -29,6 +30,7 @@ class BangumiClient:
         max_retries: int = 1,
         priority: int = 30,
         app_version: str = "0.10.3",
+        requestBudget=None,
     ):
         self.base_url = base_url.rstrip("/") or BANGUMI_API_BASE_URL
         self.access_token = access_token
@@ -36,7 +38,9 @@ class BangumiClient:
         self.max_retries = max(0, max_retries)
         self.priority = priority
         self.app_version = app_version
+        self.requestBudget = requestBudget
 
+    @clientRequestDeadline
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:
         """搜索 Bangumi 候选。"""
 
@@ -61,6 +65,7 @@ class BangumiClient:
                 candidates.append(candidate)
         return candidates
 
+    @clientRequestDeadline
     def test_connection(self) -> bool:
         """通过最小动画搜索验证 Bangumi 接口可访问。"""
 
@@ -101,11 +106,13 @@ class BangumiClient:
 
         for attempt in range(self.max_retries + 1):
             try:
-                with url_request.urlopen(request, timeout=self.timeout_seconds) as response:
+                with openExternalRequest(self.requestBudget, request, self.timeout_seconds, url_request.urlopen) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 if not isinstance(result, dict):
                     raise RuntimeError("Bangumi 返回了无效的数据结构")
                 return result
+            except (ExternalBudgetWaitError, ExternalBudgetUnavailable):
+                raise
             except HTTPError as exc:
                 if exc.code in {401, 403}:
                     raise RuntimeError("Bangumi 鉴权失败，请检查 Access Token") from exc

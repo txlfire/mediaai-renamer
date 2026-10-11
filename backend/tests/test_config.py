@@ -8,6 +8,18 @@ from app.core.config import AppSettings, load_settings
 
 
 class ConfigLoadingTest(unittest.TestCase):
+    def test_external_request_groups_and_provider_override_from_toml(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.toml"
+            path.write_text("[external_requests]\nmax_concurrency=3\n[external_requests.ai]\nmax_concurrency=2\n"
+                            "[external_requests.metadata]\nrequests_per_second=5\n"
+                            "[external_requests.providers.tmdb]\nrequests_per_second=10\n", encoding="utf-8")
+            settings = load_settings(path)
+        self.assertEqual(3, settings.external_requests.max_concurrency)
+        self.assertEqual(2, settings.external_requests.ai.max_concurrency)
+        self.assertEqual(10, settings.external_requests.forService("tmdb").requests_per_second)
+        self.assertEqual(5, settings.external_requests.forService("tvdb").requests_per_second)
+
     def test_missing_config_uses_defaults(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = load_settings(Path(temp_dir) / "missing.toml")

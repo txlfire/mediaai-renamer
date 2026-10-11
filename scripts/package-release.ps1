@@ -53,8 +53,8 @@ if ($CleanVersion.StartsWith("v")) {
     $CleanVersion = $CleanVersion.Substring(1)
 }
 
-if ([string]::IsNullOrWhiteSpace($CleanVersion)) {
-    throw "Version cannot be empty."
+if ($CleanVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+    throw "Version must be a semantic version without path characters."
 }
 
 $Tag = "v$CleanVersion"
@@ -73,8 +73,13 @@ if (-not (Test-Path $DistDir)) {
 }
 
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
-if (Test-Path $PackageRoot) {
-    Remove-Item -Path $PackageRoot -Recurse -Force
+$ResolvedReleaseDir = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $ReleaseDir).Path).TrimEnd('\') + '\'
+$PackageRoot = [System.IO.Path]::GetFullPath($PackageRoot)
+if (-not $PackageRoot.StartsWith($ResolvedReleaseDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Package directory must remain inside releases."
+}
+if (Test-Path -LiteralPath $PackageRoot) {
+    Remove-Item -LiteralPath $PackageRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
 # 合并后端运行代码和前端构建产物，不打包测试、缓存或本地依赖。
@@ -88,11 +93,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "config") | Ou
 )
 Copy-DirectoryTree (Join-Path $Root "backend\app") (Join-Path $PackageRoot "backend\app")
 Copy-Item -Path (Join-Path $Root "backend\requirements.txt") -Destination (Join-Path $PackageRoot "backend\requirements.txt") -Force
+Copy-Item -LiteralPath (Join-Path $Root "backend\requirements.lock") -Destination (Join-Path $PackageRoot "backend\requirements.lock") -Force
 Copy-Item -Path (Join-Path $DistDir "*") -Destination (Join-Path $PackageRoot "frontend-dist") -Recurse -Force
 
 $RequiredPackageFiles = @(
     "backend\app\main.py",
     "backend\requirements.txt",
+    "backend\requirements.lock",
     "frontend-dist\index.html",
     "config\config.example.toml"
 )
@@ -104,7 +111,7 @@ foreach ($RelativePath in $RequiredPackageFiles) {
 
 # Assemble the artifact in a temporary package directory, then clean it.
 Compress-Archive -Path (Join-Path $PackageRoot "*") -DestinationPath $Artifact -Force
-Remove-Item -Path $PackageRoot -Recurse -Force
+Remove-Item -LiteralPath $PackageRoot -Recurse -Force
 
 Write-Host "Release package created: $Artifact"
 

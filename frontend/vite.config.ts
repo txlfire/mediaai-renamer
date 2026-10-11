@@ -1,7 +1,7 @@
 /**
  * Vite 开发和构建配置。
  *
- * 开发环境通过代理把 /api 请求转发到本地 FastAPI，生产环境由 Nginx 负责反向代理。
+ * 开发环境代理 /api 到 FastAPI；统一生产镜像由 FastAPI 承载前端静态资源。
  */
 
 import vue from "@vitejs/plugin-vue";

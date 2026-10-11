@@ -6,6 +6,15 @@ on:
       - "backend/app/api/remote_operations.py"
       - "backend/app/service/remote_operation*.py"
       - "backend/app/service/shared_protocols/**"
+      - "backend/app/service/scan*.py"
+      - "backend/app/service/rename*.py"
+      - "backend/app/service/media_source*.py"
+      - "backend/app/service/local_file*.py"
+      - "backend/app/service/remote_file*.py"
+      - "backend/app/utils/file_*.py"
+      - "backend/app/core/**"
+      - "backend/requirements.txt"
+      - "backend/requirements.lock"
       - "backend/tests/integration/**"
       - "scripts/test-webdav-integration.sh"
       - "tests/integration/webdav/**"
@@ -20,6 +29,15 @@ on:
       - "backend/app/api/remote_operations.py"
       - "backend/app/service/remote_operation*.py"
       - "backend/app/service/shared_protocols/**"
+      - "backend/app/service/scan*.py"
+      - "backend/app/service/rename*.py"
+      - "backend/app/service/media_source*.py"
+      - "backend/app/service/local_file*.py"
+      - "backend/app/service/remote_file*.py"
+      - "backend/app/utils/file_*.py"
+      - "backend/app/core/**"
+      - "backend/requirements.txt"
+      - "backend/requirements.lock"
       - "backend/tests/integration/**"
       - "scripts/test-webdav-integration.sh"
       - "tests/integration/webdav/**"
@@ -46,10 +64,10 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements.lock
 
       - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements.txt
+        run: python -m pip install --require-hashes -r backend/requirements.lock
 
       - name: Validate production Compose files
         run: |

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from app.api.auth import require_authenticated_user
+from app.api.auth import require_permission
 from app.service.operation_log_service import (
     cleanup_operation_logs,
     export_operation_logs_text,
@@ -22,7 +22,7 @@ def list_operation_logs_api(
     task_id: int = Query(alias="task_id"),
     after_id: int = Query(default=0, alias="after_id"),
     limit: int = Query(default=100, ge=1, le=500),
-    _current_user=Depends(require_authenticated_user()),
+    _current_user=Depends(require_permission("audit:read")),
 ):
     """按任务读取运行日志。"""
 
@@ -42,7 +42,7 @@ def export_operation_logs_api(
     request: Request,
     task_type: str = Query(alias="task_type"),
     task_id: int = Query(alias="task_id"),
-    _current_user=Depends(require_authenticated_user()),
+    _current_user=Depends(require_permission("audit:read")),
 ):
     """导出指定任务运行日志。"""
 
@@ -59,7 +59,7 @@ def export_operation_logs_api(
 @router.post("/cleanup")
 def cleanup_operation_logs_api(
     request: Request,
-    _current_user=Depends(require_authenticated_user()),
+    _current_user=Depends(require_permission("settings:write")),
 ):
     """按策略清理任务运行日志。"""
 
@@ -67,4 +67,5 @@ def cleanup_operation_logs_api(
     return {
         "deleted": summary.deleted,
         "bytes_deleted": summary.bytes_deleted,
+        "budget_exhausted": summary.budget_exhausted,
     }

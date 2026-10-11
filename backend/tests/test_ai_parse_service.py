@@ -2,10 +2,13 @@
 
 import tempfile
 import unittest
+import json
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
+from app.core.logger import setup_logging, shutdown_logging
 from app.schema.media import ParsedMediaName
 from app.service.ai_parse_service import parse_media_with_ai
 from app.service.external_submission_guard import list_external_submission_blocks
@@ -53,6 +56,42 @@ class AiParseServiceTest(unittest.TestCase):
             },
             operator="admin",
         )
+
+    def test_actual_llm_file_records_correlated_call_and_block_without_private_content(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            self.enable_ai(settings)
+            setup_logging(settings.logging)
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            response.__enter__.return_value.read.return_value = json.dumps({
+                "choices": [{"message": {"content": json.dumps({
+                    "title": "private-title", "media_type": "movie", "confidence": 90,
+                })}}], "usage": {"total_tokens": 10},
+            }).encode()
+            try:
+                with patch("app.service.external_request_budget_service.urlopen", return_value=response) as transport:
+                    result = parse_media_with_ai(settings, "rename_preview", 17, "private-title.mkv", "/private/path.mkv",
+                                                 ParsedMediaName("movie", "private-title", None, None, None))
+                    blocked = parse_media_with_ai(settings, "rename_preview", 18, "成人.mkv", "/private/成人.mkv",
+                                                  ParsedMediaName("movie", "成人", None, None, None))
+                self.assertEqual("success", result.status)
+                self.assertEqual("blocked", blocked.status)
+                self.assertEqual(1, transport.call_count)
+            finally:
+                shutdown_logging()
+            text = (settings.logging.log_dir / "llm.log").read_text(encoding="utf-8")
+            events = [json.loads(line.split("AI调用摘要 ", 1)[1]) for line in text.splitlines() if "AI调用摘要 " in line]
+            actual = [event for event in events if event["source_record_id"] == 17]
+            self.assertEqual(4, len(actual))
+            self.assertEqual(1, len({event["request_id"] for event in actual}))
+            self.assertEqual(["started", "started", "success", "success"], [event["status"] for event in actual])
+            denied = [event for event in events if event["source_record_id"] == 18]
+            self.assertEqual("blocked", denied[-1]["status"])
+            self.assertTrue(all(event["phase"] == "parse" for event in denied))
+            for secret in ("sk-secret123456", "private-title", "/private/", "成人", "choices", "content"):
+                self.assertNotIn(secret, text)
 
     def test_parses_valid_structured_ai_response(self):
         with tempfile.TemporaryDirectory() as temp_dir:

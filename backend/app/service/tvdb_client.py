@@ -11,6 +11,7 @@ import time
 
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate
+from app.service.external_request_budget_service import openExternalRequest, clientRequestDeadline, ExternalBudgetWaitError, ExternalBudgetUnavailable
 
 
 TVDB_API_BASE_URL = "https://api4.thetvdb.com/v4"
@@ -29,6 +30,7 @@ class TvdbClient:
         timeout_seconds: int = 10,
         max_retries: int = 1,
         priority: int = 40,
+        requestBudget=None,
     ):
         self.base_url = base_url.rstrip("/") or TVDB_API_BASE_URL
         self.api_key = api_key.strip()
@@ -36,7 +38,9 @@ class TvdbClient:
         self.max_retries = max(0, max_retries)
         self.priority = priority
         self._bearer_token = ""
+        self.requestBudget = requestBudget
 
+    @clientRequestDeadline
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:
         """搜索 TVDB 剧集候选。"""
 
@@ -64,6 +68,7 @@ class TvdbClient:
                 candidates.append(candidate)
         return candidates
 
+    @clientRequestDeadline
     def test_connection(self) -> bool:
         """通过固定非用户关键词验证 TVDB 接口可访问。"""
 
@@ -112,11 +117,13 @@ class TvdbClient:
         for attempt in range(self.max_retries + 1):
             request = url_request.Request(url, data=body, headers=headers, method=method)
             try:
-                with url_request.urlopen(request, timeout=self.timeout_seconds) as response:
+                with openExternalRequest(self.requestBudget, request, self.timeout_seconds, url_request.urlopen) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 if not isinstance(result, dict):
                     raise RuntimeError("TVDB 返回了无效的数据结构")
                 return result
+            except (ExternalBudgetWaitError, ExternalBudgetUnavailable):
+                raise
             except HTTPError as exc:
                 if exc.code in {401, 403}:
                     raise RuntimeError("TVDB 鉴权失败，请检查 API Key") from exc

@@ -58,9 +58,9 @@ def _test_local_directory(path: str) -> ConnectionTestResult:
         )
     if not writable:
         return ConnectionTestResult(
-            False,
-            "目录不可写",
-            "请检查服务运行用户是否具有写入权限",
+            True,
+            "目录可读，当前为只读访问",
+            "可以浏览和扫描；重命名需要服务运行用户具有写入权限",
             readable=readable,
             writable=writable,
         )

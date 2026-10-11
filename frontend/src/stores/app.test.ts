@@ -20,6 +20,7 @@ function installLocalStorageMock() {
 describe("theme state", () => {
   beforeEach(() => {
     installLocalStorageMock();
+    vi.stubGlobal("document", { documentElement: { dataset: {} as Record<string, string> } });
     localStorage.clear();
     setActivePinia(createPinia());
   });
@@ -37,6 +38,8 @@ describe("theme state", () => {
 
     expect(store.themeMode).toBe("dark");
     expect(localStorage.getItem("mediaai-theme-mode")).toBe("dark");
+    expect(document.documentElement.dataset.scheme).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 
   it("resolves system theme through media query", () => {

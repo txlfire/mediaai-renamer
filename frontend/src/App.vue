@@ -10,14 +10,17 @@ import {
   SwitchButton,
   Sunny,
   VideoCamera,
+  Loading,
 } from "@element-plus/icons-vue";
 import { computed, onMounted, onUnmounted } from "vue";
+import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 
 import LogDrawer from "./components/LogDrawer.vue";
 import { zhCnMessages as messages } from "./locales/zh-CN";
 import { useAppStore } from "./stores/app";
 import { useAuthStore } from "./stores/auth";
+import { routeLoading } from "./router";
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -31,14 +34,15 @@ const menuItems = computed(() =>
     { path: "/scan-results", label: messages.app.menu.scanResults, icon: VideoCamera, visible: true },
     { path: "/rename-previews", label: messages.app.menu.renamePreviews, icon: EditPen, visible: true },
     { path: "/tasks", label: messages.app.menu.tasks, icon: Notebook, visible: authStore.hasPermission("task:manage") },
-    { path: "/settings", label: messages.app.menu.settings, icon: Setting, visible: true },
+    { path: "/settings", label: messages.app.menu.settings, icon: Setting, visible: authStore.hasPermission("settings:write") },
   ].filter((item) => item.visible),
 );
 
 const isDarkTheme = computed(() => appStore.resolvedTheme === "dark");
-const isPublicPage = computed(() => Boolean(route.meta.public));
+const isPublicPage = computed(() => route.matched.length === 0 || Boolean(route.meta.public));
 const currentUserName = computed(() => authStore.currentUser?.displayName || authStore.currentUser?.username || "");
-const versionText = computed(() => `${messages.app.previewVersion} v${appStore.health?.version ?? "0.1.0"}`);
+const versionText = computed(() => appStore.health?.version
+  ? `${messages.app.previewVersion} v${appStore.health.version}` : messages.app.versionPending);
 
 const connectionLabel = computed(() => {
   if (appStore.connectionState === "online") {
@@ -80,22 +84,31 @@ function handleAuthExpired() {
   }
 }
 
+function handleAuditPending() {
+  ElMessage.warning({ message: messages.app.auditPending, grouping: true, duration: 6000 });
+}
+
 onMounted(() => {
   appStore.loadSidebarCollapsed();
   appStore.loadThemeMode();
   void appStore.refreshHealth();
   void authStore.loadStoredSession();
   window.addEventListener("mediaai:auth-expired", handleAuthExpired);
+  window.addEventListener("mediaai:audit-pending", handleAuditPending);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateSystemTheme);
 });
 
 onUnmounted(() => {
   window.removeEventListener("mediaai:auth-expired", handleAuthExpired);
+  window.removeEventListener("mediaai:audit-pending", handleAuditPending);
   window.matchMedia("(prefers-color-scheme: dark)").removeEventListener("change", updateSystemTheme);
 });
 </script>
 
 <template>
+  <div v-if="routeLoading" class="route-loading-indicator" role="status" :aria-label="messages.app.pageLoading">
+    <el-icon class="is-loading"><Loading /></el-icon>
+  </div>
   <RouterView v-if="isPublicPage" />
   <div v-else class="app-layout" :class="{ 'is-collapsed': appStore.sidebarCollapsed }">
     <aside class="app-sidebar">
@@ -163,7 +176,7 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <main class="app-workbench">
+    <main class="app-workbench" :aria-busy="routeLoading">
       <div class="workbench-topbar">
         <el-input class="global-search" :placeholder="messages.app.globalSearchPlaceholder" :prefix-icon="Search" clearable />
       </div>
@@ -173,3 +186,25 @@ onUnmounted(() => {
     <LogDrawer />
   </div>
 </template>
+
+<style scoped>
+.route-loading-indicator {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2100;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--el-color-primary);
+  background: var(--el-bg-color);
+  border-radius: 6px;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-loading-indicator :deep(.is-loading) {
+    animation: none;
+  }
+}
+</style>

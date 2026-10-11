@@ -1,22 +1,27 @@
 """AI structured media parsing service."""
 
 import json
+from dataclasses import asdict
 import re
+import time
 from typing import Any
+from uuid import uuid4
 
 from app.core.config import AppSettings
 from app.schema.ai_parse import AiParseCandidate, AiParseResult
 from app.schema.media import ParsedMediaName
 from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider, OpenAiCompatibleProvider
+from app.service.ai_diagnostics import AiCallContext, recordAiSummary
 from app.service.external_submission_guard import check_external_submission
 from app.service.settings_service import get_effective_settings
+from app.service.external_request_budget_service import ExternalRequestBudget
 
 
 SUPPORTED_AI_PROVIDERS = {"deepseek", "openai_compatible", "custom"}
 SUPPORTED_MEDIA_TYPES = {"movie", "tv", "unknown"}
 
 
-def _build_provider(effective: dict[str, object]) -> AiProvider:
+def _build_provider(effective: dict[str, object], callContext: AiCallContext | None = None, settings: AppSettings | None = None) -> AiProvider:
     provider_name = str(effective.get("ai.provider") or "deepseek")
     config = AiProviderConfig(
         provider=provider_name,
@@ -25,6 +30,8 @@ def _build_provider(effective: dict[str, object]) -> AiProvider:
         base_url=str(effective.get("ai.base_url") or "").strip(),
         timeout_ms=int(effective.get("ai.timeout_ms") or 30000),
         max_retries=int(effective.get("ai.max_retries") or 0),
+        callContext=callContext,
+        requestBudget=ExternalRequestBudget(settings, "ai") if settings is not None else None,
     )
     if provider_name == "deepseek":
         return DeepSeekProvider(config)
@@ -95,7 +102,7 @@ def _candidate_from_payload(payload: dict[str, Any]) -> AiParseCandidate:
     )
 
 
-def parse_media_with_ai(
+def _parseMediaWithAi(
     settings: AppSettings,
     source_module: str,
     source_record_id: int,
@@ -103,10 +110,13 @@ def parse_media_with_ai(
     file_path: str,
     parsed: ParsedMediaName,
     provider: AiProvider | None = None,
+    *,
+    effective: dict[str, object],
+    callContext: AiCallContext,
+    authorization=None,
 ) -> AiParseResult:
     """Parse one media file name through AI after external submission protection."""
 
-    effective = get_effective_settings(settings)
     if not bool(effective.get("ai.enabled")):
         return AiParseResult(status="failed", message="AI 智能解析未启用", candidates=[])
 
@@ -126,6 +136,7 @@ def parse_media_with_ai(
         file_path=file_path,
         match_title=parsed.title,
         target_service="ai",
+        authorization=authorization, parsedPayload=asdict(parsed),
     )
     if not guard.allowed:
         return AiParseResult(
@@ -134,7 +145,7 @@ def parse_media_with_ai(
             candidates=[],
         )
 
-    ai_provider = provider or _build_provider(effective)
+    ai_provider = provider or _build_provider(effective, callContext, settings)
     response = ai_provider.complete_chat(
         _build_prompt(file_name, file_path, parsed),
         max_tokens=500,
@@ -146,6 +157,8 @@ def parse_media_with_ai(
             message=str(response.get("message") or "AI 解析失败"),
             candidates=[],
             response_ms=response.get("response_ms") if isinstance(response.get("response_ms"), int) else None,
+            error_type=str(response.get("error_type") or "unknown"),
+            http_status=response.get("http_status") if isinstance(response.get("http_status"), int) else None,
         )
 
     try:
@@ -155,6 +168,8 @@ def parse_media_with_ai(
         candidate.raw_data.setdefault("provider_name", provider_name)
         candidate.raw_data.setdefault("model_name", str(effective.get("ai.model") or ""))
     except ValueError as exc:
+        recordAiSummary(callContext, provider=provider_name, model=str(effective.get("ai.model") or ""),
+                        phase="validation", status="failed", errorType="invalid_content")
         return AiParseResult(
             status="failed",
             message=str(exc),
@@ -170,3 +185,26 @@ def parse_media_with_ai(
         response_ms=response.get("response_ms") if isinstance(response.get("response_ms"), int) else None,
         usage=response.get("usage") if isinstance(response.get("usage"), dict) else {},
     )
+
+
+def parse_media_with_ai(settings: AppSettings, source_module: str, source_record_id: int, file_name: str,
+                        file_path: str, parsed: ParsedMediaName, provider: AiProvider | None = None, *,
+                        authorization=None, effectiveSettings: dict | None = None) -> AiParseResult:
+    """外发保护后解析；日志只包含关联 ID 和结果摘要，不记录文件内容。"""
+    context = AiCallContext(uuid4().hex, source_module, source_record_id)
+    effective = get_effective_settings(settings) if effectiveSettings is None else effectiveSettings
+    providerName = str(effective.get("ai.provider") or "deepseek")
+    modelName = str(effective.get("ai.model") or "")
+    startedAt = time.perf_counter()
+    recordAiSummary(context, provider=providerName, model=modelName, phase="parse", status="started")
+    try:
+        result = _parseMediaWithAi(settings, source_module, source_record_id, file_name, file_path, parsed, provider,
+                                   effective=effective, callContext=context, authorization=authorization)
+    except Exception as exc:
+        recordAiSummary(context, provider=providerName, model=modelName, phase="parse", status="failed",
+                        elapsedMs=round((time.perf_counter() - startedAt) * 1000), errorType="internal", exception=exc)
+        raise
+    status = "skipped" if result.status == "failed" and result.response_ms is None else result.status
+    recordAiSummary(context, provider=providerName, model=modelName, phase="parse", status=status,
+                    elapsedMs=round((time.perf_counter() - startedAt) * 1000), usage=result.usage)
+    return result

@@ -78,7 +78,7 @@ class SmbProtocol:
         return ConnectionTestResult(
             True,
             "连接成功",
-            "共享路径可访问，当前服务进程具备读写权限",
+            "共享路径可访问，当前服务进程具备读写权限" if result.writable else "共享路径可读；重命名需要写入权限",
             readable=result.readable,
             writable=result.writable,
         )

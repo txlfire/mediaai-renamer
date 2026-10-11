@@ -1,13 +1,31 @@
 <script setup lang="ts">
 import { Download, Refresh } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
+import { ref } from "vue";
+import { exportRuntimeLogs } from "../api/client";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useMediaStore } from "../stores/media";
 
 const mediaStore = useMediaStore();
+const exporting = ref(false);
 
-function exportLogs() {
-  window.open("/api/logs/export", "_blank", "noopener,noreferrer");
+async function exportLogs() {
+  if (exporting.value) return;
+  exporting.value = true;
+  try {
+    const text = await exportRuntimeLogs();
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "mediaai-runtime-logs.txt";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch {
+    ElMessage.error(messages.logs.exportFailed);
+  } finally {
+    exporting.value = false;
+  }
 }
 </script>
 
@@ -15,7 +33,7 @@ function exportLogs() {
   <el-drawer v-model="mediaStore.logDrawerVisible" :title="messages.logs.title" size="46%">
     <div class="drawer-toolbar">
       <el-button :icon="Refresh" @click="mediaStore.loadLogs">{{ messages.common.refresh }}</el-button>
-      <el-button type="primary" :icon="Download" @click="exportLogs">{{ messages.logs.exportTxt }}</el-button>
+      <el-button type="primary" :icon="Download" :loading="exporting" @click="exportLogs">{{ messages.logs.exportTxt }}</el-button>
     </div>
 
     <div class="log-list">

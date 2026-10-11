@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
+import time
 
 from app.core.config import AppSettings
 from app.schema.media import ParsedMediaName
@@ -21,8 +22,9 @@ from app.service.metadata_provider_service import (
     list_metadata_provider_configs,
 )
 from app.service.settings_service import get_effective_settings
-from app.service.tmdb_client import TmdbClient
+from app.service.tmdb_client import TmdbClient, recordTmdbDiagnostic
 from app.service.tvdb_client import TvdbClient
+from app.service.external_request_budget_service import ExternalRequestBudget, ExternalBudgetWaitError, ExternalBudgetUnavailable, transportDeadline
 
 
 class RegisteredMetadataProvider(Protocol):
@@ -61,6 +63,10 @@ class TmdbMetadataProvider:
 
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:
         effective = get_effective_settings(self.settings)
+        with transportDeadline(time.monotonic() + int(effective.get("tmdb.timeout_ms") or 10000) / 1000):
+            return self._search(parsed, effective)
+
+    def _search(self, parsed, effective):
         v4_token = str(effective.get("tmdb.v4_token") or "").strip()
         api_key = str(effective.get("tmdb.api_key") or "").strip()
         language = str(effective.get("tmdb.language") or "zh-CN")
@@ -70,17 +76,22 @@ class TmdbMetadataProvider:
         if v4_token:
             try:
                 return TmdbClient(
+                    requestBudget=ExternalRequestBudget(self.settings, "tmdb"),
                     v4_token=v4_token,
                     language=language,
                     region=region,
                     timeout_ms=timeout_ms,
                 ).search(parsed)
-            except Exception:
+            except (ExternalBudgetWaitError, ExternalBudgetUnavailable):
+                raise
+            except (RuntimeError, OSError) as exc:
                 if not api_key:
                     raise
+                recordTmdbDiagnostic(exc, channel="v4_to_v3", phase="authentication")
 
         if api_key:
             return TmdbClient(
+                requestBudget=ExternalRequestBudget(self.settings, "tmdb"),
                 api_key=api_key,
                 language=language,
                 region=region,
@@ -144,6 +155,7 @@ def build_metadata_provider_registry(settings: AppSettings) -> list[ProviderRegi
         enabled = bool(config.enabled)
         if provider == PROVIDER_BANGUMI and enabled:
             searcher: RegisteredMetadataProvider | None = BangumiClient(
+                requestBudget=ExternalRequestBudget(settings, "bangumi"),
                 base_url=config.base_url,
                 access_token=get_metadata_provider_api_key(settings, provider),
                 timeout_seconds=config.timeout_seconds,
@@ -154,6 +166,7 @@ def build_metadata_provider_registry(settings: AppSettings) -> list[ProviderRegi
             realSearchAvailable = True
         elif provider == PROVIDER_TVDB and enabled:
             searcher = TvdbClient(
+                requestBudget=ExternalRequestBudget(settings, "tvdb"),
                 base_url=config.base_url,
                 api_key=get_metadata_provider_api_key(settings, provider),
                 timeout_seconds=config.timeout_seconds,
@@ -163,6 +176,7 @@ def build_metadata_provider_registry(settings: AppSettings) -> list[ProviderRegi
             realSearchAvailable = True
         elif provider == PROVIDER_DOUBAN_PROXY and enabled:
             searcher = DoubanProxyClient(
+                requestBudget=ExternalRequestBudget(settings, "douban_proxy"),
                 base_url=config.base_url,
                 api_key=get_metadata_provider_api_key(settings, provider),
                 timeout_seconds=config.timeout_seconds,

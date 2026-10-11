@@ -1,6 +1,9 @@
 """System hot settings service tests."""
 
 import os
+import json
+import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +19,8 @@ from app.service.settings_service import (
     list_setting_values,
     save_imdb_connection_test_result,
     test_ai_connection,
+    test_imdb_connection,
+    test_tmdb_connection,
     update_setting_values,
 )
 
@@ -277,6 +282,31 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual("https://api.openai-proxy.example/v1", effective["ai.base_url"])
             self.assertEqual(60000, effective["ai.timeout_ms"])
             self.assertEqual(4, effective["ai.max_retries"])
+
+    def test_ai_profile_switch_and_delete_are_atomic_with_redacted_audit(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            profiles = [{"id": profileId, "name": profileId, "provider": "deepseek", "model": "deepseek-chat",
+                         "api_key": "sk-synthetic-profile-secret-123", "base_url": "https://api.deepseek.com",
+                         "timeout_ms": 30000, "max_retries": 1, "enabled": True} for profileId in ("first", "second")]
+            update_setting_values(settings, {"ai.provider_profiles": profiles, "ai.active_profile_id": "first"})
+            before = get_effective_settings(settings)
+            with patch("app.service.audit_service.record_audit_event",
+                       side_effect=sqlite3.OperationalError("synthetic audit failure")):
+                with self.assertRaises(sqlite3.OperationalError):
+                    update_setting_values(settings, {"ai.provider_profiles": profiles[1:], "ai.active_profile_id": "second"})
+            self.assertEqual(before, get_effective_settings(settings))
+            update_setting_values(settings, {"ai.provider_profiles": profiles[1:], "ai.active_profile_id": "second"})
+            self.assertEqual("second", get_effective_settings(settings)["ai.active_profile_id"])
+            self.assertEqual(1, len(get_effective_settings(settings)["ai.provider_profiles"]))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                rows = connection.execute("SELECT detail_json FROM audit_events WHERE action='update_settings'").fetchall()
+            self.assertEqual(2, len(rows))
+            for row in rows:
+                self.assertNotIn("sk-synthetic-profile-secret-123", row[0])
+                savedProfiles = json.loads(row[0])["values"]["ai.provider_profiles"]
+                self.assertTrue(all(profile["api_key"] == "******" for profile in savedProfiles))
 
     def test_ai_provider_profiles_are_masked_in_setting_list_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -583,6 +613,57 @@ class SettingsServiceTest(unittest.TestCase):
             self.assertEqual("failed", result["status"])
             self.assertEqual("未配置 AI API Key", result["message"])
             self.assertEqual("none", result["effective"])
+
+    def test_connection_results_keep_the_snapshot_captured_when_testing_started(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            update_setting_values(settings, {
+                "tmdb.v4_token": "synthetic-v4-token",
+                "tmdb.timeout_ms": "15000",
+                "imdb.timeout_ms": "10000",
+                "ai.enabled": "true",
+                "ai.api_key": "synthetic-ai-key",
+                "ai.model": "deepseek-chat",
+            }, operator="admin")
+
+            tmdbCalls = 0
+
+            def testTmdbChannel(channel, effective, appSettings):
+                nonlocal tmdbCalls
+                tmdbCalls += 1
+                if tmdbCalls == 1:
+                    update_setting_values(appSettings, {"tmdb.timeout_ms": "25000"}, operator="admin")
+                return {"status": "success", "message": f"{channel} success", "response_ms": 1}
+
+            with patch("app.service.settings_service._test_tmdb_channel", side_effect=testTmdbChannel):
+                tmdbResult = test_tmdb_connection(settings)
+            self.assertEqual(15000, tmdbResult["config_snapshot"]["tmdb.timeout_ms"])
+            self.assertEqual(25000, get_effective_settings(settings)["tmdb.timeout_ms"])
+
+            class ImdbResponse:
+                status = 200
+
+                def __enter__(self):
+                    update_setting_values(settings, {"imdb.timeout_ms": "20000"}, operator="admin")
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+            with patch("app.service.settings_service.ExternalRequestBudget.open", return_value=ImdbResponse()):
+                imdbResult = test_imdb_connection(settings)
+            self.assertEqual(10000, imdbResult["config_snapshot"]["imdb.timeout_ms"])
+            self.assertEqual(20000, get_effective_settings(settings)["imdb.timeout_ms"])
+
+            class MutatingAiProvider:
+                def test_connection(self):
+                    update_setting_values(settings, {"ai.model": "deepseek-reasoner"}, operator="admin")
+                    return {"status": "success", "message": "AI 连接成功", "response_ms": 1}
+
+            aiResult = test_ai_connection(settings, provider=MutatingAiProvider())
+            self.assertEqual("deepseek-chat", aiResult["config_snapshot"]["ai.model"])
+            self.assertEqual("deepseek-reasoner", get_effective_settings(settings)["ai.model"])
 
 
 if __name__ == "__main__":

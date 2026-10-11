@@ -16,6 +16,8 @@ from app.service.preview_service import (
     generate_rename_previews,
     list_metadata_candidates,
     list_rename_previews,
+    listRenamePreviewsPage,
+    selectRenamePreviewTargets,
     match_all_unmatched_metadata,
     match_all_unmatched_metadata_with_ai_fallback,
     match_rename_preview_multi_source_metadata,
@@ -120,7 +122,7 @@ def _validate_multi_source_mode(value: str) -> str:
     return value
 
 
-@router.post("/generate")
+@router.post("/generate", dependencies=[Depends(require_permission("rename:execute"))])
 def generate_previews(payload: GenerateRenamePreviewsRequest, request: Request):
     """Generate rename previews from scanned media files."""
 
@@ -154,7 +156,32 @@ def get_previews(
     )
 
 
-@router.put("/{preview_id}")
+@router.get("/page")
+def get_previews_page(request: Request, page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200), sort_by: str = "id", sort_order: str = "asc",
+    media_source_id: int | None = None, scan_job_id: int | None = None, status: str | None = None,
+    media_type: str | None = None, keyword: str | None = Query(default=None, max_length=500)):
+    try:
+        return listRenamePreviewsPage(request.app.state.settings, page=page, page_size=page_size,
+            sort_by=sort_by, sort_order=sort_order, media_source_id=media_source_id,
+            scan_job_id=scan_job_id, status=status, media_type=media_type, keyword=keyword)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/selection")
+def get_preview_selection(request: Request, action: str, media_source_id: int | None = None,
+    scan_job_id: int | None = None, status: str | None = None, media_type: str | None = None,
+    keyword: str | None = Query(default=None, max_length=500)):
+    try:
+        return selectRenamePreviewTargets(request.app.state.settings, action=action,
+            media_source_id=media_source_id, scan_job_id=scan_job_id, status=status,
+            media_type=media_type, keyword=keyword)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{preview_id}", dependencies=[Depends(require_permission("rename:execute"))])
 def update_preview(preview_id: int, payload: UpdateRenamePreviewRequest, request: Request):
     """Update one preview target filename."""
 
@@ -168,7 +195,7 @@ def update_preview(preview_id: int, payload: UpdateRenamePreviewRequest, request
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/{preview_id}/exclude")
+@router.post("/{preview_id}/exclude", dependencies=[Depends(require_permission("rename:execute"))])
 def exclude_preview(preview_id: int, payload: ExcludeRenamePreviewRequest, request: Request):
     """Move one preview to the pending list without touching the real file."""
 
@@ -182,7 +209,7 @@ def exclude_preview(preview_id: int, payload: ExcludeRenamePreviewRequest, reque
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/exclude")
+@router.post("/exclude", dependencies=[Depends(require_permission("rename:execute"))])
 def exclude_previews(payload: BatchExcludeRenamePreviewRequest, request: Request):
     """Move selected previews to the pending list without touching real files."""
 
@@ -364,7 +391,7 @@ def parse_previews_with_ai(
     )
 
 
-@router.post("/{preview_id}/metadata-candidate")
+@router.post("/{preview_id}/metadata-candidate", dependencies=[Depends(require_permission("rename:execute"))])
 def select_preview_metadata_candidate(
     preview_id: int,
     payload: ApplyMetadataCandidateRequest,
@@ -384,7 +411,7 @@ def select_preview_metadata_candidate(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/{preview_id}/ai-candidate")
+@router.post("/{preview_id}/ai-candidate", dependencies=[Depends(require_permission("rename:execute"))])
 def select_preview_ai_candidate(
     preview_id: int,
     payload: ApplyAiParseCandidateRequest,

@@ -1,10 +1,12 @@
 """媒体源服务测试。"""
 
 import sqlite3
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from contextlib import closing
+from unittest.mock import patch
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
@@ -13,18 +15,125 @@ from app.service.media_source_service import (
     create_media_source,
     delete_media_source,
     get_media_source_protocol_context,
+    get_media_source,
     list_local_directories,
     list_media_sources,
     list_source_directories,
     set_media_source_enabled,
     test_media_source_connection_payload,
     update_media_source,
+    verifyWebDavConditionalMove,
 )
+from app.service.shared_protocols.webdav import WebDavCapabilityVerification
 from app.service.media_source_secret import decrypt_secret
 from app.service.settings_service import update_setting_values
+from app.service.preview_service import update_rename_preview, generate_rename_previews
+from app.service.rename_operation_service import execute_rename_operation
+from app.service.scan_service import _upsert_scan_file_index
+from app.service.pending_file_service import add_pending_file, list_pending_files
 
 
 class MediaSourceServiceTest(unittest.TestCase):
+    def test_webdav_capability_verification_persists_snapshot_and_audit_atomically(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings,
+                "webdav",
+                "https://nas.invalid/dav/",
+                path_type="webdav",
+                username="synthetic-user",
+                secret="synthetic-secret",
+            )
+            result = WebDavCapabilityVerification(
+                status="verified",
+                message="验证通过",
+                cleanup_succeeded=True,
+                evidence={"wrong_etag_status": 412, "correct_etag_status": 201, "overwrite_status": 412},
+            )
+            protocol = unittest.mock.Mock()
+            protocol.verify_conditional_move.return_value = result
+
+            with patch("app.service.media_source_service.get_protocol", return_value=protocol):
+                returned = verifyWebDavConditionalMove(settings, source.id)
+
+            self.assertEqual("verified", returned.status)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                snapshot = json.loads(connection.execute(
+                    "SELECT capability_snapshot_json FROM media_sources WHERE id=?", (source.id,)
+                ).fetchone()[0])
+                audit = connection.execute(
+                    "SELECT action,detail_json FROM audit_events WHERE target_type='media_source' AND target_id=? "
+                    "ORDER BY id DESC LIMIT 1", (str(source.id),)
+                ).fetchone()
+                lockStatus = connection.execute(
+                    "SELECT status FROM remote_operation_locks WHERE lock_key=?", (f"media-source:{source.id}:write",)
+                ).fetchone()[0]
+            self.assertEqual("verified", snapshot["conditional_move"]["status"])
+            self.assertTrue(snapshot["conditional_move"]["cleanup_succeeded"])
+            self.assertEqual("verify_webdav_conditional_move", audit[0])
+            self.assertNotIn("synthetic-secret", audit[1])
+            self.assertEqual("released", lockStatus)
+
+    def test_webdav_capability_audit_failure_rolls_back_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings, "webdav", "https://nas.invalid/dav/", path_type="webdav"
+            )
+            protocol = unittest.mock.Mock()
+            protocol.verify_conditional_move.return_value = WebDavCapabilityVerification(
+                status="verified", message="验证通过", cleanup_succeeded=True,
+            )
+            with (
+                patch("app.service.media_source_service.get_protocol", return_value=protocol),
+                patch("app.service.media_source_service.record_audit_event", side_effect=sqlite3.OperationalError("audit failed")),
+            ):
+                with self.assertRaises(sqlite3.OperationalError):
+                    verifyWebDavConditionalMove(settings, source.id)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                snapshot = connection.execute(
+                    "SELECT capability_snapshot_json FROM media_sources WHERE id=?", (source.id,)
+                ).fetchone()[0]
+                lockStatus = connection.execute(
+                    "SELECT status FROM remote_operation_locks WHERE lock_key=?", (f"media-source:{source.id}:write",)
+                ).fetchone()[0]
+            self.assertIsNone(snapshot)
+            self.assertEqual("released", lockStatus)
+
+    def test_source_audit_failure_rolls_back_creation_root_change_and_retirement(self):
+        for action in ("create", "root_change", "retire", "bulk_retire"):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tempDir:
+                root = Path(tempDir)
+                settings = self.build_settings(root)
+                ensure_database(settings)
+                first = create_media_source(settings, "first", root / "first")
+                second = create_media_source(settings, "second", root / "second")
+                self._insert_history(settings, first.id)
+                with closing(sqlite3.connect(settings.database_path)) as connection:
+                    auditCount = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+                with patch("app.service.media_source_service.record_audit_event", side_effect=sqlite3.OperationalError("controlled audit failure")):
+                    with self.assertRaisesRegex(sqlite3.OperationalError, "controlled audit failure"):
+                        if action == "create":
+                            create_media_source(settings, "new", root / "new")
+                        elif action == "root_change":
+                            update_media_source(settings, first.id, "changed", root / "new", True, clear_history_on_path_change=True)
+                        elif action == "retire":
+                            delete_media_source(settings, first.id)
+                        else:
+                            bulk_delete_media_sources(settings, [first.id, second.id])
+                self.assertEqual([first.id, second.id], [source.id for source in list_media_sources(settings)])
+                self.assertEqual(first.path, get_media_source(settings, first.id).path)
+                with closing(sqlite3.connect(settings.database_path)) as connection:
+                    self.assertEqual(auditCount, connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
+                    self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM media_source_history").fetchone()[0])
+                    self.assertIsNone(connection.execute("SELECT source_invalidated_at FROM scan_jobs").fetchone()[0])
+                    self.assertEqual("dry_run", connection.execute("SELECT status FROM rename_operations").fetchone()[0])
+
     """媒体源保存和路径校验测试。"""
 
     def build_settings(self, root: Path) -> AppSettings:
@@ -117,8 +226,8 @@ class MediaSourceServiceTest(unittest.TestCase):
                 ).fetchone()
             self.assertIsNotNone(row[0])
             self.assertNotEqual("plain-password", row[0])
-            self.assertTrue(str(row[0]).startswith("v2:"))
-            self.assertEqual(2, row[1])
+            self.assertTrue(str(row[0]).startswith("v3:"))
+            self.assertEqual(3, row[1])
             self.assertEqual("plain-password", decrypt_secret(settings, row[0]))
 
     def test_create_media_source_rejects_invalid_port(self):
@@ -217,9 +326,9 @@ class MediaSourceServiceTest(unittest.TestCase):
                     "SELECT encrypted_secret, auth_type, credential_version FROM media_sources WHERE id = ?",
                     (created.id,),
                 ).fetchone()
-            self.assertTrue(str(row[0]).startswith("v2:"))
+            self.assertTrue(str(row[0]).startswith("v3:"))
             self.assertEqual("basic", row[1])
-            self.assertEqual(2, row[2])
+            self.assertEqual(3, row[2])
 
     def test_update_webdav_media_source_keeps_protocol_and_updates_secret(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -263,8 +372,53 @@ class MediaSourceServiceTest(unittest.TestCase):
                 ).fetchone()
             self.assertEqual("new-secret", decrypt_secret(settings, row[0]))
             self.assertEqual("basic", row[1])
-            self.assertEqual(2, row[2])
+            self.assertEqual(3, row[2])
             self.assertEqual("https://nas.example/new-dav", row[3])
+
+    def test_webdav_capability_snapshot_is_scoped_and_invalidated_by_credentials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = self.build_settings(root)
+            ensure_database(settings)
+            source = create_media_source(
+                settings,
+                "WebDAV",
+                "https://nas.example/dav",
+                True,
+                path_type="webdav",
+                username="dav-user",
+                secret="old-secret",
+            )
+            snapshot = json.dumps({
+                "conditional_move": {
+                    "status": "verified",
+                    "endpoint": source.path,
+                    "credential_version": source.credential_version,
+                }
+            })
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute(
+                    "UPDATE media_sources SET capability_snapshot_json=? WHERE id=?",
+                    (snapshot, source.id),
+                )
+                connection.commit()
+
+            verified = get_media_source_protocol_context(settings, source.id)
+            self.assertEqual("verified", verified.conditional_move_status)
+
+            update_media_source(
+                settings,
+                source.id,
+                name="WebDAV",
+                path=source.path,
+                enabled=True,
+                username="dav-user",
+                secret="new-secret",
+            )
+
+            invalidated = get_media_source_protocol_context(settings, source.id)
+            self.assertEqual("unknown", invalidated.conditional_move_status)
+            self.assertIsNone(get_media_source(settings, source.id).capability_snapshot_json)
 
     def test_connection_payload_accepts_webdav_https(self):
         result = test_media_source_connection_payload(
@@ -314,6 +468,29 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertTrue(all(item.is_directory for item in result.entries))
             self.assertTrue(all(item.readable for item in result.entries))
             self.assertTrue(all(item.writable for item in result.entries))
+
+    def test_list_local_directories_uses_mounted_media_root_in_container(self):
+        """容器首次打开目录选择器时应浏览挂载目录，而不是枚举 Windows 盘符。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Movies").mkdir()
+            (root / "Series").mkdir()
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "MEDIAAI_RUNTIME": "container",
+                    "MEDIAAI_MEDIA_ROOT": str(root),
+                },
+                clear=False,
+            ):
+                result = list_local_directories()
+
+            self.assertEqual("container", result.runtime_environment)
+            self.assertEqual("容器媒体目录", result.root_label)
+            self.assertEqual(str(root.resolve()), result.current_path)
+            self.assertEqual(["Movies", "Series"], [item.name for item in result.entries])
 
     def test_list_source_directories_obeys_shared_browse_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -403,7 +580,7 @@ class MediaSourceServiceTest(unittest.TestCase):
                     clear_history_on_path_change=False,
                 )
 
-    def test_update_media_source_path_change_cleans_related_history(self):
+    def test_update_media_source_path_change_preserves_history_and_invalidates_plans(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             old_dir = root / "old"
@@ -414,6 +591,12 @@ class MediaSourceServiceTest(unittest.TestCase):
             ensure_database(settings)
             source = create_media_source(settings, "old", old_dir, True)
             self._insert_history(settings, source.id)
+            realFile = old_dir / "keep.mkv"
+            realFile.write_bytes(b"preserved")
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                add_pending_file(connection, source.id, 1, realFile, 9, "manual_excluded")
+                _upsert_scan_file_index(connection, source.id, 1, realFile, old_dir, 9, "now", "active", "now")
+                connection.commit()
 
             result = update_media_source(
                 settings,
@@ -427,12 +610,23 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertEqual("new", result["source"].name)
             self.assertEqual(str(new_dir), result["source"].path)
             self.assertFalse(result["source"].enabled)
-            self.assertEqual(1, result["cleanup_summary"]["scan_jobs"])
-            self.assertEqual(1, result["cleanup_summary"]["media_files"])
-            self.assertEqual(1, result["cleanup_summary"]["rename_previews"])
-            self.assertEqual(1, result["cleanup_summary"]["rename_operation_items"])
-            self.assertEqual(1, result["cleanup_summary"]["rename_operations"])
-            self._assert_no_history(settings)
+            self.assertEqual(0, result["cleanup_summary"]["scan_jobs"])
+            self.assertEqual(1, result["cleanup_summary"]["rename_plans_invalidated"])
+            self._assert_preserved_history(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                snapshot = json.loads(connection.execute("SELECT snapshot_json FROM media_source_history").fetchone()[0])
+                self.assertEqual(str(old_dir), snapshot["path"])
+                self.assertNotIn("encrypted_secret", snapshot)
+                self.assertEqual("invalidated", connection.execute("SELECT status FROM rename_operations").fetchone()[0])
+                self.assertIsNotNone(connection.execute("SELECT source_invalidated_at FROM scan_jobs").fetchone()[0])
+                self.assertEqual("invalidated", connection.execute("SELECT status FROM pending_files").fetchone()[0])
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM scan_file_index").fetchone()[0])
+            self.assertEqual([], list_pending_files(settings))
+            self.assertEqual(b"preserved", realFile.read_bytes())
+            with self.assertRaisesRegex(ValueError, "历史预览不能"):
+                update_rename_preview(settings, 1, "Other")
+            self.assertEqual("invalidated", execute_rename_operation(settings, 1).status)
+            self.assertEqual(0, generate_rename_previews(settings, media_source_id=source.id).generated_count)
 
     def test_update_unc_media_source_preserves_path_type_and_secret(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -464,7 +658,7 @@ class MediaSourceServiceTest(unittest.TestCase):
             self.assertEqual("new-user", result["source"].username)
             self.assertTrue(result["source"].has_secret)
 
-    def test_delete_media_source_cleans_related_history(self):
+    def test_delete_media_source_retires_without_deleting_history_and_path_can_be_reused(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             media_dir = root / "media"
@@ -477,9 +671,20 @@ class MediaSourceServiceTest(unittest.TestCase):
             result = delete_media_source(settings, source.id)
 
             self.assertEqual([source.id], result["deleted_ids"])
-            self.assertEqual(1, result["cleanup_summary"]["scan_jobs"])
+            self.assertEqual(0, result["cleanup_summary"]["scan_jobs"])
             self.assertEqual([], list_media_sources(settings))
-            self._assert_no_history(settings)
+            self._assert_preserved_history(settings)
+            with self.assertRaisesRegex(ValueError, "不存在"):
+                get_media_source(settings, source.id)
+            with self.assertRaisesRegex(ValueError, "不存在"):
+                set_media_source_enabled(settings, source.id, True)
+            replacement = create_media_source(settings, "new-source", media_dir, True)
+            self.assertNotEqual(source.id, replacement.id)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                retired = connection.execute("SELECT retired_root, enabled, deleted_at FROM media_sources WHERE id = ?", (source.id,)).fetchone()
+                self.assertEqual(str(media_dir), retired[0])
+                self.assertEqual(0, retired[1])
+                self.assertIsNotNone(retired[2])
 
     def test_bulk_delete_media_sources_cleans_selected_sources(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -497,6 +702,40 @@ class MediaSourceServiceTest(unittest.TestCase):
 
             self.assertEqual([first.id, second.id], result["deleted_ids"])
             self.assertEqual([], list_media_sources(settings))
+
+    def test_source_mutations_reject_active_scan_rename_or_remote_recovery(self):
+        for activeKind in ("scan", "rename", "remote"):
+            with self.subTest(activeKind=activeKind), tempfile.TemporaryDirectory() as tempDir:
+                root = Path(tempDir)
+                mediaDir = root / "media"
+                mediaDir.mkdir()
+                settings = self.build_settings(root)
+                ensure_database(settings)
+                source = create_media_source(settings, "media", mediaDir, True)
+                self._insert_history(settings, source.id)
+                with closing(sqlite3.connect(settings.database_path)) as connection:
+                    if activeKind == "scan":
+                        connection.execute("UPDATE scan_jobs SET status = 'running' WHERE id = 1")
+                    elif activeKind == "rename":
+                        connection.execute("UPDATE rename_operations SET status = 'running' WHERE id = 1")
+                    else:
+                        connection.execute(
+                            "INSERT INTO remote_operation_items (media_source_id, operation_type, idempotency_key, "
+                            "source_path, target_path, status, created_at, updated_at) "
+                            "VALUES (?, 'rename', 'synthetic', 'old', 'new', 'remote_applied', 'now', 'now')", (source.id,),
+                        )
+                    connection.commit()
+                for mutate in (
+                    lambda: set_media_source_enabled(settings, source.id, False),
+                    lambda: update_media_source(settings, source.id, "changed", mediaDir, True),
+                    lambda: delete_media_source(settings, source.id),
+                    lambda: bulk_delete_media_sources(settings, [source.id]),
+                ):
+                    with self.assertRaisesRegex(ValueError, "运行中任务或未完成恢复"):
+                        mutate()
+                self.assertEqual([source], list_media_sources(settings))
+                with closing(sqlite3.connect(settings.database_path)) as connection:
+                    self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM rename_previews").fetchone()[0])
 
     def _insert_history(self, settings: AppSettings, source_id: int) -> None:
         now = "2026-06-26T00:00:00+00:00"
@@ -537,7 +776,7 @@ class MediaSourceServiceTest(unittest.TestCase):
             )
             connection.commit()
 
-    def _assert_no_history(self, settings: AppSettings) -> None:
+    def _assert_preserved_history(self, settings: AppSettings) -> None:
         with closing(sqlite3.connect(settings.database_path)) as connection:
             for table_name in (
                 "scan_jobs",
@@ -547,7 +786,7 @@ class MediaSourceServiceTest(unittest.TestCase):
                 "rename_operations",
             ):
                 count = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                self.assertEqual(0, count, table_name)
+                self.assertEqual(1, count, table_name)
 
 
 if __name__ == "__main__":

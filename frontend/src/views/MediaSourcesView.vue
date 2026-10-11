@@ -7,17 +7,25 @@ import {
   InfoFilled,
   Link,
   List,
+  Lock,
   Refresh,
   SwitchButton,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import {
+  bulkDeleteMediaSources,
+  createMediaSource,
+  deleteMediaSource,
+  fetchMediaSourcesPage,
+  setMediaSourceEnabled,
+  updateMediaSource,
   fetchLocalDirectories,
   testMediaSourceConnection,
   testMediaSourceConnectionPayload,
+  verifyWebDavConditionalMove,
   type CleanupSummary,
   type LocalDirectoryListing,
   type MediaSource,
@@ -28,14 +36,17 @@ import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
-import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
-import { canGoToParentDirectory, parentDirectoryPath } from "../utils/localDirectory";
+import {
+  canGoToParentDirectory,
+  directoryCurrentPathLabel,
+  directoryTipKey,
+  parentDirectoryPath,
+} from "../utils/localDirectory";
 
 const pageText = messages.mediaSources;
 
 const authStore = useAuthStore();
-const mediaStore = useMediaStore();
 const paginationStore = usePaginationStore();
 const router = useRouter();
 type MediaSourcePathType = "local" | "unc" | "mounted_nfs" | "webdav";
@@ -67,6 +78,7 @@ const editDialogVisible = ref(false);
 const pathPopoverVisible = ref(false);
 const testingEditSource = ref(false);
 const testingSourceIds = ref<Set<number>>(new Set());
+const verifyingSourceIds = ref<Set<number>>(new Set());
 const cleanupDialog = reactive({
   visible: false,
   percentage: 0,
@@ -86,12 +98,43 @@ const directoryPicker = reactive({
     entries: [],
   } as LocalDirectoryListing,
 });
-const pagedMediaSources = computed(() =>
-  paginationStore.paginate("media-sources", mediaStore.mediaSources),
-);
+const pagedMediaSources = ref<MediaSource[]>([]);
+const mediaSourceTotal = ref(0);
+const sourcesLoading = ref(false);
+let sourcesRequestVersion = 0;
+let viewActive = true;
+
+async function loadSources() {
+  if (!viewActive) return;
+  const pagination = paginationStore.getState("media-sources");
+  if (pagination.pageSize === 0) paginationStore.setPageSize("media-sources", 50);
+  const version = ++sourcesRequestVersion;
+  sourcesLoading.value = true;
+  selectedRows.value = [];
+  try {
+    const result = await fetchMediaSourcesPage({ page: pagination.currentPage, page_size: pagination.pageSize });
+    if (version !== sourcesRequestVersion) return;
+    pagedMediaSources.value = result.items;
+    mediaSourceTotal.value = result.total;
+    paginationStore.setPage("media-sources", result.page);
+  } catch (error) {
+    if (version !== sourcesRequestVersion) return;
+    pagedMediaSources.value = [];
+    mediaSourceTotal.value = 0;
+    ElMessage.error(error instanceof Error ? error.message : pageText.loadFailed);
+  } finally {
+    if (version === sourcesRequestVersion) sourcesLoading.value = false;
+  }
+}
 const selectedIds = computed(() => selectedRows.value.map((row) => row.id));
 const canWriteSources = computed(() => authStore.hasPermission("source:write"));
 const sourcePermissionTitle = computed(() => (canWriteSources.value ? "" : messages.auth.permissionDenied));
+const directoryTip = computed(
+  () => pageText.directoryTips[directoryTipKey(directoryPicker.listing)],
+);
+const directoryPathLabel = computed(() =>
+  directoryCurrentPathLabel(directoryPicker.listing, pageText.fileSystemRoot),
+);
 const pathTypeNotice = computed(() => {
   if (form.path_type === "unc") {
     return pageText.smbNotice;
@@ -194,7 +237,7 @@ async function submitSource() {
   }
 
   try {
-    await mediaStore.addMediaSource({
+    await createMediaSource({
       name: form.name,
       path: form.path,
       enabled: form.enabled,
@@ -206,6 +249,7 @@ async function submitSource() {
     });
     ElMessage.success(pageText.saved);
     resetFormOnly();
+    await loadSources();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : pageText.saveFailed);
   }
@@ -252,7 +296,8 @@ function editPathTypeLabel() {
 async function resetMediaSources() {
   resetFormOnly();
   selectedRows.value = [];
-  await mediaStore.loadMediaSources();
+  paginationStore.setPage("media-sources", 1);
+  await loadSources();
 }
 
 async function loadDirectories(path = "") {
@@ -312,6 +357,65 @@ async function testConnection(row: MediaSource) {
     const next = new Set(testingSourceIds.value);
     next.delete(row.id);
     testingSourceIds.value = next;
+  }
+}
+
+function conditionalMoveStatus(row: MediaSource): "verified" | "unsupported" | "unknown" | "not_applicable" {
+  if (row.path_type !== "webdav") return "not_applicable";
+  if (!row.capability_snapshot_json) return "unknown";
+  try {
+    const snapshot = JSON.parse(row.capability_snapshot_json) as {
+      conditional_move?: { status?: string; endpoint?: string; credential_version?: number };
+    };
+    const capability = snapshot.conditional_move;
+    if (
+      capability?.endpoint !== row.path
+      || capability.credential_version !== row.credential_version
+    ) return "unknown";
+    return capability.status === "verified" || capability.status === "unsupported"
+      ? capability.status
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function conditionalMoveLabel(row: MediaSource) {
+  return pageText.conditionalMoveStatus[conditionalMoveStatus(row)];
+}
+
+function conditionalMoveTagType(row: MediaSource): "success" | "danger" | "warning" | "info" {
+  const status = conditionalMoveStatus(row);
+  if (status === "verified") return "success";
+  if (status === "unsupported") return "danger";
+  if (status === "unknown") return "warning";
+  return "info";
+}
+
+async function verifyConditionalMove(row: MediaSource) {
+  try {
+    await ElMessageBox.confirm(
+      pageText.verifyConditionalMoveConfirm,
+      pageText.verifyConditionalMoveTitle,
+      { type: "warning", confirmButtonText: pageText.verifyConditionalMove, cancelButtonText: messages.common.cancel },
+    );
+  } catch {
+    return;
+  }
+  verifyingSourceIds.value = new Set(verifyingSourceIds.value).add(row.id);
+  try {
+    const result = await verifyWebDavConditionalMove(row.id);
+    const message = result.suggestion ? `${result.message}；${result.suggestion}` : result.message;
+    if (result.status === "verified") ElMessage.success(message);
+    else if (result.status === "unsupported") ElMessage.warning(message);
+    else ElMessage.error(message);
+    await loadSources();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : pageText.verifyConditionalMoveFailed);
+  } finally {
+    const next = new Set(verifyingSourceIds.value);
+    next.delete(row.id);
+    verifyingSourceIds.value = next;
   }
 }
 
@@ -434,7 +538,7 @@ async function submitEditSource() {
   try {
     const result = pathChanged
       ? await showCleanupProgress(() =>
-          mediaStore.editMediaSource(editForm.id, {
+          updateMediaSource(editForm.id, {
             name: editForm.name,
             path: editForm.path,
             enabled: editForm.enabled,
@@ -445,7 +549,7 @@ async function submitEditSource() {
             clear_history_on_path_change: true,
           }),
         )
-      : await mediaStore.editMediaSource(editForm.id, {
+      : await updateMediaSource(editForm.id, {
           name: editForm.name,
           path: editForm.path,
           enabled: editForm.enabled,
@@ -457,6 +561,7 @@ async function submitEditSource() {
     setCleanupSummary(result.cleanup_summary);
     editDialogVisible.value = false;
     ElMessage.success(pageText.saved);
+    await loadSources();
   } finally {
     window.setTimeout(() => {
       cleanupDialog.visible = false;
@@ -465,8 +570,9 @@ async function submitEditSource() {
 }
 
 async function toggleSource(row: MediaSource) {
-  await mediaStore.toggleMediaSource(row.id, !row.enabled);
+  await setMediaSourceEnabled(row.id, !row.enabled);
   ElMessage.success(pageText.statusUpdated);
+  await loadSources();
 }
 
 async function removeSource(row: MediaSource) {
@@ -475,9 +581,10 @@ async function removeSource(row: MediaSource) {
     confirmButtonText: pageText.remove,
     cancelButtonText: messages.common.cancel,
   });
-  const result = await showCleanupProgress(() => mediaStore.removeMediaSource(row.id));
+  const result = await showCleanupProgress(() => deleteMediaSource(row.id));
   setCleanupSummary(result.cleanup_summary);
   ElMessage.success(pageText.deleted);
+  await loadSources();
   window.setTimeout(() => {
     cleanupDialog.visible = false;
   }, 400);
@@ -494,10 +601,11 @@ async function removeSelectedSources() {
     confirmButtonText: pageText.batchRemove,
     cancelButtonText: messages.common.cancel,
   });
-  const result = await showCleanupProgress(() => mediaStore.removeMediaSources(selectedIds.value));
+  const result = await showCleanupProgress(() => bulkDeleteMediaSources(selectedIds.value));
   setCleanupSummary(result.cleanup_summary);
   selectedRows.value = [];
   ElMessage.success(pageText.deleted);
+  await loadSources();
   window.setTimeout(() => {
     cleanupDialog.visible = false;
   }, 400);
@@ -508,7 +616,12 @@ function handleSelectionChange(rows: MediaSource[]) {
 }
 
 onMounted(() => {
-  void mediaStore.loadMediaSources();
+  void loadSources();
+});
+
+onBeforeUnmount(() => {
+  viewActive = false;
+  sourcesRequestVersion += 1;
 });
 </script>
 
@@ -653,7 +766,7 @@ onMounted(() => {
           >
             {{ pageText.batchRemove }}
           </el-button>
-          <el-button :icon="Refresh" @click="mediaStore.loadMediaSources">{{ messages.common.refresh }}</el-button>
+          <el-button :icon="Refresh" :loading="sourcesLoading" @click="loadSources">{{ messages.common.refresh }}</el-button>
         </div>
         <el-table
           :data="pagedMediaSources"
@@ -687,7 +800,14 @@ onMounted(() => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="messages.common.actions" width="208" align="center" header-align="center" fixed="right">
+        <el-table-column :label="pageText.conditionalMove" width="124" align="center" header-align="center">
+          <template #default="{ row }">
+            <el-tag :type="conditionalMoveTagType(row)" effect="plain">
+              {{ conditionalMoveLabel(row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="messages.common.actions" width="240" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :content="pageText.testConnection" placement="top">
@@ -698,6 +818,17 @@ onMounted(() => {
                   text
                   circle
                   @click="testConnection(row)"
+                />
+              </el-tooltip>
+              <el-tooltip :content="pageText.verifyConditionalMove" placement="top">
+                <el-button
+                  class="table-action-button action-magic"
+                  :icon="Lock"
+                  :disabled="row.path_type !== 'webdav' || !canWriteSources"
+                  :loading="verifyingSourceIds.has(row.id)"
+                  text
+                  circle
+                  @click="verifyConditionalMove(row)"
                 />
               </el-tooltip>
               <el-tooltip :content="messages.mediaSources.viewTasks" placement="top">
@@ -748,7 +879,8 @@ onMounted(() => {
     </template>
 
     <template #pagination>
-      <TablePagination pagination-key="media-sources" :total="mediaStore.mediaSources.length" />
+      <TablePagination pagination-key="media-sources" :total="mediaSourceTotal" server
+        @page-change="loadSources" @page-size-change="loadSources" />
     </template>
 
     <el-dialog v-model="editDialogVisible" :title="pageText.editTitle" width="640px">
@@ -818,16 +950,16 @@ onMounted(() => {
         <p>{{ cleanupDialog.message }}</p>
         <dl v-if="cleanupDialog.summary" class="cleanup-summary">
           <div>
-            <dt>{{ pageText.cleanupScanJobs }}</dt>
-            <dd>{{ cleanupDialog.summary.scan_jobs }}</dd>
+            <dt>{{ pageText.invalidatedPending }}</dt>
+            <dd>{{ cleanupDialog.summary.pending_files_invalidated ?? 0 }}</dd>
           </div>
           <div>
-            <dt>{{ pageText.cleanupMediaFiles }}</dt>
-            <dd>{{ cleanupDialog.summary.media_files }}</dd>
+            <dt>{{ pageText.invalidatedPlans }}</dt>
+            <dd>{{ cleanupDialog.summary.rename_plans_invalidated ?? 0 }}</dd>
           </div>
           <div>
-            <dt>{{ pageText.cleanupPreviews }}</dt>
-            <dd>{{ cleanupDialog.summary.rename_previews }}</dd>
+            <dt>{{ pageText.removedIndex }}</dt>
+            <dd>{{ cleanupDialog.summary.scan_index_removed ?? 0 }}</dd>
           </div>
         </dl>
       </div>
@@ -835,10 +967,10 @@ onMounted(() => {
 
     <el-dialog v-model="directoryPicker.visible" :title="messages.mediaSources.directoryDialogTitle" width="680px">
       <div class="directory-picker">
-        <el-alert :title="messages.mediaSources.directoryTip" type="info" show-icon :closable="false" />
+        <el-alert :title="directoryTip" type="info" show-icon :closable="false" />
         <div class="directory-current">
           <span>{{ messages.mediaSources.currentPath }}</span>
-          <strong>{{ directoryPicker.selectedPath || messages.mediaSources.thisPc }}</strong>
+          <strong>{{ directoryPathLabel }}</strong>
         </div>
         <div class="directory-toolbar">
           <el-button

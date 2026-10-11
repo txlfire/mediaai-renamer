@@ -52,6 +52,23 @@ function Assert-FileExists {
     }
 }
 
+function Wait-DevHttpReady {
+    param([string]$Url, [int]$TimeoutSeconds = 30)
+
+    $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $Response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+            if ($Response.StatusCode -eq 200) {
+                return
+            }
+        } catch {
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $Deadline)
+    throw "Development service readiness timed out: $Url. Check .codex/run-logs."
+}
+
 function Stop-PortProcess {
     param([int]$Port)
 
@@ -73,14 +90,15 @@ function Assert-DevDependencies {
     $script:Node = Find-NodeExecutable
 
     $Python = Join-Path $RootPath ".venv\Scripts\python.exe"
-    Assert-FileExists -Path $Python -Hint "Create the virtual environment and install backend dependencies: python -m venv .venv; .\.venv\Scripts\pip.exe install -r backend\requirements.txt"
+    Assert-FileExists -Path $Python -Hint "Create the virtual environment and install backend dependencies: python -m venv .venv; .\.venv\Scripts\pip.exe install --require-hashes -r backend\requirements.lock"
     Assert-FileExists -Path (Join-Path $RootPath "backend\app\main.py") -Hint "Run this script from the project root."
     Assert-FileExists -Path (Join-Path $RootPath "backend\requirements.txt") -Hint "Backend dependency manifest is missing."
-    Assert-FileExists -Path (Join-Path $RootPath "node_modules\vite\bin\vite.js") -Hint "Frontend dependencies are missing. Run npm install."
+    Assert-FileExists -Path (Join-Path $RootPath "backend\requirements.lock") -Hint "Backend dependency lock is missing."
+    Assert-FileExists -Path (Join-Path $RootPath "node_modules\vite\bin\vite.js") -Hint "Frontend dependencies are missing. Run npm ci."
 
     & $Python -c "import uvicorn, fastapi" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "Backend Python dependencies are incomplete. Run .\.venv\Scripts\pip.exe install -r backend\requirements.txt"
+        throw "Backend Python dependencies are incomplete. Run .\.venv\Scripts\pip.exe install --require-hashes -r backend\requirements.lock"
     }
 
     return $Python
@@ -93,6 +111,18 @@ Set-Location $Root
 Normalize-ProcessPathVariable
 $Python = Assert-DevDependencies -RootPath $Root
 & (Join-Path $Root "scripts\stop-dev-lan.ps1") -FrontendPort $FrontendPort -BackendPort $BackendPort
+
+$PortReleaseDeadline = (Get-Date).AddSeconds(10)
+do {
+    $RemainingListeners = Get-NetTCPConnection -LocalPort $FrontendPort,$BackendPort -State Listen -ErrorAction SilentlyContinue
+    if (-not $RemainingListeners) {
+        break
+    }
+    Start-Sleep -Milliseconds 250
+} while ((Get-Date) -lt $PortReleaseDeadline)
+if ($RemainingListeners) {
+    throw "Development ports are still occupied. Startup aborted; no new services were launched."
+}
 
 # Store dev logs and PID files under .codex/run-logs for diagnostics and cleanup.
 $LogDir = Join-Path $Root ".codex\run-logs"
@@ -108,7 +138,7 @@ $env:CI = "true"
 $env:VITE_BACKEND_URL = "http://127.0.0.1:$BackendPort"
 
 # Start backend in a hidden background process with split stdout/stderr logs.
-$Backend = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--app-dir", "backend") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $BackendOut -RedirectStandardError $BackendErr -PassThru
+$Backend = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--reload-dir", "backend/app", "--app-dir", "backend") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $BackendOut -RedirectStandardError $BackendErr -PassThru
 
 # Start frontend in a hidden background process by invoking the local Vite entry directly.
 $Frontend = Start-Process -FilePath $script:Node -ArgumentList @("node_modules\vite\bin\vite.js", "--host", "0.0.0.0", "--port", "$FrontendPort", "--config", "frontend/vite.config.ts") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $FrontendOut -RedirectStandardError $FrontendErr -PassThru
@@ -116,6 +146,10 @@ $Frontend = Start-Process -FilePath $script:Node -ArgumentList @("node_modules\v
 # Save PID files so the stop script can terminate the exact processes first.
 Set-Content -Path (Join-Path $LogDir "backend.pid") -Value $Backend.Id -Encoding ascii
 Set-Content -Path (Join-Path $LogDir "frontend.pid") -Value $Frontend.Id -Encoding ascii
+
+Wait-DevHttpReady -Url "http://127.0.0.1:$BackendPort/api/health"
+Wait-DevHttpReady -Url "http://127.0.0.1:$FrontendPort/"
+Wait-DevHttpReady -Url "http://127.0.0.1:$FrontendPort/api/health"
 
 Write-Host "Backend started. PID: $($Backend.Id), URL: http://127.0.0.1:$BackendPort/api/health"
 Write-Host "Frontend started. PID: $($Frontend.Id), URL: http://127.0.0.1:$FrontendPort"

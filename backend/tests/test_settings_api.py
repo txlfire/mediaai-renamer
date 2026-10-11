@@ -7,7 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from api_test_support import authenticatedClient as TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
@@ -25,6 +25,23 @@ class SettingsApiTest(unittest.TestCase):
             database_path=root / "mediaai.sqlite3",
             logging=LoggingSettings(log_dir=root / "logs", console_output=False),
         )
+
+    def test_metadata_provider_save_writes_one_audit_for_authenticated_actor(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+            response = client.put("/api/settings/metadata-providers/bangumi",
+                                  json={"enabled": True, "api_key": "synthetic-private-key"})
+            self.assertEqual(200, response.status_code)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                rows = connection.execute("SELECT actor_id,actor_name,result,detail_json FROM audit_events "
+                    "WHERE action='update_metadata_provider'").fetchall()
+            self.assertEqual(1, len(rows))
+            self.assertIsNotNone(rows[0][0])
+            self.assertEqual("api-review", rows[0][1])
+            self.assertEqual("success", rows[0][2])
+            self.assertNotIn("synthetic-private-key", rows[0][3])
 
     def test_get_settings_returns_known_tmdb_values(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -170,13 +187,20 @@ class SettingsApiTest(unittest.TestCase):
             self.assertEqual("failed", data["v4"]["status"])
             self.assertEqual("none", data["effective"])
 
-    def test_imdb_connection_result_can_be_saved_and_loaded(self):
+    def test_client_authored_connection_results_are_rejected_without_changing_history(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             settings = self.build_settings(Path(temp_dir))
             ensure_database(settings)
             client = TestClient(create_app(settings))
 
-            save_response = client.post(
+            tmdb_response = client.post(
+                "/api/settings/tmdb/test-result",
+                json={
+                    "v4": {"status": "success", "message": "伪造成功"},
+                    "v3": {"status": "success", "message": "伪造成功"},
+                },
+            )
+            imdb_response = client.post(
                 "/api/settings/imdb/test-result",
                 json={
                     "status": "success",
@@ -184,19 +208,26 @@ class SettingsApiTest(unittest.TestCase):
                     "response_ms": 88,
                 },
             )
-            history_response = client.get("/api/settings/imdb/test-result")
+            self.assertEqual(410, tmdb_response.status_code)
+            self.assertEqual(410, imdb_response.status_code)
+            self.assertIsNone(client.get("/api/settings/tmdb/test-result").json()["result"])
+            self.assertIsNone(client.get("/api/settings/imdb/test-result").json()["result"])
 
-            self.assertEqual(200, save_response.status_code)
-            self.assertEqual(200, history_response.status_code)
-            history = history_response.json()
+    def test_imdb_connection_test_is_saved_by_server(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            client = TestClient(create_app(settings))
+
+            with patch("app.service.settings_service.ExternalRequestBudget.open") as open_request:
+                open_request.return_value.__enter__.return_value.status = 200
+                response = client.post("/api/settings/imdb/test")
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual("success", response.json()["status"])
+            history = client.get("/api/settings/imdb/test-result").json()
             self.assertEqual("success", history["result"]["connection_status"])
-            self.assertEqual(88, history["result"]["response_time"])
             self.assertTrue(history["matches_current"])
-
-            client.put("/api/settings", json={"values": {"imdb.timeout_ms": "15000"}})
-            invalidated = client.get("/api/settings/imdb/test-result").json()
-            self.assertFalse(invalidated["result"]["is_valid"])
-            self.assertFalse(invalidated["matches_current"])
 
     def test_ai_connection_test_returns_and_loads_history(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:

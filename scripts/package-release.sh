@@ -69,8 +69,8 @@ fi
 
 # 发布标签统一为 vX.Y.Z，传入 v 前缀时会自动去重。
 CLEAN_VERSION="${VERSION#v}"
-if [[ -z "$CLEAN_VERSION" ]]; then
-  echo "Version cannot be empty." >&2
+if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+  echo "Version must be a semantic version without path characters." >&2
   exit 1
 fi
 
@@ -99,6 +99,7 @@ mkdir -p "$PACKAGE_ROOT/backend/app"
 (cd "$ROOT/backend/app" && tar --exclude="__pycache__" --exclude="*.pyc" -cf - .) \
   | (cd "$PACKAGE_ROOT/backend/app" && tar -xf -)
 cp "$ROOT/backend/requirements.txt" "$PACKAGE_ROOT/backend/requirements.txt"
+cp "$ROOT/backend/requirements.lock" "$PACKAGE_ROOT/backend/requirements.lock"
 cp -R "$DIST_DIR"/. "$PACKAGE_ROOT/frontend-dist"/
 # 正式包只带示例配置，避免把本地正式配置 config.toml 打进包。
 cp "$ROOT/config/config.example.toml" "$PACKAGE_ROOT/config/config.example.toml"
@@ -106,6 +107,7 @@ cp "$ROOT/config/config.example.toml" "$PACKAGE_ROOT/config/config.example.toml"
 for required_file in \
   "backend/app/main.py" \
   "backend/requirements.txt" \
+  "backend/requirements.lock" \
   "frontend-dist/index.html" \
   "config/config.example.toml"; do
   if [[ ! -f "$PACKAGE_ROOT/$required_file" ]]; then

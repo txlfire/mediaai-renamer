@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from api_test_support import authenticatedClient as TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
@@ -15,7 +16,7 @@ from app.main import create_app
 from app.service.preview_service import generate_rename_previews, list_rename_previews, update_rename_preview
 from app.service.rename_operation_service import create_rename_dry_run, execute_rename_operation
 from app.service.rename_rollback_service import create_rename_rollback_plan, dry_run_rename_rollback_plan
-from app.service.task_governance_service import list_task_governance_items, set_task_archived
+from app.service.task_governance_service import listTaskGovernancePage, list_task_governance_items, set_task_archived
 
 
 class TaskGovernanceTest(unittest.TestCase):
@@ -140,6 +141,27 @@ class TaskGovernanceTest(unittest.TestCase):
         self.assertEqual(1, scan_count)
         self.assertEqual(1, file_count)
 
+    def test_archive_audit_failure_rolls_back_archive_state(self):
+        with patch("app.service.task_governance_service.record_audit_event", side_effect=sqlite3.OperationalError("synthetic")):
+            with self.assertRaises(sqlite3.OperationalError):
+                set_task_archived(
+                    self.settings,
+                    task_type="scan_job",
+                    task_id=1,
+                    archived=True,
+                    archived_by="tester",
+                )
+
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM task_archives WHERE task_type='scan_job' AND task_id=1"
+            ).fetchone()[0]
+            audits = connection.execute(
+                "SELECT COUNT(*) FROM audit_events WHERE action='archive_task' AND target_id='1'"
+            ).fetchone()[0]
+        self.assertEqual(0, count)
+        self.assertEqual(0, audits)
+
     def test_tasks_api_returns_items(self):
         self._create_operation_and_rollback()
         app = create_app(self.settings)
@@ -175,6 +197,59 @@ class TaskGovernanceTest(unittest.TestCase):
         )
         self.assertEqual(200, restore_response.status_code)
         self.assertFalse(restore_response.json()["archived"])
+
+    def _insert_history(self, count=1020):
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.executemany("INSERT INTO scan_jobs (id,media_source_id,status,batch_size,batch_interval_seconds,"
+                "created_at,ended_at,scanned_count) "
+                "VALUES (?,1,'completed',100,0,'2026-07-09T00:00:00+00:00','2026-07-09T00:01:00+00:00',?)",
+                [(index, index) for index in range(2, count + 1)])
+            connection.commit()
+
+    def test_page_covers_full_history_and_clamps_last_page(self):
+        self._insert_history()
+        page = listTaskGovernancePage(self.settings, page=2, page_size=10)
+        self.assertEqual(1020, page["total"])
+        self.assertEqual(list(range(1010, 1000, -1)), [item.task_id for item in page["items"]])
+        last = listTaskGovernancePage(self.settings, page=999, page_size=50)
+        self.assertEqual(21, last["page"])
+        self.assertEqual(20, len(last["items"]))
+        self.assertEqual(1, last["items"][-1].task_id)
+
+    def test_archive_old_task_beyond_first_500_is_successful(self):
+        self._insert_history()
+        archived = set_task_archived(self.settings, task_type="scan_job", task_id=1, archived=True)
+        self.assertTrue(archived.archived)
+        self.assertEqual(1019, listTaskGovernancePage(self.settings)["total"])
+        restored = set_task_archived(self.settings, task_type="scan_job", task_id=1, archived=False)
+        self.assertFalse(restored.archived)
+        self.assertEqual(1020, listTaskGovernancePage(self.settings)["total"])
+
+    def test_page_global_sort_and_filters_match_legacy(self):
+        self._create_operation_and_rollback()
+        self._insert_history()
+        result = listTaskGovernancePage(self.settings, sort_by="total_count", sort_order="desc", page_size=10)
+        self.assertEqual(1020, result["items"][0].total_count)
+        for kind in ("scan_job", "rename_operation", "rollback_plan"):
+            legacy = list_task_governance_items(self.settings, task_type=kind, media_source_id=1, limit=10)
+            paged = listTaskGovernancePage(self.settings, task_type=kind, media_source_id=1, page_size=10)
+            self.assertEqual(legacy, paged["items"])
+        empty = listTaskGovernancePage(self.settings, start_at="2099", page=5)
+        self.assertEqual((0, 1, []), (empty["total"], empty["page"], empty["items"]))
+
+    def test_page_api_validates_and_preserves_legacy_contract(self):
+        self._insert_history()
+        client = TestClient(create_app(self.settings))
+        result = client.get("/api/tasks/page?page=2&page_size=10&sort_by=task_id&sort_order=asc")
+        self.assertEqual(200, result.status_code)
+        self.assertEqual(1020, result.json()["total"])
+        self.assertEqual(11, result.json()["items"][0]["task_id"])
+        for query, status in (("page=0", 422), ("page_size=201", 422), ("sort_by=drop_table", 400),
+                              ("sort_order=invalid", 400), ("task_type=invalid", 400)):
+            self.assertEqual(status, client.get("/api/tasks/page?" + query).status_code)
+        legacy = client.get("/api/tasks?limit=500")
+        self.assertEqual({"items"}, set(legacy.json()))
+        self.assertEqual(500, len(legacy.json()["items"]))
 
 
 if __name__ == "__main__":

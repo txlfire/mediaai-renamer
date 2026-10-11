@@ -11,6 +11,7 @@ from typing import Any
 
 from app.core.config import AppSettings
 from app.service.auth_service import AuthUser
+from app.utils.redaction import redactUrlCredentials
 
 SENSITIVE_KEYWORDS = (
     "api_key",
@@ -53,8 +54,31 @@ class AuditEventPage:
     page_size: int
 
 
+@dataclass(frozen=True)
+class AuditWriteContext:
+    """显式传入服务的操作人上下文，不依赖跨线程隐式请求状态。"""
+
+    actor: AuthUser | None = None
+    ipAddress: str | None = None
+    userAgent: str | None = None
+
+
 def _utc_now_text() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def executionAuditResult(status: str, *, succeededCount: int | None = None,
+                         failedCount: int = 0, conflictCount: int = 0) -> str:
+    """HTTP 调用成功不等于业务执行全部成功。"""
+    if status in {"running", "dry_run", "draft", "checked"}:
+        return "pending"
+    if failedCount or conflictCount:
+        return "partial_success" if succeededCount else "failed"
+    if status in {"completed", "executed"}:
+        return "success"
+    if status == "partial_failed":
+        return "partial_success"
+    return "failed"
 
 
 def _connect(settings: AppSettings) -> sqlite3.Connection:
@@ -80,6 +104,8 @@ def sanitize_audit_detail(value: Any) -> Any:
         return [sanitize_audit_detail(item) for item in value]
     if isinstance(value, tuple):
         return [sanitize_audit_detail(item) for item in value]
+    if isinstance(value, str):
+        return redactUrlCredentials(value)
     return value
 
 
@@ -98,8 +124,9 @@ def record_audit_event(
     detail: dict[str, Any] | None = None,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> AuditEvent:
-    """写入审计事件并返回记录。"""
+    """写入安全审计；借用连接时由调用者与业务同事务提交，不降级吞错。"""
 
     now = _utc_now_text()
     resolved_actor_id = actor.id if actor is not None else actor_id
@@ -109,8 +136,10 @@ def record_audit_event(
         if detail is not None
         else None
     )
-    with closing(_connect(settings)) as connection:
-        cursor = connection.execute(
+    ownsConnection = connection is None
+    targetConnection = connection if connection is not None else _connect(settings)
+    try:
+        cursor = targetConnection.execute(
             "INSERT INTO audit_events "
             "(event_type, actor_id, actor_name, target_type, target_id, action, result, "
             "summary, detail_json, ip_address, user_agent, created_at) "
@@ -123,19 +152,25 @@ def record_audit_event(
                 str(target_id) if target_id is not None else None,
                 action,
                 result,
-                summary,
+                redactUrlCredentials(summary),
                 detail_json,
                 ip_address,
                 user_agent,
                 now,
             ),
         )
-        connection.commit()
-        row = connection.execute(
+        if ownsConnection:
+            targetConnection.commit()
+        resultCursor = targetConnection.cursor()
+        resultCursor.row_factory = sqlite3.Row
+        row = resultCursor.execute(
             "SELECT * FROM audit_events WHERE id = ?",
             (int(cursor.lastrowid),),
         ).fetchone()
-    return _row_to_audit_event(row)
+        return _row_to_audit_event(row)
+    finally:
+        if ownsConnection:
+            targetConnection.close()
 
 
 def list_audit_events(
@@ -246,8 +281,8 @@ def _row_to_audit_event(row: sqlite3.Row) -> AuditEvent:
         target_id=row["target_id"],
         action=str(row["action"]),
         result=str(row["result"]),
-        summary=str(row["summary"]),
-        detail=detail,
+        summary=redactUrlCredentials(str(row["summary"])),
+        detail=sanitize_audit_detail(detail),
         ip_address=row["ip_address"],
         user_agent=row["user_agent"],
         created_at=str(row["created_at"]),

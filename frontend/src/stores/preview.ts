@@ -63,12 +63,13 @@ export const usePreviewStore = defineStore("preview", {
       this.previews = await fetchRenamePreviews(this.filters);
     },
 
-    async generatePreviews(payload: GenerateRenamePreviewsPayload = {}) {
+    async generatePreviews(payload: GenerateRenamePreviewsPayload = {}, refreshHistory = true) {
       this.loading = true;
       this.errorMessage = "";
+      this.generationSummary = null;
       try {
         this.generationSummary = await generateRenamePreviews(payload);
-        await this.loadPreviews();
+        if (refreshHistory) await this.loadPreviews();
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.errors.previewGenerationFailed;
       } finally {

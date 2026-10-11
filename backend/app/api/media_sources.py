@@ -2,23 +2,27 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.api.auth import require_permission
-from app.service.audit_service import record_audit_event, sanitize_audit_detail
+from app.service.audit_service import AuditWriteContext
 from app.service.media_source_service import (
     bulk_delete_media_sources,
     create_media_source,
     delete_media_source,
     list_local_directories,
     list_media_sources,
+    listMediaSourcesPage,
+    get_media_source,
     list_source_directories,
     set_media_source_enabled,
     test_media_source_connection,
     test_media_source_connection_payload,
     update_media_source,
+    verifyWebDavConditionalMove,
 )
+from app.service.remote_operation_service import RemoteOperationLockConflict
 
 router = APIRouter(prefix="/api/media-sources", tags=["media-sources"])
 
@@ -77,17 +81,8 @@ class MediaSourceConnectionTestRequest(BaseModel):
     local_mount_path: str | None = None
 
 
-def _audit_request_context(request: Request) -> dict[str, str | None]:
-    return {
-        "ip_address": request.client.host if request.client else None,
-        "user_agent": request.headers.get("user-agent"),
-    }
-
-
-def _model_payload(model: BaseModel) -> dict[str, object]:
-    if hasattr(model, "model_dump"):
-        return model.model_dump(exclude_none=True)
-    return model.dict(exclude_none=True)
+def _sourceAuditContext(request: Request, actor) -> AuditWriteContext:
+    return AuditWriteContext(actor, request.client.host if request.client else None, request.headers.get("user-agent"))
 
 
 @router.get("")
@@ -95,7 +90,15 @@ def list_sources(request: Request):
     return list_media_sources(request.app.state.settings)
 
 
-@router.get("/local-directories")
+@router.get("/page")
+def list_sources_page(request: Request, page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200), q: str = Query(default="", max_length=200),
+    enabled_only: bool = Query(default=False)):
+    return listMediaSourcesPage(request.app.state.settings, page=page, pageSize=page_size,
+                               query=q, enabledOnly=enabled_only)
+
+
+@router.get("/local-directories", dependencies=[Depends(require_permission("source:write"))])
 def browse_local_directories(path: str | None = None):
     try:
         return list_local_directories(path)
@@ -103,7 +106,7 @@ def browse_local_directories(path: str | None = None):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/test-connection")
+@router.post("/test-connection", dependencies=[Depends(require_permission("source:write"))])
 def test_source_connection_payload(payload: MediaSourceConnectionTestRequest):
     try:
         return test_media_source_connection_payload(
@@ -125,7 +128,15 @@ def test_source_connection_payload(payload: MediaSourceConnectionTestRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/{source_id}/directories")
+@router.get("/{source_id}")
+def get_source(source_id: int, request: Request):
+    try:
+        return get_media_source(request.app.state.settings, source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="媒体源不存在或已退役") from exc
+
+
+@router.get("/{source_id}/directories", dependencies=[Depends(require_permission("source:write"))])
 def browse_source_directories(source_id: int, request: Request, path: str | None = None):
     try:
         return list_source_directories(request.app.state.settings, source_id, path)
@@ -133,10 +144,28 @@ def browse_source_directories(source_id: int, request: Request, path: str | None
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/{source_id}/test-connection")
+@router.post("/{source_id}/test-connection", dependencies=[Depends(require_permission("source:write"))])
 def test_source_connection(source_id: int, request: Request):
     try:
         return test_media_source_connection(request.app.state.settings, source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{source_id}/verify-conditional-move")
+def verify_source_conditional_move(
+    source_id: int,
+    request: Request,
+    current_user=Depends(require_permission("source:write")),
+):
+    try:
+        return verifyWebDavConditionalMove(
+            request.app.state.settings,
+            source_id,
+            auditContext=_sourceAuditContext(request, current_user),
+        )
+    except RemoteOperationLockConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -166,23 +195,10 @@ def create_source(
             nfs_version=payload.nfs_version,
             nfs_options=payload.nfs_options,
             local_mount_path=payload.local_mount_path,
+            auditContext=_sourceAuditContext(request, current_user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    source = result.get("source", result) if isinstance(result, dict) else result
-    source_id = source.get("id") if isinstance(source, dict) else None
-    record_audit_event(
-        request.app.state.settings,
-        event_type="media_source.change",
-        action="create_media_source",
-        result="success",
-        summary=f"新增媒体源：{payload.name}",
-        target_type="media_source",
-        target_id=source_id,
-        actor=current_user,
-        detail=sanitize_audit_detail(_model_payload(payload)),
-        **_audit_request_context(request),
-    )
     return result
 
 
@@ -205,21 +221,10 @@ def update_source(
             secret=payload.secret,
             nfs_host=payload.nfs_host,
             nfs_export=payload.nfs_export,
+            auditContext=_sourceAuditContext(request, current_user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="media_source.change",
-        action="update_media_source",
-        result="success",
-        summary=f"更新媒体源：{payload.name}",
-        target_type="media_source",
-        target_id=source_id,
-        actor=current_user,
-        detail=sanitize_audit_detail(_model_payload(payload)),
-        **_audit_request_context(request),
-    )
     return result
 
 
@@ -235,21 +240,10 @@ def update_source_enabled(
             request.app.state.settings,
             source_id,
             payload.enabled,
+            auditContext=_sourceAuditContext(request, current_user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="media_source.change",
-        action="set_media_source_enabled",
-        result="success",
-        summary=f"{'启用' if payload.enabled else '停用'}媒体源：{source_id}",
-        target_type="media_source",
-        target_id=source_id,
-        actor=current_user,
-        detail={"enabled": payload.enabled},
-        **_audit_request_context(request),
-    )
     return result
 
 
@@ -260,21 +254,9 @@ def remove_source(
     current_user=Depends(require_permission("source:write")),
 ):
     try:
-        result = delete_media_source(request.app.state.settings, source_id)
+        result = delete_media_source(request.app.state.settings, source_id, auditContext=_sourceAuditContext(request, current_user))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="media_source.change",
-        action="delete_media_source",
-        result="success",
-        summary=f"删除媒体源：{source_id}",
-        target_type="media_source",
-        target_id=source_id,
-        actor=current_user,
-        detail=result if isinstance(result, dict) else None,
-        **_audit_request_context(request),
-    )
     return result
 
 
@@ -285,18 +267,7 @@ def remove_sources(
     current_user=Depends(require_permission("source:write")),
 ):
     try:
-        result = bulk_delete_media_sources(request.app.state.settings, payload.ids)
+        result = bulk_delete_media_sources(request.app.state.settings, payload.ids, auditContext=_sourceAuditContext(request, current_user))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="media_source.change",
-        action="bulk_delete_media_sources",
-        result="success",
-        summary=f"批量删除媒体源：{len(payload.ids)} 个",
-        target_type="media_source",
-        actor=current_user,
-        detail={"ids": payload.ids, "result": result},
-        **_audit_request_context(request),
-    )
     return result

@@ -33,9 +33,11 @@ class FakeTmdbClient:
         language: str = "zh-CN",
         region: str = "CN",
         timeout_ms: int = 10000,
+        requestBudget=None,
     ):
         self.api_key = api_key
         self.v4_token = v4_token
+        self.requestBudget = requestBudget
         FakeTmdbClient.calls.append({"api_key": api_key, "v4_token": v4_token})
 
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:

@@ -108,7 +108,7 @@ export type AuditEventPage = {
 
 export type ApiHttpClient = {
   get<T = unknown>(url: string): Promise<{ data: T }>;
-  post?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
+  post?<T = unknown>(url: string, body: unknown, config?: { timeout: number }): Promise<{ data: T }>;
   put?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
   patch?<T = unknown>(url: string, body: unknown): Promise<{ data: T }>;
   delete?<T = unknown>(url: string): Promise<{ data: T }>;
@@ -132,6 +132,8 @@ export type MediaSource = {
   nfs_version?: string | null;
   nfs_options?: string | null;
   local_mount_path?: string | null;
+  credential_version?: number;
+  capability_snapshot_json?: string | null;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -162,6 +164,9 @@ export type CleanupSummary = {
   rename_previews: number;
   media_files: number;
   scan_jobs: number;
+  pending_files_invalidated?: number;
+  rename_plans_invalidated?: number;
+  scan_index_removed?: number;
 };
 
 export type MediaSourceUpdatePayload = MediaSourceCreatePayload & {
@@ -186,6 +191,8 @@ export type LocalDirectoryListing = {
   current_path: string | null;
   parent_path: string | null;
   entries: LocalDirectoryEntry[];
+  runtime_environment?: "container" | "windows" | "linux" | "macos" | string | null;
+  root_label?: string | null;
 };
 
 export type SharedProtocolCapability = {
@@ -208,6 +215,14 @@ export type ConnectionTestResult = {
   readable?: boolean | null;
   writable?: boolean | null;
   filesystem_type?: string | null;
+};
+
+export type WebDavCapabilityVerification = {
+  status: "verified" | "unsupported" | "unknown";
+  message: string;
+  suggestion?: string | null;
+  cleanup_succeeded: boolean;
+  evidence?: Record<string, number> | null;
 };
 
 export type MediaSourceConnectionTestPayload = {
@@ -282,6 +297,21 @@ export type LogCleanupSummary = {
   deleted_count: number;
   skipped_count: number;
   archive_dir: string;
+  has_more?: boolean;
+  over_budget?: boolean;
+  message?: string | null;
+};
+
+export type LogStorageStats = {
+  managed_file_bytes: number;
+  unknown_file_bytes: number;
+  file_limit_bytes: number;
+  file_over_budget: boolean;
+  operation_log_bytes: number;
+  database_file_bytes: number;
+  wal_file_bytes: number;
+  database_reusable_bytes: number;
+  message: string;
 };
 
 export type OperationLogLevel = "debug" | "info" | "warning" | "error" | "success" | string;
@@ -320,6 +350,7 @@ export type OperationLogFilters = {
 export type OperationLogCleanupSummary = {
   deleted: number;
   bytes_deleted: number;
+  budget_exhausted?: boolean;
 };
 
 export type TaskGovernanceItem = {
@@ -366,6 +397,7 @@ export type TaskArchivePayload = {
 
 export type RemoteOperationStatus =
   | "pending"
+  | "remote_applied"
   | "recovering"
   | "completed"
   | "failed"
@@ -409,6 +441,45 @@ export type RemoteOperationRecoveryResult = {
   item: RemoteOperationItem;
   action: "retried" | "reconciled" | "already_completed" | string;
   message: string;
+};
+
+export type FileActionAuditIntentStatus = "pending" | "review_required" | "completed" | "manually_closed";
+
+export type FileActionAuditIntent = {
+  id: number;
+  task_type: string;
+  task_id: number;
+  status: FileActionAuditIntentStatus;
+  request_phase: string;
+  last_error_type: string | null;
+  has_outcome: boolean;
+  closed_at: string | null;
+  closed_by: string | null;
+  close_reason: string | null;
+  close_evidence: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FileActionAuditIntentPage = {
+  items: FileActionAuditIntent[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
+export type AuditIntentCapacity = {
+  records: number;
+  max_records: number;
+  approx_bytes: number;
+  max_bytes: number;
+  usage_ratio: number;
+  warning: boolean;
+  capacity_exhausted: boolean;
+  pending: number;
+  review_required: number;
+  manually_closed: number;
 };
 
 export type RenamePreview = {
@@ -635,6 +706,7 @@ export type RenameOperation = {
   created_at?: string;
   updated_at?: string;
   items: RenameOperationItem[];
+  error_message?: string | null;
 };
 
 export type RenameRollbackItem = {
@@ -651,6 +723,9 @@ export type RenameRollbackItem = {
 };
 
 export type RenameRollbackPlan = {
+  rolled_back_count?: number;
+  failed_count?: number;
+  error_message?: string | null;
   id: number;
   operation_id: number;
   status: "draft" | "checked" | "executed" | "partial_failed" | "failed" | string;
@@ -764,6 +839,13 @@ export type AiConnectionTestHistory = {
   matches_current: boolean;
 };
 
+export type AiReadiness = {
+  ready: boolean;
+  status: "ready" | "untested" | "stale" | "failed" | string;
+  tested_at: string | null;
+  message: string;
+};
+
 export type NamingTemplateSamplePayload = {
   title: string;
   year?: number | null;
@@ -866,6 +948,35 @@ export type UpdateExternalSubmissionBlockPayload = {
   override_reason?: string;
 };
 
+export type ExternalSubmissionAuthorization = {
+  id: string;
+  expires_at: string;
+  snapshot: {
+    block_id: number;
+    source_record_id: number;
+    target_service: string;
+    file_name: string;
+    file_path: string;
+    parsed: { title: string; media_type: string; year: number | null; season: number | null; episode: number | null };
+    match_source: string;
+    service: { provider: string; model: string | null; endpoint: string; auth_channel: string; timeout_ms: number };
+    policy_evidence: {
+      matched_count: number;
+      matched_words_masked: string[];
+      policy_revision: string;
+      policy_summary: string;
+    };
+  };
+};
+
+export type ExternalSubmissionOutcome = {
+  id: string;
+  status: "prepared" | "completed" | "failed" | "unknown";
+  message: string;
+  candidates: { title: string; year: number | null; media_type: string }[];
+  audit_pending: boolean;
+};
+
 export type PendingFile = {
   id: number;
   media_source_id: number;
@@ -933,7 +1044,12 @@ apiClient.interceptors.request.use((config) => {
 });
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (response.headers["x-mediaai-audit-state"] === "pending" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("mediaai:audit-pending"));
+    }
+    return response;
+  },
   (error) => {
     if (error?.response?.status === 401) {
       clearAuthToken();
@@ -1165,6 +1281,19 @@ export async function createMediaSource(
   }
 }
 
+export async function fetchMediaSourcesPage(
+  filters: { page?: number; page_size?: number; q?: string; enabled_only?: boolean } = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<{ items: MediaSource[]; total: number; page: number; page_size: number }> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<{ items: MediaSource[]; total: number; page: number; page_size: number }>(`/media-sources/page${query ? `?${query}` : ""}`);
+  return response.data;
+}
+
+export async function fetchMediaSource(sourceId: number, httpClient: ApiHttpClient = apiClient): Promise<MediaSource> {
+  return (await httpClient.get<MediaSource>(`/media-sources/${sourceId}`)).data;
+}
+
 export async function updateMediaSource(
   sourceId: number,
   payload: MediaSourceUpdatePayload,
@@ -1241,6 +1370,7 @@ export async function createScanJob(
   scanModeOrHttpClient: ScanMode | ApiHttpClient = "full",
   httpClient: ApiHttpClient = apiClient,
 ): Promise<ScanJob> {
+  // 兼容入口同样只受理任务并返回 queued，扫描由后台进程执行。
   const scanMode = typeof scanModeOrHttpClient === "string" ? scanModeOrHttpClient : "full";
   const client = typeof scanModeOrHttpClient === "string" ? httpClient : scanModeOrHttpClient;
   const post = requirePost(client);
@@ -1248,6 +1378,16 @@ export async function createScanJob(
     media_source_id: mediaSourceId,
     scan_mode: scanMode,
   });
+  return response.data;
+}
+
+export async function acceptScanJob(mediaSourceId: number, scanMode: ScanMode = "full"): Promise<ScanJob> {
+  const response = await apiClient.post<ScanJob>("/scan-jobs/async", { media_source_id: mediaSourceId, scan_mode: scanMode });
+  return response.data;
+}
+
+export async function fetchScanJob(jobId: number): Promise<ScanJob> {
+  const response = await apiClient.get<ScanJob>(`/scan-jobs/${jobId}`);
   return response.data;
 }
 
@@ -1270,6 +1410,21 @@ export async function fetchScanJobs(
   return response.data;
 }
 
+export type ScanJobPage = { items: ScanJob[]; total: number; page: number; page_size: number };
+export type ScanJobPageFilters = ScanJobFilters & {
+  page?: number;
+  page_size?: number;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  active_only?: boolean;
+};
+
+export async function fetchScanJobsPage(filters: ScanJobPageFilters = {},
+  httpClient: ApiHttpClient = apiClient): Promise<ScanJobPage> {
+  const query = buildQueryString(filters);
+  return (await httpClient.get<ScanJobPage>(query ? `/scan-jobs/page?${query}` : "/scan-jobs/page")).data;
+}
+
 export async function fetchScanModeSuggestion(
   mediaSourceId: number,
   httpClient: ApiHttpClient = apiClient,
@@ -1289,9 +1444,34 @@ export async function fetchMediaFiles(
   return response.data;
 }
 
+export type MediaFilePage = { items: MediaFile[]; total: number; page: number; page_size: number };
+export type MediaFilePageFilters = MediaFileFilters & {
+  page?: number;
+  page_size?: number;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+};
+
+export async function fetchMediaFilesPage(filters: MediaFilePageFilters = {},
+  httpClient: ApiHttpClient = apiClient): Promise<MediaFilePage> {
+  const query = buildQueryString(filters);
+  return (await httpClient.get<MediaFilePage>(query ? `/media-files/page?${query}` : "/media-files/page")).data;
+}
+
 export async function fetchLogs(httpClient: ApiHttpClient = apiClient): Promise<LogItem[]> {
-  const response = await httpClient.get<{ items: LogItem[] }>("/logs");
-  return response.data.items;
+  const response = await httpClient.get<{ items: LogItem[]; message?: string | null }>("/logs");
+  return response.data.message
+    ? [{ file: messages.logs.notice, message: response.data.message }, ...response.data.items]
+    : response.data.items;
+}
+
+export async function exportRuntimeLogs(): Promise<string> {
+  const response = await apiClient.get<string>("/logs/export", { responseType: "text" });
+  return response.data;
+}
+
+export async function fetchLogStorage(httpClient: ApiHttpClient = apiClient): Promise<LogStorageStats> {
+  return (await httpClient.get<LogStorageStats>("/logs/storage")).data;
 }
 
 export async function cleanupLogs(httpClient: ApiHttpClient = apiClient): Promise<LogCleanupSummary> {
@@ -1345,6 +1525,15 @@ export async function archiveTask(
   return response.data;
 }
 
+export async function fetchTasksPage(
+  filters: Omit<TaskGovernanceFilters, "limit"> & { page?: number; page_size?: number; sort_by?: string; sort_order?: "asc" | "desc" } = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<{ items: TaskGovernanceItem[]; total: number; page: number; page_size: number }> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<{ items: TaskGovernanceItem[]; total: number; page: number; page_size: number }>(`/tasks/page${query ? `?${query}` : ""}`);
+  return response.data;
+}
+
 export async function fetchRemoteOperations(
   filters: RemoteOperationFilters = {},
   httpClient: ApiHttpClient = apiClient,
@@ -1372,6 +1561,34 @@ export async function recoverRemoteOperation(
   }
 }
 
+export async function fetchFileActionAuditIntents(
+  filters: { page?: number; page_size?: number; status?: FileActionAuditIntentStatus } = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<FileActionAuditIntentPage> {
+  const query = buildQueryString(filters);
+  const response = await httpClient.get<FileActionAuditIntentPage>(
+    `/tasks/audit-intents${query ? `?${query}` : ""}`,
+  );
+  return response.data;
+}
+
+export async function fetchAuditIntentCapacity(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AuditIntentCapacity> {
+  const response = await httpClient.get<AuditIntentCapacity>("/tasks/audit-intents/capacity");
+  return response.data;
+}
+
+export async function closeFileActionAuditIntent(
+  intentId: number,
+  payload: { reason: string; evidence: string },
+  httpClient: ApiHttpClient = apiClient,
+): Promise<FileActionAuditIntent> {
+  const post = requirePost(httpClient);
+  const response = await post<FileActionAuditIntent>(`/tasks/audit-intents/${intentId}/close`, payload);
+  return response.data;
+}
+
 export async function generateRenamePreviews(
   payload: GenerateRenamePreviewsPayload,
   httpClient: ApiHttpClient = apiClient,
@@ -1390,6 +1607,21 @@ export async function fetchRenamePreviews(
     query ? `/rename-previews?${query}` : "/rename-previews",
   );
   return response.data;
+}
+
+export type RenamePreviewPage = { items: RenamePreview[]; total: number; page: number; page_size: number; stats: Record<string, number> };
+export type RenameSelectionItem = Pick<RenamePreview, "id" | "status" | "parsed_title" | "file_name" | "current_target_name">;
+export type PreviewSelectionAction = "rename" | "multi_source" | "ai" | "tmdb";
+export async function fetchRenamePreviewsPage(
+  filters: RenamePreviewFilters & { page?: number; page_size?: number; sort_by?: string; sort_order?: "asc" | "desc" },
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenamePreviewPage> {
+  return (await httpClient.get<RenamePreviewPage>(`/rename-previews/page?${buildQueryString(filters)}`)).data;
+}
+export async function fetchRenamePreviewSelection(filters: RenamePreviewFilters & { action: PreviewSelectionAction },
+  httpClient: ApiHttpClient = apiClient): Promise<{ items: RenameSelectionItem[]; total: number; limit: number; over_limit: boolean }> {
+  return (await httpClient.get<{ items: RenameSelectionItem[]; total: number; limit: number; over_limit: boolean }>(
+    `/rename-previews/selection?${buildQueryString(filters)}`)).data;
 }
 
 export async function updateRenamePreview(
@@ -1455,6 +1687,15 @@ export async function executeRenameOperation(
   return response.data;
 }
 
+export async function acceptRenameOperation(
+  operationId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<RenameOperation> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameOperation>(`/rename-operations/${operationId}/execute-async`, {});
+  return response.data;
+}
+
 export async function createRenameRollbackPlan(
   operationId: number,
   httpClient: ApiHttpClient = apiClient,
@@ -1499,6 +1740,12 @@ export async function executeRenameRollbackPlan(
   return response.data;
 }
 
+export async function acceptRenameRollbackPlan(planId: number, httpClient: ApiHttpClient = apiClient): Promise<RenameRollbackPlan> {
+  const post = requirePost(httpClient);
+  const response = await post<RenameRollbackPlan>(`/rename-rollback-plans/${planId}/execute-async`, {});
+  return response.data;
+}
+
 export async function fetchSharedProtocolCapabilities(
   httpClient: ApiHttpClient = apiClient,
 ): Promise<SharedProtocolCapability[]> {
@@ -1516,6 +1763,22 @@ export async function testMediaSourceConnection(
     {},
   );
   return response.data;
+}
+
+export async function verifyWebDavConditionalMove(
+  sourceId: number,
+  httpClient: ApiHttpClient = apiClient,
+): Promise<WebDavCapabilityVerification> {
+  const post = requirePost(httpClient);
+  try {
+    const response = await post<WebDavCapabilityVerification>(
+      `/media-sources/${sourceId}/verify-conditional-move`,
+      {},
+    );
+    return response.data;
+  } catch (error) {
+    throw new Error(apiErrorMessage(error));
+  }
 }
 
 export async function testMediaSourceConnectionPayload(
@@ -1848,6 +2111,13 @@ export async function fetchAiTestResult(
   return response.data;
 }
 
+export async function fetchAiReadiness(
+  httpClient: ApiHttpClient = apiClient,
+): Promise<AiReadiness> {
+  const response = await httpClient.get<AiReadiness>("/settings/ai/readiness");
+  return response.data;
+}
+
 export async function fetchExternalSubmissionBlocks(
   filters: { status?: string; target_service?: string; limit?: number } = {},
   httpClient: ApiHttpClient = apiClient,
@@ -1867,6 +2137,21 @@ export async function updateExternalSubmissionBlock(
   const patch = requirePatch(httpClient);
   const response = await patch<ExternalSubmissionBlockRecord>(`/external-submission-blocks/${blockId}`, payload);
   return response.data;
+}
+
+export async function prepareExternalSubmission(blockId: number, httpClient: ApiHttpClient = apiClient): Promise<ExternalSubmissionAuthorization> {
+  return (await requirePost(httpClient)<ExternalSubmissionAuthorization>(`/external-submission-blocks/${blockId}/prepare`, {})).data;
+}
+
+export async function submitExternalSubmission(blockId: number, grantId: string, reason: string,
+  httpClient: ApiHttpClient = apiClient): Promise<ExternalSubmissionOutcome> {
+  return (await requirePost(httpClient)<ExternalSubmissionOutcome>(`/external-submission-blocks/${blockId}/submit`,
+    { authorization_id: grantId, override_reason: reason }, { timeout: 120000 })).data;
+}
+
+export async function fetchExternalSubmissionOutcome(blockId: number,
+  httpClient: ApiHttpClient = apiClient): Promise<ExternalSubmissionOutcome> {
+  return (await httpClient.get<ExternalSubmissionOutcome>(`/external-submission-blocks/${blockId}/outcome`)).data;
 }
 
 export async function testTmdbSettings(
@@ -1918,25 +2203,6 @@ export async function testTmdbSettingsChannel(
   }
 }
 
-export async function saveTmdbTestResult(
-  v4: TmdbChannelTestResult,
-  v3: TmdbChannelTestResult,
-  httpClient: ApiHttpClient = apiClient,
-): Promise<TmdbConnectionTestResult> {
-  const post = requirePost(httpClient);
-  const response = await post<TmdbConnectionTestResult>("/settings/tmdb/test-result", { v4, v3 });
-  return response.data;
-}
-
-export async function saveImdbTestResult(
-  result: ImdbConnectionTestResult,
-  httpClient: ApiHttpClient = apiClient,
-): Promise<ImdbStoredConnectionTestResult> {
-  const post = requirePost(httpClient);
-  const response = await post<ImdbStoredConnectionTestResult>("/settings/imdb/test-result", result);
-  return response.data;
-}
-
 export async function fetchPendingFiles(
   filters: PendingFileFilters = {},
   httpClient: ApiHttpClient = apiClient,
@@ -1946,6 +2212,14 @@ export async function fetchPendingFiles(
     query ? `/pending-files?${query}` : "/pending-files",
   );
   return response.data;
+}
+
+export type PendingFilePage = { items: PendingFile[]; total: number; page: number; page_size: number; stats: Record<string, number> };
+export async function fetchPendingFilesPage(
+  filters: PendingFileFilters & { page?: number; page_size?: number } = {},
+  httpClient: ApiHttpClient = apiClient,
+): Promise<PendingFilePage> {
+  return (await httpClient.get<PendingFilePage>(`/pending-files/page?${buildQueryString(filters)}`)).data;
 }
 
 export async function removePendingFile(
@@ -1987,11 +2261,31 @@ export async function movePendingFiles(
   ids: number[],
   targetDirectory: string,
   httpClient: ApiHttpClient = apiClient,
-): Promise<PendingFile[]> {
+): Promise<PendingFile[] | PendingMoveTask> {
   const post = requirePost(httpClient);
-  const response = await post<PendingFile[]>("/pending-files/move", {
+  const response = await post<PendingFile[] | PendingMoveTask>("/pending-files/move", {
     ids,
     target_directory: targetDirectory,
   });
   return response.data;
+}
+
+export type PendingMoveTask = {
+  id: number; status: string; target_directory: string; total_count: number; moved_count: number; failed_count: number;
+  error_message: string | null; created_at: string; updated_at: string;
+  items: { id: number; pending_file_id: number; source_path: string; target_path: string; status: string; message: string | null }[];
+};
+
+export async function acceptPendingMove(ids: number[], targetDirectory: string, requestId: string,
+  httpClient: ApiHttpClient = apiClient): Promise<PendingMoveTask> {
+  return (await requirePost(httpClient)<PendingMoveTask>("/pending-files/move-async",
+    { ids, target_directory: targetDirectory, request_id: requestId })).data;
+}
+
+export async function fetchPendingMove(taskId: number, httpClient: ApiHttpClient = apiClient): Promise<PendingMoveTask> {
+  return (await httpClient.get<PendingMoveTask>(`/pending-files/moves/${taskId}`)).data;
+}
+
+export async function findPendingMove(requestId: string, httpClient: ApiHttpClient = apiClient): Promise<PendingMoveTask | null> {
+  return (await httpClient.get<PendingMoveTask | null>(`/pending-files/moves/by-request/${encodeURIComponent(requestId)}`)).data;
 }

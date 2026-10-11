@@ -11,6 +11,7 @@ import time
 
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate
+from app.service.external_request_budget_service import openExternalRequest, clientRequestDeadline, ExternalBudgetWaitError, ExternalBudgetUnavailable
 
 
 class DoubanProxyClient:
@@ -26,13 +27,16 @@ class DoubanProxyClient:
         timeout_seconds: int = 10,
         max_retries: int = 1,
         priority: int = 50,
+        requestBudget=None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip()
         self.timeout_seconds = max(1, timeout_seconds)
         self.max_retries = max(0, max_retries)
         self.priority = priority
+        self.requestBudget = requestBudget
 
+    @clientRequestDeadline
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:
         """按统一代理协议搜索豆瓣候选。"""
 
@@ -60,6 +64,7 @@ class DoubanProxyClient:
                 candidates.append(candidate)
         return candidates
 
+    @clientRequestDeadline
     def test_connection(self) -> bool:
         """使用固定非用户关键词验证代理可访问。"""
 
@@ -85,11 +90,13 @@ class DoubanProxyClient:
         for attempt in range(self.max_retries + 1):
             request = url_request.Request(url, headers=headers, method="GET")
             try:
-                with url_request.urlopen(request, timeout=self.timeout_seconds) as response:
+                with openExternalRequest(self.requestBudget, request, self.timeout_seconds, url_request.urlopen) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 if not isinstance(result, dict):
                     raise RuntimeError("豆瓣代理返回了无效的数据结构")
                 return result
+            except (ExternalBudgetWaitError, ExternalBudgetUnavailable):
+                raise
             except HTTPError as exc:
                 if exc.code in {401, 403}:
                     raise RuntimeError("豆瓣代理鉴权失败，请检查 API Key") from exc

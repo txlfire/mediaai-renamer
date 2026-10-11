@@ -71,6 +71,8 @@ export function formatScanJobStatus(value: unknown): string {
   const status = String(value ?? "");
   const labels: Record<string, string> = {
     pending: messages.status.pending,
+    queued: messages.status.pending,
+    interrupted: messages.status.interrupted,
     running: messages.status.running,
     completed: messages.status.completed,
     partial_completed: messages.status.partialCompleted,

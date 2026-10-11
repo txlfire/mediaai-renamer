@@ -1,6 +1,7 @@
 """Shared path protocol registry tests."""
 
 import tempfile
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -61,8 +62,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return self.body
+            def read(self, size=-1):
+                return self.body if size < 0 else self.body[:size]
 
         propfind_xml = """<?xml version="1.0" encoding="utf-8"?>
         <d:multistatus xmlns:d="DAV:">
@@ -84,11 +85,13 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         with patch("app.service.shared_protocols.webdav.urlopen", return_value=FakeResponse(propfind_xml)):
             result = protocol.test_connection(
                 "https://nas.example/dav/",
-                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True,
+                    conditional_move_status="verified"),
             )
             listing = protocol.list_directories(
                 "https://nas.example/dav/",
-                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True,
+                    conditional_move_status="verified"),
             )
 
         self.assertTrue(result.success)
@@ -110,8 +113,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return self.body
+            def read(self, size=-1):
+                return self.body if size < 0 else self.body[:size]
 
         root_xml = """<?xml version="1.0" encoding="utf-8"?>
         <d:multistatus xmlns:d="DAV:">
@@ -179,8 +182,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return self.body
+            def read(self, size=-1):
+                return self.body if size < 0 else self.body[:size]
 
         source_xml = """<?xml version="1.0" encoding="utf-8"?>
         <d:multistatus xmlns:d="DAV:">
@@ -204,7 +207,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             result = protocol.check_rename_ready(
                 "https://nas.example/dav/Movie.2024.1080p.mkv",
                 "https://nas.example/dav/Movie.Safe.mkv",
-                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True,
+                    expected_source_version='"source-etag"', conditional_move_status="verified"),
             )
 
         self.assertTrue(result.success)
@@ -227,8 +231,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return self.body
+            def read(self, size=-1):
+                return self.body if size < 0 else self.body[:size]
 
         file_xml = """<?xml version="1.0" encoding="utf-8"?>
         <d:multistatus xmlns:d="DAV:">
@@ -243,7 +247,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             result = protocol.check_rename_ready(
                 "https://nas.example/dav/Movie.2024.1080p.mkv",
                 "https://nas.example/dav/Movie.Safe.mkv",
-                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True,
+                    conditional_move_status="verified"),
             )
 
         self.assertFalse(result.success)
@@ -262,7 +267,7 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
+            def read(self, size=-1):
                 return b""
 
         def fake_urlopen(request, timeout=5):
@@ -275,7 +280,8 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             result = protocol.move_file(
                 "https://nas.example/dav/Movie.2024.1080p.mkv",
                 "https://nas.example/dav/Movie.Safe.mkv",
-                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True),
+                SharedPathContext(path_type="webdav", username="user", secret="password", has_secret=True,
+                    expected_source_version='"source-etag"', conditional_move_status="verified"),
             )
 
         self.assertTrue(result.success)
@@ -283,6 +289,7 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         self.assertEqual("https://nas.example/dav/Movie.2024.1080p.mkv", captured["url"])
         self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", captured["headers"]["Destination"])
         self.assertEqual("F", captured["headers"]["Overwrite"])
+        self.assertEqual('"source-etag"', captured["headers"]["If-match"])
         self.assertIn("Authorization", captured["headers"])
 
     def test_local_protocol_declares_atomic_rename_capability(self):
@@ -292,14 +299,14 @@ class SharedProtocolRegistryTest(unittest.TestCase):
         self.assertIn(RemoteProtocolCapability.ATOMIC_RENAME.value, capabilities.remote_capabilities)
         self.assertNotIn(RemoteProtocolCapability.COPY_DELETE_RENAME.value, capabilities.remote_capabilities)
 
-    def test_webdav_capability_notice_describes_stable_write_and_recovery_support(self):
+    def test_webdav_capability_notice_describes_verified_write_and_recovery_support(self):
         notice = get_protocol("webdav").capabilities().user_notice
 
         self.assertIn("递归扫描", notice)
-        self.assertIn("真实 MOVE 重命名", notice)
+        self.assertIn("条件 MOVE 安全验证", notice)
+        self.assertIn("真实重命名", notice)
         self.assertIn("回滚", notice)
         self.assertIn("失败恢复", notice)
-        self.assertNotIn("暂不支持真实重命名", notice)
 
     def test_local_connection_and_directory_listing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -363,6 +370,23 @@ class SharedProtocolRegistryTest(unittest.TestCase):
             self.assertTrue(ready.success)
             self.assertFalse(missing_source.success)
             self.assertFalse(missing_target_dir.success)
+
+    def test_readonly_local_directory_can_scan_but_cannot_rename(self):
+        protocol = get_protocol("local")
+        with tempfile.TemporaryDirectory() as tempDir:
+            root = Path(tempDir)
+            source = root / "movie.mkv"
+            source.write_bytes(b"synthetic media")
+            with patch("app.service.shared_protocols.local.os.access", side_effect=lambda path, mode: mode != os.W_OK):
+                connected = protocol.test_connection(str(root))
+                ready = protocol.check_scan_ready(str(root))
+                renamed = protocol.check_rename_ready(str(source), str(root / "new.mkv"))
+                listing = protocol.list_directories(str(root))
+            self.assertTrue(connected.success and ready.success)
+            self.assertTrue(connected.readable)
+            self.assertFalse(connected.writable)
+            self.assertFalse(renamed.success)
+            self.assertEqual([], listing.entries)
 
     def test_mounted_nfs_lists_directories_without_credentials(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -3,13 +3,55 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from concurrent.futures import Future, wait
+from threading import BoundedSemaphore, Thread
+from time import monotonic
 import re
 
 from app.core.config import AppSettings
+from app.core.logger import get_logger
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate, MetadataMatchResult, MetadataMatchSummary
 from app.service.metadata_matcher import MATCH_STATUS_FAILED, MATCH_STATUS_HIGH, score_metadata_candidate
 from app.service.metadata_provider_registry import ProviderRegistryItem, build_metadata_provider_registry
+from app.service.metadata_provider_service import PROVIDER_TMDB
+from app.service.settings_service import get_effective_settings
+from app.service.external_request_budget_service import transportDeadline, ExternalBudgetWaitError, ExternalBudgetUnavailable
+from contextlib import nullcontext
+
+logger = get_logger(__name__)
+
+# 执行槽直到真实调用退出才释放；等待超时不等于底层网络请求已取消。
+_globalSlots = BoundedSemaphore(4)
+_siteSlots = {name: BoundedSemaphore(1) for name in ("tmdb", "bangumi", "tvdb", "douban_proxy", "other")}
+
+
+def _startProvider(item, parsed, deadline=None):
+    siteSlot = _siteSlots.get(item.provider, _siteSlots['other'])
+    if not _globalSlots.acquire(blocking=False):
+        return None
+    if not siteSlot.acquire(blocking=False):
+        _globalSlots.release()
+        return None
+    future = Future()
+    future.set_running_or_notify_cancel()
+    def execute():
+        try:
+            with transportDeadline(deadline) if deadline is not None else nullcontext():
+                candidates = [_enrich_candidate(candidate, item) for candidate in item.searcher.search(replace(parsed))]
+            future.set_result((candidates, monotonic()))
+        except BaseException as exc:
+            future.set_exception(exc)
+        finally:
+            siteSlot.release()
+            _globalSlots.release()
+    try:
+        Thread(target=execute, name=f"metadata-{item.provider}", daemon=True).start()
+    except Exception:
+        siteSlot.release()
+        _globalSlots.release()
+        raise
+    return future
 
 MULTI_MATCH_MODE_PRIMARY_ONLY = "primary_only"
 MULTI_MATCH_MODE_FALLBACK = "fallback"
@@ -196,7 +238,8 @@ def _enabled_items(registry: list[ProviderRegistryItem]) -> list[ProviderRegistr
 def _select_items(registry: list[ProviderRegistryItem], mode: str) -> list[ProviderRegistryItem]:
     enabledItems = _enabled_items(registry)
     if mode == MULTI_MATCH_MODE_PRIMARY_ONLY:
-        return enabledItems[:1]
+        # 仅主源始终为TMDB，不因优先级变化或主源禁用扩大外发范围。
+        return [item for item in enabledItems if item.provider == PROVIDER_TMDB and item.real_search_available][:1]
     return enabledItems
 
 
@@ -212,6 +255,7 @@ def match_multi_source_metadata_candidates(
         raise ValueError("不支持的多源匹配模式")
 
     registryItems = registry if registry is not None else build_metadata_provider_registry(settings)
+    deadline = monotonic() + int(get_effective_settings(settings)["metadata.total_timeout_seconds"])
     selectedItems = _select_items(registryItems, mode)
     providerResults: list[ProviderSearchResult] = []
     candidates: list[MetadataCandidate] = []
@@ -226,6 +270,15 @@ def match_multi_source_metadata_candidates(
         )
         return MultiSourceMatchResult(summary=summary, provider_results=[])
 
+    futures = {}
+    if mode == MULTI_MATCH_MODE_PARALLEL:
+        for item in selectedItems:
+            if item.real_search_available and item.searcher is not None:
+                futures[item.provider] = _startProvider(item, parsed, deadline)
+        pending = [future for future in futures.values() if future is not None]
+        if pending:
+            wait(pending, timeout=max(0, deadline - monotonic()))
+
     for item in selectedItems:
         if item.searcher is None:
             providerResults.append(
@@ -238,11 +291,33 @@ def match_multi_source_metadata_candidates(
             )
             continue
 
+        if monotonic() >= deadline and mode != MULTI_MATCH_MODE_PARALLEL:
+            providerResults.append(ProviderSearchResult(item.provider, item.label, "skipped", "整体等待预算已耗尽，未发起该站点请求", 0))
+            continue
+        future = futures.get(item.provider) if mode == MULTI_MATCH_MODE_PARALLEL else _startProvider(item, parsed, deadline)
+        if future is None:
+            providerResults.append(ProviderSearchResult(item.provider, item.label, "skipped", "站点或系统查询槽忙，未发起请求，请稍后核查", 0))
+            continue
+        if mode != MULTI_MATCH_MODE_PARALLEL:
+            wait([future], timeout=max(0, deadline - monotonic()))
+        if not future.done():
+            providerResults.append(ProviderSearchResult(item.provider, item.label, "timeout", "整体等待预算已耗尽，底层请求可能仍在执行；不自动重试", 0))
+            continue
         try:
-            providerCandidates = [_enrich_candidate(candidate, item) for candidate in item.searcher.search(parsed)]
+            providerCandidates, finishedAt = future.result()
+            if finishedAt > deadline:
+                providerResults.append(ProviderSearchResult(item.provider, item.label, "timeout", "响应超过整体等待预算，未采纳迟到候选；不自动重试", 0))
+                continue
+        except (ExternalBudgetWaitError, ExternalBudgetUnavailable) as exc:
+            providerResults.append(ProviderSearchResult(item.provider, item.label, "failed", str(exc), 0))
+            continue
         except Exception as exc:
+            try:
+                logger.warning("元数据源查询失败 provider=%s error_type=%s", item.provider, type(exc).__name__)
+            except Exception:  # 辅助诊断不可覆盖该站点的查询失败。
+                pass
             providerResults.append(
-                ProviderSearchResult(item.provider, item.label, "failed", f"{item.label} 搜索失败: {exc}", 0)
+                ProviderSearchResult(item.provider, item.label, "failed", f"{item.label} 搜索失败，请检查配置或服务状态", 0)
             )
             continue
 

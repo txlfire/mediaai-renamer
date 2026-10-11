@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ArrowDown, CloseBold, Connection, Delete, Edit, MagicStick, Search, Select, View } from "@element-plus/icons-vue";
+import { ArrowDown, CloseBold, Connection, Delete, Document, Edit, MagicStick, Refresh, Search, Select, View } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import type {
-  AiConnectionTestHistory,
+  RenameSelectionItem,
+  PreviewSelectionAction,
   AiParseCandidate,
   AiParseResult,
   BatchAiParseResult,
@@ -14,10 +15,15 @@ import type {
   MetadataMatchSource,
   MultiSourceMatchMode,
   ProviderSearchResult,
+  PendingFile,
+  PendingMoveTask,
   RenamePreview,
 } from "../api/client";
+import { fetchAiReadiness, fetchMediaFilesPage, fetchPendingFilesPage, fetchRenamePreviewSelection, fetchRenamePreviewsPage, type AiReadiness } from "../api/client";
 import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import ListPageLayout from "../components/ListPageLayout.vue";
+import MediaSourceSelect from "../components/MediaSourceSelect.vue";
+import ScanJobSelect from "../components/ScanJobSelect.vue";
 import ListStatItem from "../components/ListStatItem.vue";
 import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
@@ -30,7 +36,6 @@ import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
 import { usePreviewStore } from "../stores/preview";
 import { useRenameOperationStore } from "../stores/renameOperation";
-import { useSettingsStore } from "../stores/settings";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime } from "../utils/displayFormat";
 import { formatFileSize } from "../utils/displayFormat";
@@ -46,7 +51,6 @@ import {
 import {
   canPrepareRename,
   findEmptyTargetNamePreviews,
-  getRenameablePreviewIds,
   removeEmptyTargetNamePreviews,
 } from "../utils/renameSelection";
 
@@ -55,12 +59,14 @@ const authStore = useAuthStore();
 const previewStore = usePreviewStore();
 const pendingFileStore = usePendingFileStore();
 const renameOperationStore = useRenameOperationStore();
-const settingsStore = useSettingsStore();
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
 const route = useRoute();
+const router = useRouter();
 const canSubmitMetadata = computed(() => authStore.hasPermission("metadata:submit"));
 const canExecuteRename = computed(() => authStore.hasPermission("rename:execute"));
+const canManagePending = computed(() => authStore.hasPermission("scan:run"));
+const canReadLogs = computed(() => authStore.hasPermission("audit:read"));
 const canExecuteRollback = computed(() => authStore.hasPermission("rollback:execute"));
 const metadataPermissionTitle = computed(() => (canSubmitMetadata.value ? "" : messages.auth.permissionDenied));
 const renamePermissionTitle = computed(() => (canExecuteRename.value ? "" : messages.auth.permissionDenied));
@@ -72,13 +78,14 @@ const editDialogVisible = ref(false);
 const operationDialogVisible = ref(false);
 const operationLogVisible = ref(false);
 const selectedOperationLogTaskId = ref<number | null>(null);
-const selectedOperationLogTaskType = ref<"rename_operation" | "rollback_plan">("rename_operation");
+const selectedOperationLogTaskType = ref<"rename_operation" | "rollback_plan" | "pending_move">("rename_operation");
 const emptyTargetDialogVisible = ref(false);
 const detailDialogVisible = ref(false);
 const metadataDialogVisible = ref(false);
 const multiSourceResultDialogVisible = ref(false);
 const aiParseDialogVisible = ref(false);
 const pendingMoveDialogVisible = ref(false);
+const pendingMoveResultVisible = ref(false);
 const editingPreviewId = ref<number | null>(null);
 const selectedDetailRow = ref<RenamePreview | null>(null);
 const metadataPreviewId = ref<number | null>(null);
@@ -87,7 +94,7 @@ const editingTargetName = ref("");
 const selectedPreviewIds = ref<number[]>([]);
 const selectedPreviewRows = ref<RenamePreview[]>([]);
 const selectedPendingFileIds = ref<number[]>([]);
-const pendingRenamePreviews = ref<RenamePreview[]>([]);
+const pendingRenamePreviews = ref<RenameSelectionItem[]>([]);
 const metadataCandidates = ref<MetadataMatchResult[]>([]);
 const multiSourceMatchRows = ref<MultiSourceMatchRow[]>([]);
 const aiParseResult = ref<AiParseResult | null>(null);
@@ -111,14 +118,31 @@ const operationResultLogs = ref<string[]>([]);
 const metadataMatchSource = ref<MetadataMatchSource>("parsed_title");
 const multiSourceMatchMode = ref<MultiSourceMatchMode>("fallback");
 const multiSourceProviderResults = ref<Record<number, ProviderSearchResult[]>>({});
-const aiConnectionHistory = ref<AiConnectionTestHistory | null>(null);
+const aiReadiness = ref<AiReadiness | null>(null);
 const defaultSort = { prop: "id", order: "ascending" as const };
-const pagedPreviews = computed(() =>
-  paginationStore.paginate(
-    "rename-previews",
-    tableSortStore.applySort("rename-previews", previewStore.previews),
-  ),
-);
+const previewTotal = ref(0);
+const previewStats = ref<Record<string, number>>({});
+const mediaFileCount = ref(0);
+const previewsLoading = ref(false);
+const batchScopeLoading = ref(false);
+const pendingFilesLoading = ref(false);
+const pendingTotal = ref(0);
+const pendingStats = ref<Record<string, number>>({});
+const pendingMoveStatusText = computed(() => {
+  const task = pendingFileStore.currentMoveTask;
+  return pendingFileStore.moveError || (task ? formatPendingMoveProgress(task) : messages.renamePreviews.pendingFiles.queryBeforeRetry);
+});
+const operationBusy = computed(() => previewStore.loading || renameOperationStore.loading || pendingFileStore.loading
+  || pendingFileStore.moveLoading || pendingFileStore.moveUncertain || ["queued", "running"].includes(pendingFileStore.currentMoveTask?.status ?? "")
+  || renameOperationStore.rollbackLoading || renameOperationStore.rollbackUncertain
+  || ["queued", "running"].includes(renameOperationStore.currentRollbackPlan?.status ?? "")
+  || batchScopeLoading.value || previewsLoading.value || pendingFilesLoading.value
+  || renameOperationStore.executionUncertain || ["queued", "running"].includes(renameOperationStore.currentOperation?.status ?? ""));
+let previewRequestVersion = 0;
+let contextRequestVersion = 0;
+let pendingRequestVersion = 0;
+let viewActive = true;
+const pagedPreviews = computed(() => previewStore.previews);
 const pagedMetadataCandidates = computed(() =>
   paginationStore.paginate("metadata-candidates", metadataCandidates.value),
 );
@@ -142,13 +166,13 @@ const metadataFieldOptions = computed(() => {
   ].map((value) => ({ value, label: labels[value as keyof typeof labels] || value }));
 });
 const previewStatItems = computed(() => [
-  { label: messages.common.total, value: previewStore.stats.total, tone: "default" as const },
-  { label: messages.status.generated, value: previewStore.stats.generated, tone: "success" as const },
-  { label: messages.status.needsReview, value: previewStore.stats.needsReview, tone: "warning" as const },
-  { label: messages.status.edited, value: previewStore.stats.edited, tone: "edited" as const },
-  { label: messages.status.renamed, value: previewStore.stats.renamed, tone: "renamed" as const },
-  { label: messages.status.noRename, value: previewStore.stats.noRename, tone: "success" as const },
-  { label: messages.status.unableRename, value: previewStore.stats.unableRename, tone: "danger" as const },
+  { label: messages.common.total, value: previewTotal.value, tone: "default" as const },
+  { label: messages.status.generated, value: previewStats.value.generated ?? 0, tone: "success" as const },
+  { label: messages.status.needsReview, value: previewStats.value.needs_review ?? 0, tone: "warning" as const },
+  { label: messages.status.edited, value: previewStats.value.edited ?? 0, tone: "edited" as const },
+  { label: messages.status.renamed, value: previewStats.value.renamed ?? 0, tone: "renamed" as const },
+  { label: messages.status.noRename, value: previewStats.value.no_rename ?? 0, tone: "success" as const },
+  { label: messages.status.unableRename, value: previewStats.value.unable_rename ?? 0, tone: "danger" as const },
 ]);
 const visibleOperationResultLogs = computed(() =>
   operationResultExpanded.value ? operationResultLogs.value : operationResultLogs.value.slice(0, 8),
@@ -166,23 +190,10 @@ const shouldShowGeneratePreviewEmpty = computed(() =>
       !hasPreviewFilter.value &&
       !previewStore.loading &&
       previewStore.previews.length === 0 &&
-      mediaStore.mediaFiles.length > 0,
+      mediaFileCount.value > 0,
   ),
 );
 
-const sourceOptions = computed(() =>
-  mediaStore.mediaSources.map((source) => ({
-    label: source.name,
-    value: source.id,
-  })),
-);
-
-const scanJobOptions = computed(() =>
-  mediaStore.scanJobs.map((job) => ({
-    label: `${messages.common.taskLabel} ${job.id}`,
-    value: job.id,
-  })),
-);
 
 function mediaTypeLabel(value: string) {
   const labels: Record<string, string> = {
@@ -212,6 +223,7 @@ function statusLabel(value: string) {
     no_rename: messages.status.noRename,
     unable_rename: messages.status.unableRename,
     excluded: messages.status.excluded,
+    invalidated: messages.tasks.statuses.invalidated,
   };
   return labels[value] ?? value;
 }
@@ -242,6 +254,7 @@ function operationStatusLabel(value: string) {
     renamed: messages.status.renamed,
     rolled_back: messages.status.rolledBack,
     failed: messages.status.failed,
+    invalidated: messages.tasks.statuses.invalidated,
   };
   return labels[value] ?? value;
 }
@@ -396,6 +409,7 @@ function seasonEpisode(row: { season: number | null; episode: number | null }) {
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
   tableSortStore.setSort("rename-previews", event.prop, event.order);
+  void loadPreviewPage();
 }
 
 function openDetailDialog(row: RenamePreview) {
@@ -454,6 +468,14 @@ const operationResultAlert = computed(() => {
     conflict: operation.conflict_count,
   });
 
+  if (["queued", "running", "interrupted"].includes(operation.status)) {
+    return {
+      type: "warning" as const,
+      title: messages.renamePreviews.operationDialog[operation.status as "queued" | "running" | "interrupted"],
+      description: operation.error_message || summary,
+    };
+  }
+
   if (operation.failed_count > 0 && operation.renamed_count > 0) {
     return {
       type: "warning" as const,
@@ -470,6 +492,14 @@ const operationResultAlert = computed(() => {
     };
   }
 
+  if (operation.status !== "completed") {
+    return {
+      type: "warning" as const,
+      title: operation.status === "invalidated" ? messages.tasks.statuses.invalidated : messages.renamePreviews.operationDialog.failed,
+      description: operation.error_message || `${summary} ${messages.renamePreviews.operationDialog.fixSuggestion}`,
+    };
+  }
+
   return {
     type: "success" as const,
     title: messages.renamePreviews.operationDialog.success,
@@ -478,49 +508,178 @@ const operationResultAlert = computed(() => {
 });
 const rollbackPlan = computed(() => renameOperationStore.currentRollbackPlan);
 const canCreateRollbackPlan = computed(() =>
-  Boolean(operationHasExecuted.value && renameOperationStore.currentOperation?.renamed_count && !rollbackPlan.value),
+  Boolean(operationHasExecuted.value && !["queued", "running", "interrupted"].includes(renameOperationStore.currentOperation?.status ?? "")
+    && renameOperationStore.currentOperation?.renamed_count && !rollbackPlan.value),
 );
 const canDryRunRollbackPlan = computed(() =>
   Boolean(
     rollbackPlan.value &&
-      !["executed", "partial_failed", "failed"].includes(rollbackPlan.value.status) &&
+      ["draft", "checked"].includes(rollbackPlan.value.status) && !operationBusy.value &&
       canExecuteRollback.value,
   ),
 );
 const canExecuteRollbackPlan = computed(() =>
-  Boolean(rollbackPlan.value?.status === "checked" && rollbackPlan.value.executable_count > 0 && canExecuteRollback.value),
+  Boolean(rollbackPlan.value?.status === "checked" && rollbackPlan.value.executable_count > 0 && canExecuteRollback.value && !operationBusy.value),
 );
+
+function clearPreviewPage() {
+  previewRequestVersion += 1;
+  contextRequestVersion += 1;
+  pendingRequestVersion += 1;
+  previewStore.previews = [];
+  previewTotal.value = 0;
+  previewStats.value = {};
+  mediaFileCount.value = 0;
+  previewsLoading.value = false;
+  selectedPreviewIds.value = [];
+  selectedPreviewRows.value = [];
+  pendingFileStore.pendingFiles = [];
+  selectedPendingFileIds.value = [];
+  pendingTotal.value = 0;
+  pendingStats.value = {};
+  pendingFilesLoading.value = false;
+}
+
+watch(() => [previewStore.filters.media_source_id, previewStore.filters.scan_job_id], clearPreviewPage, { flush: "sync" });
+
+async function loadPreviewPage(resetPage = true) {
+  if (!viewActive) return;
+  if (!previewStore.filters.scan_job_id) { clearPreviewPage(); return; }
+  const pagination = paginationStore.getState("rename-previews");
+  if (pagination.pageSize === 0) paginationStore.setPageSize("rename-previews", 50);
+  if (resetPage) paginationStore.setPage("rename-previews", 1);
+  const filters = { ...previewStore.filters };
+  const sort = tableSortStore.sorts["rename-previews"] ?? defaultSort;
+  const version = ++previewRequestVersion;
+  previewsLoading.value = true;
+  selectedPreviewIds.value = []; selectedPreviewRows.value = [];
+  try {
+    const result = await fetchRenamePreviewsPage({ ...filters, page: pagination.currentPage, page_size: pagination.pageSize,
+      sort_by: !sort.order || sort.prop === "__sequence" ? "id" : sort.prop,
+      sort_order: sort.order === "descending" ? "desc" : "asc" });
+    if (version !== previewRequestVersion || JSON.stringify(filters) !== JSON.stringify(previewStore.filters)) return;
+    previewStore.previews = result.items;
+    previewTotal.value = result.total;
+    previewStats.value = result.stats;
+    paginationStore.setPage("rename-previews", result.page);
+  } catch {
+    if (version === previewRequestVersion && JSON.stringify(filters) === JSON.stringify(previewStore.filters)) {
+      previewStore.previews = []; previewTotal.value = 0; previewStats.value = {};
+      ElMessage.error(messages.previewPaging.loadFailed);
+    }
+  } finally {
+    if (version === previewRequestVersion) previewsLoading.value = false;
+  }
+}
+
+async function readAllTargets(action: PreviewSelectionAction): Promise<RenameSelectionItem[] | null> {
+  if (!viewActive || !previewStore.filters.scan_job_id) return null;
+  const filters = { ...previewStore.filters };
+  try {
+    const result = await fetchRenamePreviewSelection({ ...filters, action });
+    if (!viewActive || JSON.stringify(filters) !== JSON.stringify(previewStore.filters)) {
+      if (viewActive) ElMessage.warning(messages.previewPaging.scopeChanged);
+      return null;
+    }
+    if (result.over_limit) {
+      ElMessage.warning(formatMessage(messages.previewPaging.overBatchLimit, { count: result.total, limit: result.limit }));
+      return null;
+    }
+    return result.items;
+  } catch {
+    if (viewActive) ElMessage.error(messages.previewPaging.loadFailed);
+    return null;
+  }
+}
+
+async function runBatchCommand(operation: () => Promise<void>) {
+  if (operationBusy.value) return;
+  batchScopeLoading.value = true;
+  try {
+    await operation();
+    if (viewActive) await loadPreviewPage(false);
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") throw error;
+  } finally {
+    batchScopeLoading.value = false;
+  }
+}
 
 async function refreshPreviews() {
   if (!previewStore.filters.scan_job_id) {
-    previewStore.previews = [];
+    clearPreviewPage();
     mediaStore.mediaFiles = [];
     pendingFileStore.pendingFiles = [];
     return;
   }
-  await previewStore.loadPreviews(previewStore.filters);
-  await mediaStore.loadMediaFiles({
-    media_source_id: previewStore.filters.media_source_id,
-    scan_job_id: previewStore.filters.scan_job_id,
-  });
-  await pendingFileStore.loadPendingFiles({
-    media_source_id: previewStore.filters.media_source_id,
-    scan_job_id: previewStore.filters.scan_job_id,
-  });
+  const sourceId = previewStore.filters.media_source_id, jobId = previewStore.filters.scan_job_id;
+  const version = ++contextRequestVersion;
+  const current = () => viewActive && version === contextRequestVersion;
+  await loadPreviewPage();
+  if (!current()) return;
+  try {
+    const files = await fetchMediaFilesPage({ media_source_id: sourceId, scan_job_id: jobId, page_size: 1 });
+    if (!current()) return;
+    mediaFileCount.value = files.total;
+    await loadPendingPage();
+  } catch {
+    if (current()) {
+      mediaFileCount.value = 0;
+      pendingFileStore.pendingFiles = [];
+      pendingFileStore.refreshFailed = true;
+      ElMessage.error(messages.previewPaging.loadFailed);
+    }
+  }
+}
+
+async function loadPendingPage(resetPage = true) {
+  if (!viewActive || !previewStore.filters.scan_job_id) return;
+  const version = ++pendingRequestVersion;
+  const sourceId = previewStore.filters.media_source_id, jobId = previewStore.filters.scan_job_id;
+  const pagination = paginationStore.getState("pending-files");
+  if (pagination.pageSize === 0) paginationStore.setPageSize("pending-files", 50);
+  if (resetPage) paginationStore.setPage("pending-files", 1);
+  selectedPendingFileIds.value = [];
+  pendingFilesLoading.value = true;
+  try {
+    const result = await fetchPendingFilesPage({ media_source_id: sourceId, scan_job_id: jobId,
+      page: pagination.currentPage, page_size: pagination.pageSize });
+    if (!viewActive || version !== pendingRequestVersion) return;
+    pendingFileStore.filters = { media_source_id: sourceId, scan_job_id: jobId };
+    pendingFileStore.pendingFiles = result.items;
+    pendingFileStore.refreshFailed = false;
+    pendingTotal.value = result.total;
+    pendingStats.value = result.stats;
+    paginationStore.setPage("pending-files", result.page);
+  } catch {
+    if (viewActive && version === pendingRequestVersion) {
+      pendingFileStore.pendingFiles = []; pendingTotal.value = 0; pendingStats.value = {};
+      pendingFileStore.refreshFailed = true;
+      ElMessage.error(messages.previewPaging.loadFailed);
+    }
+  } finally {
+    if (version === pendingRequestVersion) pendingFilesLoading.value = false;
+  }
 }
 
 async function generatePreviews() {
   if (!previewStore.filters.scan_job_id) {
     return;
   }
-  const count = Math.max(previewStore.previews.length, mediaStore.mediaFiles.length, 1);
+  const count = Math.max(previewTotal.value, mediaFileCount.value, 1);
   await confirmResourceOperation(messages.renamePreviews.generate, count);
   resetOperationProgress(count, messages.renamePreviews.generate);
   await previewStore.generatePreviews({
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
-  });
+  }, false);
+  await loadPreviewPage(false);
   const summary = previewStore.generationSummary;
+  if (!summary || previewStore.errorMessage) {
+    operationProgressVisible.value = false;
+    ElMessage.error(messages.errors.previewGenerationFailed);
+    return;
+  }
   operationProgressLogs.value.push(
     formatMessage(messages.renamePreviews.operationSummary, {
       success: (summary?.generated_count ?? 0) + (summary?.needs_review_count ?? 0),
@@ -536,24 +695,18 @@ async function generatePreviews() {
 
 async function loadScanJobsForSelectedSource() {
   previewStore.filters.scan_job_id = undefined;
-  previewStore.previews = [];
+  clearPreviewPage();
   mediaStore.mediaFiles = [];
   pendingFileStore.pendingFiles = [];
-  if (!previewStore.filters.media_source_id) {
-    mediaStore.scanJobs = [];
-    return;
-  }
-  await mediaStore.loadScanJobs({ media_source_id: previewStore.filters.media_source_id });
 }
 
 async function resetRenamePreviews() {
   previewStore.filters = {};
-  previewStore.previews = [];
+  clearPreviewPage();
   mediaStore.mediaFiles = [];
   pendingFileStore.pendingFiles = [];
   selectedPreviewIds.value = [];
   selectedPreviewRows.value = [];
-  await mediaStore.loadMediaSources();
 }
 
 function handleSelectionChange(rows: RenamePreview[]) {
@@ -561,8 +714,8 @@ function handleSelectionChange(rows: RenamePreview[]) {
   selectedPreviewIds.value = rows.map((row) => row.id);
 }
 
-function handlePendingSelectionChange(rows: Array<{ id: number }>) {
-  selectedPendingFileIds.value = rows.map((row) => row.id);
+function handlePendingSelectionChange(rows: PendingFile[]) {
+  selectedPendingFileIds.value = rows.filter((row) => row.status === "pending").map((row) => row.id);
 }
 
 function resetOperationProgress(total = 0, operation = "") {
@@ -602,50 +755,34 @@ function operationButtonLabel(label: string, runningLabel: string) {
 }
 
 const aiBatchReady = computed(() =>
-  Boolean(
-    aiConnectionHistory.value?.result &&
-      aiConnectionHistory.value.matches_current &&
-      aiConnectionHistory.value.result.status === "success",
-  ),
+  Boolean(aiReadiness.value?.ready),
 );
 
 const aiBatchBlockMessage = computed(() => {
-  if (!aiConnectionHistory.value?.result) {
+  if (!aiReadiness.value || aiReadiness.value.status === "untested") {
     return messages.renamePreviews.aiParse.guardUntested;
   }
-  if (!aiConnectionHistory.value.matches_current) {
+  if (aiReadiness.value.status === "stale") {
     return messages.renamePreviews.aiParse.guardStale;
   }
-  if (aiConnectionHistory.value.result.status !== "success") {
-    return aiConnectionHistory.value.result.message || messages.renamePreviews.aiParse.guardFailed;
-  }
-  return "";
+  return aiReadiness.value.message || messages.renamePreviews.aiParse.guardFailed;
 });
 
 const aiBatchStatusLabel = computed(() => {
   if (aiBatchReady.value) {
     return "";
   }
-  if (!aiConnectionHistory.value?.result) {
+  if (!aiReadiness.value || aiReadiness.value.status === "untested") {
     return messages.renamePreviews.aiParse.statusUntested;
   }
-  if (!aiConnectionHistory.value.matches_current) {
+  if (aiReadiness.value.status === "stale") {
     return messages.renamePreviews.aiParse.statusStale;
   }
   return messages.renamePreviews.aiParse.statusFailed;
 });
 
 function aiProviderSummary() {
-  const result = aiConnectionHistory.value?.result;
-  if (!result) {
-    return messages.renamePreviews.aiParse.providerUnavailable;
-  }
-  return formatMessage(messages.renamePreviews.aiParse.providerSummary, {
-    profile: result.active_profile_name || result.active_profile_id || result.provider,
-    provider: result.provider,
-    model: result.model,
-    baseUrl: result.base_url || "-",
-  });
+  return aiReadiness.value?.message || messages.renamePreviews.aiParse.providerUnavailable;
 }
 
 function ensureAiBatchReady() {
@@ -664,6 +801,7 @@ async function handleOperationResultClosed() {
 }
 
 async function confirmResourceOperation(operation: string, count: number) {
+  const confirmCurrentScope = confirmationScopeGuard();
   await ElMessageBox.confirm(
     formatMessage(messages.renamePreviews.confirmOperation, { count, operation }),
     messages.renamePreviews.confirmOperationTitle,
@@ -673,9 +811,11 @@ async function confirmResourceOperation(operation: string, count: number) {
       cancelButtonText: messages.common.cancel,
     },
   );
+  confirmCurrentScope();
 }
 
 async function confirmAiBatchOperation(operation: string, count: number) {
+  const confirmCurrentScope = confirmationScopeGuard();
   await ElMessageBox.confirm(
     formatMessage(messages.renamePreviews.aiParse.batchConfirm, {
       count,
@@ -690,9 +830,11 @@ async function confirmAiBatchOperation(operation: string, count: number) {
       dangerouslyUseHTMLString: false,
     },
   );
+  confirmCurrentScope();
 }
 
 async function confirmAiFallbackOperation(count: number) {
+  const confirmCurrentScope = confirmationScopeGuard();
   await ElMessageBox.confirm(
     formatMessage(messages.renamePreviews.aiParse.fallbackConfirm, {
       count,
@@ -706,6 +848,21 @@ async function confirmAiFallbackOperation(count: number) {
       dangerouslyUseHTMLString: false,
     },
   );
+  confirmCurrentScope();
+}
+
+function confirmationScopeGuard() {
+  const filters = JSON.stringify(previewStore.filters);
+  const selectedIds = JSON.stringify(selectedPreviewIds.value);
+  const source = metadataMatchSource.value, mode = multiSourceMatchMode.value;
+  return () => {
+    if (!viewActive || filters !== JSON.stringify(previewStore.filters)
+      || selectedIds !== JSON.stringify(selectedPreviewIds.value)
+      || source !== metadataMatchSource.value || mode !== multiSourceMatchMode.value) {
+      if (viewActive) ElMessage.warning(messages.previewPaging.scopeChanged);
+      throw "cancel";
+    }
+  };
 }
 
 async function runRenameDryRun() {
@@ -717,7 +874,7 @@ async function runRenameDryRun() {
   operationDialogVisible.value = true;
 }
 
-async function runRenameDryRunForPreviews(previews: RenamePreview[]) {
+async function runRenameDryRunForPreviews(previews: RenameSelectionItem[]) {
   const renameablePreviews = previews.filter(canPrepareRename);
   if (renameablePreviews.length === 0) {
     ElMessage.warning(messages.renamePreviews.noExecutable);
@@ -742,8 +899,8 @@ async function executeSelectedPreviews() {
 }
 
 async function executeAllPreviews() {
-  const renameableIds = new Set(getRenameablePreviewIds(previewStore.previews));
-  const renameablePreviews = previewStore.previews.filter((preview) => renameableIds.has(preview.id));
+  const renameablePreviews = await readAllTargets("rename");
+  if (!renameablePreviews) return;
   if (renameablePreviews.length > 0) {
     await confirmResourceOperation(messages.renamePreviews.executeAll, renameablePreviews.length);
   }
@@ -853,11 +1010,9 @@ function appendMultiSourceLogs(result: BatchMultiSourceMatchResult) {
   });
 }
 
-function multiSourceTargetPreviews() {
-  return previewStore.previews.filter((preview) => preview.status !== "renamed" && preview.status !== "excluded");
-}
 
 async function confirmMultiSourceOperation(count: number) {
+  const confirmCurrentScope = confirmationScopeGuard();
   await ElMessageBox.confirm(
     formatMessage(messages.renamePreviews.multiSourceConfirm, { count }),
     messages.renamePreviews.confirmOperationTitle,
@@ -867,6 +1022,7 @@ async function confirmMultiSourceOperation(count: number) {
       type: "warning",
     },
   );
+  confirmCurrentScope();
 }
 
 async function matchMultiSource(row: RenamePreview) {
@@ -908,7 +1064,8 @@ async function matchSelectedMultiSource() {
 }
 
 async function matchAllCurrentMultiSource() {
-  const targets = multiSourceTargetPreviews();
+  const targets = await readAllTargets("multi_source");
+  if (!targets) return;
   if (targets.length === 0) {
     ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
     return;
@@ -929,20 +1086,6 @@ async function matchAllCurrentMultiSource() {
     result.failed_count,
     result.blocked_count + result.skipped_count,
   );
-}
-
-function shouldRunAiBatch(preview: RenamePreview) {
-  return (
-    preview.status !== "renamed" &&
-    preview.status !== "excluded" &&
-    (!preview.metadata_match_status ||
-      preview.metadata_match_status === "failed" ||
-      preview.metadata_match_status === "low_confidence")
-  );
-}
-
-function aiBatchTargetPreviews() {
-  return previewStore.previews.filter(shouldRunAiBatch);
 }
 
 function cacheAiBatchResult(result: BatchAiParseResult) {
@@ -1044,7 +1187,8 @@ async function parseSelectedWithAiFromToolbar() {
 }
 
 async function parseAllWithAi() {
-  const targets = aiBatchTargetPreviews();
+  const targets = await readAllTargets("ai");
+  if (!targets) return;
   if (targets.length === 0) {
     ElMessage.warning(messages.renamePreviews.aiParse.noBatchTargets);
     return;
@@ -1061,20 +1205,24 @@ async function parseAllWithAi() {
 }
 
 async function matchAllTmdbOnly() {
-  const unmatchedCount = previewStore.previews.filter((preview) => !preview.metadata_match_status).length;
+  const targets = await readAllTargets("tmdb");
+  if (!targets) return;
+  const unmatchedCount = targets.length;
   if (unmatchedCount === 0) {
     ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
     return;
   }
   await confirmResourceOperation(messages.renamePreviews.tmdbMatchAll, unmatchedCount);
   resetOperationProgress(unmatchedCount, messages.renamePreviews.tmdbMatchAll);
-  const result = await previewStore.matchAllUnmatched(metadataMatchSource.value);
+  const result = await previewStore.matchMetadataBatch(targets.map(item => item.id), metadataMatchSource.value);
   appendMetadataLogs(result);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
 
 async function matchAllTmdbWithAiFallback() {
-  const unmatchedCount = previewStore.previews.filter((preview) => !preview.metadata_match_status).length;
+  const targets = await readAllTargets("tmdb");
+  if (!targets) return;
+  const unmatchedCount = targets.length;
   if (unmatchedCount === 0) {
     ElMessage.warning(messages.renamePreviews.metadataDialog.empty);
     return;
@@ -1084,7 +1232,7 @@ async function matchAllTmdbWithAiFallback() {
   }
   await confirmAiFallbackOperation(unmatchedCount);
   resetOperationProgress(unmatchedCount, messages.renamePreviews.matchModeTmdbAiFallback);
-  const result = await previewStore.matchAllUnmatchedWithAiFallback(metadataMatchSource.value);
+  const result = await previewStore.matchMetadataBatchWithAiFallback(targets.map(item => item.id), metadataMatchSource.value);
   cacheAiBatchResult(result.ai);
   appendMetadataAiFallbackLogs(result);
   finishOperationProgress(
@@ -1097,33 +1245,33 @@ async function matchAllTmdbWithAiFallback() {
 
 async function handleTmdbDropdownCommand(command: string) {
   if (command === "all_tmdb") {
-    await matchAllTmdbOnly();
+    await runBatchCommand(matchAllTmdbOnly);
     return;
   }
   if (command === "selected_tmdb_ai") {
-    await matchSelectedTmdbWithAiFallback();
+    await runBatchCommand(matchSelectedTmdbWithAiFallback);
     return;
   }
   if (command === "all_tmdb_ai") {
-    await matchAllTmdbWithAiFallback();
+    await runBatchCommand(matchAllTmdbWithAiFallback);
   }
 }
 
 async function handleAiDropdownCommand(command: string) {
   if (command === "all_ai") {
-    await parseAllWithAi();
+    await runBatchCommand(parseAllWithAi);
   }
 }
 
 async function handleMultiSourceDropdownCommand(command: string) {
   if (command === "all_multi_source") {
-    await matchAllCurrentMultiSource();
+    await runBatchCommand(matchAllCurrentMultiSource);
   }
 }
 
 async function handleRenameDropdownCommand(command: string) {
   if (command === "all_rename") {
-    await executeAllPreviews();
+    await runBatchCommand(executeAllPreviews);
   }
 }
 
@@ -1149,22 +1297,16 @@ async function excludeSelectedPreviews() {
   });
   selectedPreviewIds.value = [];
   selectedPreviewRows.value = [];
-  await previewStore.loadPreviews(previewStore.filters);
-  await pendingFileStore.loadPendingFiles({
-    media_source_id: previewStore.filters.media_source_id,
-    scan_job_id: previewStore.filters.scan_job_id,
-  });
+  await loadPreviewPage(false);
+  await loadPendingPage(false);
   finishOperationProgress(result.total_count, result.success_count, result.failed_count);
 }
 
 async function excludeSinglePreview(row: RenamePreview) {
   await confirmResourceOperation(messages.renamePreviews.excludeSingle, 1);
   await previewStore.excludePreview(row.id);
-  await previewStore.loadPreviews(previewStore.filters);
-  await pendingFileStore.loadPendingFiles({
-    media_source_id: previewStore.filters.media_source_id,
-    scan_job_id: previewStore.filters.scan_job_id,
-  });
+  await loadPreviewPage(false);
+  await loadPendingPage(false);
   ElMessage.success(messages.renamePreviews.excludeSingleSuccess);
 }
 
@@ -1176,6 +1318,7 @@ async function applyMetadataCandidate(match: MetadataMatchResult) {
   metadataDialogVisible.value = false;
   metadataCandidates.value = [];
   ElMessage.success(messages.renamePreviews.metadataDialog.selectSuccess);
+  await loadPreviewPage(false);
 }
 
 async function parseSingleWithAi(row: RenamePreview) {
@@ -1236,33 +1379,38 @@ async function applyAiCandidate(candidate: AiParseCandidate) {
   aiParseDialogVisible.value = false;
   aiParseResult.value = null;
   ElMessage.success(messages.renamePreviews.aiParse.selectSuccess);
+  await loadPreviewPage(false);
 }
 
 async function removePendingFile(row: { id: number }) {
   await pendingFileStore.removePendingFile(row.id);
+  await loadPendingPage(false);
   ElMessage.success(messages.renamePreviews.pendingFiles.removed);
 }
 
 async function clearPendingFiles() {
-  const count = pendingFileStore.pendingFiles.length;
+  const count = pendingStats.value.pending ?? 0;
+  if (count === 0 || !previewStore.filters.scan_job_id || pendingFilesLoading.value) return;
   if (count > 0) {
     await confirmResourceOperation(messages.renamePreviews.pendingFiles.clear, count);
     resetOperationProgress(count, messages.renamePreviews.pendingFiles.clear);
   }
-  await pendingFileStore.clearPendingFiles({
+  const removedCount = await pendingFileStore.clearPendingFiles({
     media_source_id: previewStore.filters.media_source_id,
     scan_job_id: previewStore.filters.scan_job_id,
   });
   if (count > 0) {
     operationProgressLogs.value.push(
-      formatMessage(messages.renamePreviews.operationSummary, { success: count, failed: 0 }),
+      formatMessage(messages.renamePreviews.operationSummary, { success: removedCount, failed: 0 }),
     );
-    finishOperationProgress(count, count, 0);
+    finishOperationProgress(count, removedCount, 0);
   }
   ElMessage.success(messages.renamePreviews.pendingFiles.cleared);
+  await loadPendingPage(false);
 }
 
 function openPendingMoveDialog() {
+  if (operationBusy.value) return;
   if (selectedPendingFileIds.value.length === 0) {
     ElMessage.warning(messages.renamePreviews.pendingFiles.selectFirst);
     return;
@@ -1272,23 +1420,71 @@ function openPendingMoveDialog() {
 }
 
 async function moveSelectedPendingFiles() {
+  if (operationBusy.value) return;
   if (!pendingMoveTargetDirectory.value.trim()) {
     ElMessage.warning(messages.renamePreviews.pendingFiles.targetDirectoryPlaceholder);
     return;
   }
-  await confirmResourceOperation(messages.renamePreviews.pendingFiles.move, selectedPendingFileIds.value.length);
-  resetOperationProgress(selectedPendingFileIds.value.length, messages.renamePreviews.pendingFiles.move);
-  await pendingFileStore.movePendingFiles(selectedPendingFileIds.value, pendingMoveTargetDirectory.value.trim());
-  operationProgressLogs.value.push(
-    formatMessage(messages.renamePreviews.operationSummary, {
-      success: selectedPendingFileIds.value.length,
-      failed: 0,
-    }),
-  );
-  finishOperationProgress(selectedPendingFileIds.value.length, selectedPendingFileIds.value.length, 0);
-  selectedPendingFileIds.value = [];
-  pendingMoveDialogVisible.value = false;
-  ElMessage.success(messages.renamePreviews.pendingFiles.moved);
+  const ids = [...selectedPendingFileIds.value];
+  const target = pendingMoveTargetDirectory.value.trim();
+  const scope = JSON.stringify(previewStore.filters);
+  try {
+    await confirmResourceOperation(messages.renamePreviews.pendingFiles.move, ids.length);
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") ElMessage.error(messages.errors.unknown);
+    return;
+  }
+  if (!viewActive || operationBusy.value || JSON.stringify(ids) !== JSON.stringify(selectedPendingFileIds.value)
+      || scope !== JSON.stringify(previewStore.filters) || target !== pendingMoveTargetDirectory.value.trim()) return;
+  resetOperationProgress(ids.length, messages.renamePreviews.pendingFiles.move);
+  let logOpened = false;
+  await pendingFileStore.executePendingMove(ids, target, task => {
+    updatePendingMoveProgress(task);
+    pendingMoveDialogVisible.value = false;
+    if (!logOpened && canReadLogs.value) { openPendingMoveLog(); logOpened = true; }
+  }, async requestId => {
+    await router.replace({ query: { ...route.query, operation_id: undefined, rollback_plan_id: undefined,
+      pending_move_request_id: requestId, pending_move_task_id: undefined } });
+  });
+  if (!viewActive) return;
+  operationProgressVisible.value = false;
+  if (pendingFileStore.moveError) {
+    ElMessage.error(pendingFileStore.moveError);
+    if (!pendingFileStore.moveUncertain) await router.replace({ query: { ...route.query, pending_move_request_id: undefined } });
+  } else if (pendingFileStore.currentMoveTask?.status === "completed") {
+    selectedPendingFileIds.value = [];
+    ElMessage.success(messages.renamePreviews.pendingFiles.moved);
+  } else {
+    ElMessage.warning(messages.renamePreviews.pendingFiles.incomplete);
+  }
+  await loadPendingPage(false);
+}
+
+function updatePendingMoveProgress(task: PendingMoveTask) {
+  if (!viewActive) return;
+  const processed = task.moved_count + task.failed_count;
+  operationProgressPercent.value = task.total_count ? Math.round(processed / task.total_count * 100) : 0;
+  operationProgressText.value = formatPendingMoveProgress(task);
+}
+
+function formatPendingMoveProgress(task: PendingMoveTask) {
+  return formatMessage(messages.renamePreviews.pendingFiles.progress,
+    { success: task.moved_count, total: task.total_count, failed: task.failed_count,
+      remaining: Math.max(0, task.total_count - task.moved_count - task.failed_count) });
+}
+
+function openPendingMoveLog() {
+  if (!pendingFileStore.currentMoveTask || !canReadLogs.value) return;
+  selectedOperationLogTaskType.value = "pending_move";
+  selectedOperationLogTaskId.value = pendingFileStore.currentMoveTask.id;
+  operationLogVisible.value = true;
+}
+
+async function refreshPendingMoveTask(taskId?: number, requestId?: string) {
+  await pendingFileStore.refreshPendingMove(taskId, requestId, updatePendingMoveProgress);
+  if (!viewActive) return;
+  if (pendingFileStore.moveError) ElMessage.error(pendingFileStore.moveError);
+  await loadPendingPage(false);
 }
 
 async function continueWithoutEmptyTargets() {
@@ -1308,18 +1504,35 @@ async function continueWithoutEmptyTargets() {
 async function executeRenameOperation() {
   const total = renameOperationStore.currentOperation?.ready_count ?? 0;
   resetOperationProgress(total, messages.renamePreviews.rename);
-  await renameOperationStore.executeCurrentOperation();
+  let logOpened = false;
+  await renameOperationStore.executeCurrentOperation((operation) => {
+    updateRenameProgress(operation);
+    if (!logOpened && canReadLogs.value) {
+      openRenameOperationLog();
+      logOpened = true;
+    }
+  });
+  if (!viewActive) return;
   const operation = renameOperationStore.currentOperation;
   if (renameOperationStore.errorMessage) {
+    operationProgressVisible.value = false;
     ElMessage.error(renameOperationStore.errorMessage);
+    return;
+  }
+  if (operation?.status === "interrupted") {
+    operationProgressVisible.value = false;
+    ElMessage.warning(operation.error_message || messages.renamePreviews.operationDialog.interrupted);
+    await refreshPreviews();
     return;
   }
   if (operation?.failed_count && operation.renamed_count > 0) {
     ElMessage.warning(messages.renamePreviews.operationDialog.partialFailed);
   } else if (operation?.failed_count) {
     ElMessage.error(messages.renamePreviews.operationDialog.failed);
-  } else if (operation) {
+  } else if (operation?.status === "completed") {
     ElMessage.success(messages.renamePreviews.operationDialog.success);
+  } else if (operation) {
+    ElMessage.warning(operation.error_message || messages.renamePreviews.operationDialog.failed);
   }
   if (operation) {
     operation.items.forEach((item) => {
@@ -1327,6 +1540,22 @@ async function executeRenameOperation() {
     });
     finishOperationProgress(operation.total_count, operation.renamed_count, operation.failed_count);
   }
+  await refreshPreviews();
+}
+
+function updateRenameProgress(operation: NonNullable<typeof renameOperationStore.currentOperation>) {
+  if (!viewActive) return;
+  const processed = operation.renamed_count + operation.failed_count;
+  const total = operation.total_count - operation.conflict_count;
+  operationProgressVisible.value = ["queued", "running"].includes(operation.status);
+  operationProgressPercent.value = total > 0 ? Math.min(99, Math.round(processed / total * 100)) : 0;
+  operationProgressText.value = formatMessage(messages.renamePreviews.processing, { current: processed, total });
+}
+
+async function refreshRenameOperation() {
+  await renameOperationStore.refreshCurrentOperation(updateRenameProgress);
+  if (!viewActive) return;
+  if (renameOperationStore.errorMessage) ElMessage.error(renameOperationStore.errorMessage);
   await refreshPreviews();
 }
 
@@ -1369,21 +1598,39 @@ async function dryRunRollbackPlan() {
 }
 
 async function executeRollbackPlan() {
-  await ElMessageBox.confirm(
-    messages.renamePreviews.operationDialog.rollbackExecuteConfirm,
-    messages.renamePreviews.operationDialog.rollbackTitle,
-    {
-      type: "warning",
-      confirmButtonText: messages.common.confirm,
-      cancelButtonText: messages.common.cancel,
-    },
-  );
-  await renameOperationStore.executeRollbackPlan();
+  if (!canExecuteRollbackPlan.value) return;
+  try {
+    await ElMessageBox.confirm(
+      messages.renamePreviews.operationDialog.rollbackExecuteConfirm,
+      messages.renamePreviews.operationDialog.rollbackTitle,
+      {
+        type: "warning",
+        confirmButtonText: messages.common.confirm,
+        cancelButtonText: messages.common.cancel,
+      },
+    );
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    throw error;
+  }
+  if (!viewActive || !canExecuteRollbackPlan.value) return;
+  let logOpened = false;
+  await renameOperationStore.executeRollbackPlan(() => {
+    if (viewActive && !logOpened && canReadLogs.value) {
+      openRollbackOperationLog();
+      logOpened = true;
+    }
+  });
+  if (!viewActive) return;
   if (renameOperationStore.rollbackErrorMessage) {
     ElMessage.error(renameOperationStore.rollbackErrorMessage);
     return;
   }
-  ElMessage.success(messages.renamePreviews.operationDialog.rollbackExecuteSuccess);
+  if (renameOperationStore.currentRollbackPlan?.status === "executed") {
+    ElMessage.success(messages.renamePreviews.operationDialog.rollbackExecuteSuccess);
+  } else {
+    ElMessage.warning(messages.renamePreviews.operationDialog.rollbackExecuteIncomplete);
+  }
   await refreshPreviews();
 }
 
@@ -1399,44 +1646,78 @@ async function saveEdit() {
   }
   await previewStore.updatePreview(editingPreviewId.value, editingTargetName.value);
   editDialogVisible.value = false;
+  await loadPreviewPage(false);
 }
 
 onMounted(async () => {
   try {
-    aiConnectionHistory.value = await settingsStore.loadAiTestResult({ silent: true });
+    aiReadiness.value = await fetchAiReadiness();
   } catch {
-    aiConnectionHistory.value = null;
+    aiReadiness.value = null;
   }
-  await mediaStore.loadMediaSources();
+  if (!viewActive) return;
   const routeSourceId = Number(route.query.media_source_id);
   const routeScanJobId = Number(route.query.scan_job_id);
   if (Number.isFinite(routeSourceId) && routeSourceId > 0) {
     previewStore.filters.media_source_id = routeSourceId;
-    await mediaStore.loadScanJobs({ media_source_id: routeSourceId });
   }
   if (Number.isFinite(routeScanJobId) && routeScanJobId > 0) {
     previewStore.filters.scan_job_id = routeScanJobId;
     await refreshPreviews();
+  } else {
+    previewStore.filters = {};
+    previewStore.previews = [];
+    clearPreviewPage();
   }
+  if (!viewActive) return;
+  const operationId = Number(route.query.operation_id);
+  const moveId = Number(route.query.pending_move_task_id);
+  const moveRequest = typeof route.query.pending_move_request_id === "string" ? route.query.pending_move_request_id : undefined;
+  if ((Number.isSafeInteger(moveId) && moveId > 0) || moveRequest || pendingFileStore.moveUncertain
+      || ["queued", "running"].includes(pendingFileStore.currentMoveTask?.status ?? "")) {
+    activePreviewTab.value = "pending";
+    void refreshPendingMoveTask(Number.isSafeInteger(moveId) && moveId > 0 ? moveId : undefined, moveRequest);
+    return;
+  }
+  if (Number.isSafeInteger(operationId) && operationId > 0) {
+    operationDialogVisible.value = true;
+    void (async () => {
+      await renameOperationStore.refreshCurrentOperation(updateRenameProgress, operationId);
+      if (!viewActive || renameOperationStore.currentOperation?.id !== operationId) return;
+      const planId = Number(route.query.rollback_plan_id);
+      if (Number.isSafeInteger(planId) && planId > 0) await renameOperationStore.refreshRollbackPlan(planId);
+    })();
+  } else if (renameOperationStore.executionUncertain || ["queued", "running"].includes(renameOperationStore.currentOperation?.status ?? "")) {
+    operationDialogVisible.value = true;
+    void refreshRenameOperation();
+  } else if (renameOperationStore.rollbackUncertain || ["queued", "running"].includes(renameOperationStore.currentRollbackPlan?.status ?? "")) {
+    operationDialogVisible.value = true;
+    void renameOperationStore.refreshRollbackPlan();
+  }
+});
+
+onBeforeUnmount(() => {
+  viewActive = false;
+  renameOperationStore.stopExecutionPolling();
+  pendingFileStore.stopMovePolling();
+  previewRequestVersion += 1;
+  contextRequestVersion += 1;
+  pendingRequestVersion += 1;
 });
 </script>
 
 <template>
   <ListPageLayout class="rename-preview-page" :title="messages.renamePreviews.title" :description="messages.renamePreviews.description">
     <template #filters>
-      <el-select
+      <MediaSourceSelect
         v-model="previewStore.filters.media_source_id"
         class="rename-filter-select"
         :placeholder="messages.renamePreviews.mediaSource"
-        clearable
+        :disabled="operationBusy"
         @change="loadScanJobsForSelectedSource"
-        @clear="loadScanJobsForSelectedSource"
-      >
-        <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
-      </el-select>
-      <el-select v-model="previewStore.filters.scan_job_id" class="rename-filter-select" :placeholder="messages.renamePreviews.scanJob" clearable>
-        <el-option v-for="item in scanJobOptions" :key="item.value" :label="item.label" :value="item.value" />
-      </el-select>
+      />
+      <ScanJobSelect v-model="previewStore.filters.scan_job_id" :media-source-id="previewStore.filters.media_source_id"
+        :disabled="operationBusy" class="rename-filter-select" :placeholder="messages.renamePreviews.scanJob" />
       <el-select v-model="previewStore.filters.status" class="rename-filter-select" :placeholder="messages.renamePreviews.status" clearable>
         <el-option :label="messages.common.all" value="" />
         <el-option :label="messages.status.generated" value="generated" />
@@ -1455,10 +1736,10 @@ onMounted(async () => {
     </template>
 
     <template #queryAction>
-      <el-button class="query-action-button" :icon="Search" :disabled="!previewStore.filters.scan_job_id" @click="refreshPreviews">
+      <el-button class="query-action-button" :icon="Search" :loading="previewsLoading" :disabled="!previewStore.filters.scan_job_id || operationBusy" @click="refreshPreviews">
         {{ messages.common.query }}
       </el-button>
-      <el-button @click="resetRenamePreviews">{{ messages.common.reset }}</el-button>
+      <el-button :disabled="operationBusy" @click="resetRenamePreviews">{{ messages.common.reset }}</el-button>
     </template>
 
     <template #actions>
@@ -1469,7 +1750,8 @@ onMounted(async () => {
               type="primary"
               :icon="MagicStick"
               :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.generate"
-              :disabled="previewStore.loading"
+              :disabled="operationBusy || !previewStore.filters.scan_job_id || !canExecuteRename"
+              :title="canExecuteRename ? '' : messages.auth.permissionDenied"
               @click="generatePreviews"
             >
               {{ operationButtonLabel(messages.renamePreviews.generate, messages.renamePreviews.operationResultDialog.runningGenerate) }}
@@ -1478,7 +1760,7 @@ onMounted(async () => {
               v-model="metadataMatchSource"
               class="metadata-source-select"
               :placeholder="messages.renamePreviews.metadataMatchSource"
-              :disabled="previewStore.loading"
+              :disabled="operationBusy"
             >
               <el-option :label="messages.renamePreviews.metadataSourceParsedTitle" value="parsed_title" />
               <el-option :label="messages.renamePreviews.metadataSourceOriginalFileName" value="original_file_name" />
@@ -1488,7 +1770,7 @@ onMounted(async () => {
               v-model="multiSourceMatchMode"
               class="metadata-source-select"
               :placeholder="messages.renamePreviews.metadataMatchMode"
-              :disabled="previewStore.loading"
+              :disabled="operationBusy"
             >
               <el-option :label="messages.renamePreviews.multiSourceModes.fallback" value="fallback" />
               <el-option :label="messages.renamePreviews.multiSourceModes.parallel" value="parallel" />
@@ -1496,17 +1778,17 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="Connection"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !canSubmitMetadata"
+                :disabled="selectedPreviewIds.length === 0 || operationBusy || !canSubmitMetadata"
                 :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.tmdbMatch"
                 class="action-split-main"
-                @click="matchSelectedTmdbOnly"
+                @click="runBatchCommand(matchSelectedTmdbOnly)"
               >
                 {{ operationButtonLabel(messages.renamePreviews.tmdbMatch, messages.renamePreviews.operationResultDialog.runningMatch) }}
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading || !canSubmitMetadata"
+                :disabled="operationBusy || !canSubmitMetadata"
                 @command="handleTmdbDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1524,17 +1806,17 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="Connection"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !canSubmitMetadata"
+                :disabled="selectedPreviewIds.length === 0 || operationBusy || !canSubmitMetadata"
                 :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.multiSourceMatch"
                 class="action-split-main"
-                @click="matchSelectedMultiSource"
+                @click="runBatchCommand(matchSelectedMultiSource)"
               >
                 {{ operationButtonLabel(messages.renamePreviews.multiSourceMatch, messages.renamePreviews.operationResultDialog.runningMatch) }}
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading || !canSubmitMetadata"
+                :disabled="operationBusy || !canSubmitMetadata"
                 @command="handleMultiSourceDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1542,7 +1824,7 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_multi_source" :disabled="previewStore.previews.length === 0 || !canSubmitMetadata">
+                    <el-dropdown-item command="all_multi_source" :disabled="previewTotal === 0 || !canSubmitMetadata">
                       {{ messages.renamePreviews.multiSourceMatchAll }}
                     </el-dropdown-item>
                   </el-dropdown-menu>
@@ -1552,17 +1834,17 @@ onMounted(async () => {
             <div class="action-split-button">
               <el-button
                 :icon="MagicStick"
-                :disabled="selectedPreviewIds.length === 0 || previewStore.loading || !aiBatchReady || !canSubmitMetadata"
+                :disabled="selectedPreviewIds.length === 0 || operationBusy || !aiBatchReady || !canSubmitMetadata"
                 :title="metadataPermissionTitle"
                 :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.aiParse.batchSelected"
                 class="action-split-main"
-                @click="parseSelectedWithAiFromToolbar"
+                @click="runBatchCommand(parseSelectedWithAiFromToolbar)"
               >
                 {{ operationButtonLabel(messages.renamePreviews.aiMatch, messages.renamePreviews.operationResultDialog.runningAi) }}
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.loading || !canSubmitMetadata"
+                :disabled="operationBusy || !canSubmitMetadata"
                 @command="handleAiDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1570,7 +1852,7 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewStore.previews.length === 0 || !canSubmitMetadata">
+                    <el-dropdown-item command="all_ai" :disabled="!aiBatchReady || previewTotal === 0 || !canSubmitMetadata">
                       {{ messages.renamePreviews.aiParse.batchAll }}
                     </el-dropdown-item>
                   </el-dropdown-menu>
@@ -1581,17 +1863,17 @@ onMounted(async () => {
               <el-button
                 type="success"
                 :icon="Select"
-                :disabled="selectedPreviewIds.length === 0 || !canExecuteRename"
+                :disabled="selectedPreviewIds.length === 0 || operationBusy || !canExecuteRename"
                 :title="renamePermissionTitle"
                 :loading="renameOperationStore.loading && !operationProgressVisible"
                 class="action-split-main"
-                @click="executeSelectedPreviews"
+                @click="runBatchCommand(executeSelectedPreviews)"
               >
                 {{ operationButtonLabel(messages.renamePreviews.rename, messages.renamePreviews.operationResultDialog.runningRename) }}
               </el-button>
               <el-dropdown
                 trigger="click"
-                :disabled="previewStore.previews.length === 0 || !canExecuteRename"
+                :disabled="previewTotal === 0 || operationBusy || !canExecuteRename"
                 @command="handleRenameDropdownCommand"
               >
                 <el-button class="action-split-caret">
@@ -1606,9 +1888,10 @@ onMounted(async () => {
             </div>
             <el-button
               :icon="CloseBold"
-              :disabled="selectedPreviewIds.length === 0 || previewStore.loading"
+              :disabled="selectedPreviewIds.length === 0 || operationBusy || !canExecuteRename"
+              :title="canExecuteRename ? '' : messages.auth.permissionDenied"
               :loading="operationProgressVisible && activeOperationName === messages.renamePreviews.excludeSelected"
-              @click="excludeSelectedPreviews"
+              @click="runBatchCommand(excludeSelectedPreviews)"
             >
               {{ operationButtonLabel(messages.renamePreviews.excludeSelected, messages.renamePreviews.operationResultDialog.runningExclude) }}
             </el-button>
@@ -1630,14 +1913,16 @@ onMounted(async () => {
       <div v-else class="subsection-actions pending-files-actions">
         <el-button
           :icon="Select"
-          :disabled="selectedPendingFileIds.length === 0"
+          :disabled="selectedPendingFileIds.length === 0 || !canExecuteRename || operationBusy"
+          :title="canExecuteRename ? '' : messages.auth.permissionDenied"
           @click="openPendingMoveDialog"
         >
           {{ messages.renamePreviews.pendingFiles.move }}
         </el-button>
         <el-button
           :icon="Delete"
-          :disabled="pendingFileStore.pendingFiles.length === 0"
+          :disabled="!pendingStats.pending || pendingFilesLoading || !canManagePending"
+          :title="canManagePending ? '' : messages.auth.permissionDenied"
           @click="clearPendingFiles"
         >
           {{ messages.renamePreviews.pendingFiles.clear }}
@@ -1652,6 +1937,7 @@ onMounted(async () => {
       <el-tabs v-model="activePreviewTab" class="rename-preview-tabs">
         <el-tab-pane :label="messages.renamePreviews.tabs.previews" name="previews">
           <el-table
+          v-loading="previewsLoading || batchScopeLoading"
           :data="pagedPreviews"
           class="data-table rename-previews-table"
           height="100%"
@@ -1667,7 +1953,7 @@ onMounted(async () => {
               <span>
                 {{
                   formatMessage(messages.renamePreviews.emptyPreviewAction.description, {
-                    count: mediaStore.mediaFiles.length,
+                    count: mediaFileCount,
                   })
                 }}
               </span>
@@ -1851,7 +2137,7 @@ onMounted(async () => {
           />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
-          <el-button class="table-action-button action-edit" :icon="Edit" text circle @click.stop="openEditDialog(row)" />
+          <el-button class="table-action-button action-edit" :icon="Edit" :disabled="!canExecuteRename" :title="canExecuteRename ? '' : messages.auth.permissionDenied" text circle @click.stop="openEditDialog(row)" />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.exclude" placement="top">
           <el-button
@@ -1859,6 +2145,8 @@ onMounted(async () => {
           :icon="CloseBold"
           text
           circle
+          :disabled="!canExecuteRename"
+          :title="canExecuteRename ? '' : messages.auth.permissionDenied"
           @click.stop="excludeSinglePreview(row)"
           />
           </el-tooltip>
@@ -1896,24 +2184,48 @@ onMounted(async () => {
                 </div>
               </el-popover>
             </div>
-            <TablePagination pagination-key="rename-previews" :total="previewStore.previews.length" :pager-count="3" />
+            <TablePagination pagination-key="rename-previews" :total="previewTotal" :pager-count="3" server
+              @page-change="loadPreviewPage(false)" @page-size-change="loadPreviewPage()" />
           </div>
         </el-tab-pane>
 
-        <el-tab-pane name="pending">
+        <el-tab-pane name="pending" class="pending-files-pane">
           <template #label>
             <el-tooltip :content="messages.renamePreviews.pendingFiles.description" placement="top">
               <span class="tab-label-with-tooltip">{{ messages.renamePreviews.tabs.pendingFiles }}</span>
             </el-tooltip>
           </template>
+          <div v-if="pendingFileStore.currentMoveTask || pendingFileStore.moveUncertain" class="pending-move-status" role="status">
+            <strong v-if="pendingFileStore.currentMoveTask">{{ formatMessage(messages.renamePreviews.pendingFiles.taskTitle, { id: pendingFileStore.currentMoveTask.id }) }}</strong>
+            <el-tag v-if="pendingFileStore.currentMoveTask" :type="pendingFileStore.currentMoveTask.status === 'completed' ? 'success' : ['failed','interrupted','partial_failed'].includes(pendingFileStore.currentMoveTask.status) ? 'warning' : 'info'">
+              {{ messages.tasks.statuses[pendingFileStore.currentMoveTask.status as keyof typeof messages.tasks.statuses] || pendingFileStore.currentMoveTask.status }}
+            </el-tag>
+            <span>{{ pendingMoveStatusText }}</span>
+            <el-button class="table-action-button action-edit" :icon="Refresh" :loading="pendingFileStore.moveLoading" :disabled="pendingFileStore.moveLoading"
+              :aria-label="messages.common.refresh" :title="messages.common.refresh" @click="refreshPendingMoveTask()" />
+            <el-button v-if="pendingFileStore.currentMoveTask" class="table-action-button action-view" :icon="View"
+              :aria-label="messages.common.detail" :title="messages.common.detail" @click="pendingMoveResultVisible = true" />
+            <el-button v-if="canReadLogs && pendingFileStore.currentMoveTask" class="table-action-button action-view" :icon="Document"
+              :aria-label="messages.operationLogs.pendingMoveTitle" :title="messages.operationLogs.pendingMoveTitle" @click="openPendingMoveLog" />
+          </div>
           <el-table
           :data="pendingFileStore.pendingFiles"
+          v-loading="pendingFilesLoading"
           class="data-table"
           height="100%"
           table-layout="auto"
           @selection-change="handlePendingSelectionChange"
           >
-          <el-table-column type="selection" width="44" align="center" fixed="left" />
+          <el-table-column type="selection" width="44" align="center" fixed="left" :selectable="(row: PendingFile) => row.status === 'pending'" />
+          <el-table-column :label="messages.common.status" width="116" align="center" header-align="center">
+          <template #default="{ row }">
+          <el-tooltip :disabled="row.status === 'pending'" :content="messages.renamePreviews.pendingFiles.unresolved" placement="top">
+          <el-tag :type="row.status === 'recovery_required' ? 'danger' : row.status === 'moving' ? 'warning' : 'info'" effect="light">
+          {{ messages.renamePreviews.pendingFiles.statuses[row.status as keyof typeof messages.renamePreviews.pendingFiles.statuses] || row.status }}
+          </el-tag>
+          </el-tooltip>
+          </template>
+          </el-table-column>
           <el-table-column :label="messages.renamePreviews.pendingFiles.columns.reason" width="108" align="center" header-align="center">
           <template #default="{ row }">
           <el-tag type="warning" effect="light">{{ pendingReasonLabel(row.reason) }}</el-tag>
@@ -1937,29 +2249,36 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column :label="messages.common.actions" width="144" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
-          <el-tooltip :content="messages.renamePreviews.actions.aiParse" placement="top">
+          <el-tooltip :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.actions.aiParse" placement="top">
           <el-button
           class="table-action-button action-ai"
           :icon="MagicStick"
           text
           circle
           :loading="aiParsingPreviewId === row.id"
-          :disabled="pendingFileStore.loading && aiParsingPreviewId !== row.id"
+          :disabled="row.status !== 'pending' || !canSubmitMetadata || (pendingFileStore.loading && aiParsingPreviewId !== row.id)"
+          :title="canSubmitMetadata ? '' : messages.auth.permissionDenied"
           @click="parsePendingWithAi(row)"
           />
           </el-tooltip>
-          <el-tooltip :content="messages.renamePreviews.pendingFiles.remove" placement="top">
+          <el-tooltip :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.pendingFiles.remove" placement="top">
           <el-button
           class="table-action-button action-delete"
           :icon="Delete"
           text
           circle
+          :disabled="row.status !== 'pending' || !canManagePending"
+          :title="canManagePending ? '' : messages.auth.permissionDenied"
           @click="removePendingFile(row)"
           />
           </el-tooltip>
           </template>
           </el-table-column>
           </el-table>
+          <div class="table-footer">
+            <TablePagination pagination-key="pending-files" :total="pendingTotal" :pager-count="3" server
+              @page-change="loadPendingPage(false)" @page-size-change="loadPendingPage()" />
+          </div>
         </el-tab-pane>
       </el-tabs>
       </FullscreenTablePanel>
@@ -2021,10 +2340,31 @@ onMounted(async () => {
       </el-form>
       <template #footer>
         <el-button @click="pendingMoveDialogVisible = false">{{ messages.common.cancel }}</el-button>
-        <el-button type="primary" @click="moveSelectedPendingFiles">
+        <el-button type="primary" :loading="pendingFileStore.moveLoading" :disabled="!canExecuteRename || operationBusy" @click="moveSelectedPendingFiles">
           {{ messages.renamePreviews.pendingFiles.moveDialog.confirm }}
         </el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="pendingMoveResultVisible" :title="messages.renamePreviews.pendingFiles.resultTitle" width="800px"
+      :style="{ maxWidth: 'calc(100vw - 32px)' }">
+      <p v-if="pendingFileStore.currentMoveTask?.error_message" class="pending-move-error">{{ pendingFileStore.currentMoveTask.error_message }}</p>
+      <el-table :data="pendingFileStore.currentMoveTask?.items ?? []" max-height="460" class="data-table">
+        <el-table-column prop="pending_file_id" label="ID" width="80" align="center" />
+        <el-table-column :label="messages.common.status" width="128" align="center">
+          <template #default="{ row }">{{ messages.renamePreviews.pendingFiles.itemStatuses[row.status as keyof typeof messages.renamePreviews.pendingFiles.itemStatuses] || row.status }}</template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.pendingFiles.columns.path" min-width="260">
+          <template #default="{ row }"><TextCell :value="row.source_path" :max-length="tableDisplayConfig.pathMaxLength" /></template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.pendingFiles.targetPath" min-width="260">
+          <template #default="{ row }"><TextCell :value="row.target_path" :max-length="tableDisplayConfig.pathMaxLength" /></template>
+        </el-table-column>
+        <el-table-column :label="messages.renamePreviews.pendingFiles.columns.reason" min-width="180">
+          <template #default="{ row }"><TextCell :value="row.message" :max-length="40" /></template>
+        </el-table-column>
+      </el-table>
+      <template #footer><el-button @click="pendingMoveResultVisible = false">{{ messages.common.close }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="detailDialogVisible" :title="messages.renamePreviews.detailTitle" width="760px">
@@ -2104,7 +2444,7 @@ onMounted(async () => {
             fixed="right"
           >
             <template #default="{ row }">
-              <el-button type="primary" @click="applyAiCandidate(row)">
+              <el-button type="primary" :disabled="!canExecuteRename" :title="canExecuteRename ? '' : messages.auth.permissionDenied" @click="applyAiCandidate(row)">
                 {{ messages.renamePreviews.aiParse.apply }}
               </el-button>
             </template>
@@ -2212,7 +2552,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column :label="messages.common.actions" width="148" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" @click="applyMetadataCandidate(row)">
+            <el-button type="primary" :disabled="!canExecuteRename" :title="canExecuteRename ? '' : messages.auth.permissionDenied" @click="applyMetadataCandidate(row)">
               {{ messages.renamePreviews.metadataDialog.selectedApply }}
             </el-button>
           </template>
@@ -2374,12 +2714,20 @@ onMounted(async () => {
         <div v-if="operationHasExecuted && renameOperationStore.currentOperation?.renamed_count" class="rename-operation-dialog">
           <div class="settings-config-card-title">{{ messages.renamePreviews.operationDialog.rollbackTitle }}</div>
           <el-alert
-            v-if="renameOperationStore.rollbackErrorMessage"
-            :title="renameOperationStore.rollbackErrorMessage"
+            v-if="renameOperationStore.rollbackErrorMessage || rollbackPlan?.error_message"
+            :title="renameOperationStore.rollbackErrorMessage || rollbackPlan?.error_message || ''"
             type="error"
             show-icon
           />
           <div v-if="rollbackPlan" class="preview-stats operation-stats">
+            <div class="stat-item">
+              <span>{{ messages.renamePreviews.operationDialog.rolledBackCount }}</span>
+              <strong>{{ rollbackPlan.rolled_back_count ?? 0 }}</strong>
+            </div>
+            <div class="stat-item">
+              <span>{{ messages.renamePreviews.operationDialog.rollbackFailedCount }}</span>
+              <strong>{{ rollbackPlan.failed_count ?? 0 }}</strong>
+            </div>
             <div>
               <span>{{ messages.common.status }}</span>
               <strong>{{ rollbackStatusLabel(rollbackPlan.status) }}</strong>
@@ -2459,16 +2807,26 @@ onMounted(async () => {
             >
               {{ messages.renamePreviews.operationDialog.rollbackExecute }}
             </el-button>
-            <el-button v-if="rollbackPlan" @click="openRollbackOperationLog">
+            <el-button v-if="rollbackPlan" :disabled="!canReadLogs" :title="canReadLogs ? '' : messages.auth.permissionDenied" @click="openRollbackOperationLog">
               {{ messages.renamePreviews.operationDialog.rollbackLog }}
+            </el-button>
+            <el-button v-if="rollbackPlan" :icon="Refresh" :disabled="renameOperationStore.rollbackLoading"
+              @click="renameOperationStore.refreshRollbackPlan()">
+              {{ messages.renamePreviews.operationDialog.rollbackRefresh }}
             </el-button>
           </div>
         </div>
       </div>
       <template #footer>
+        <el-button v-if="renameOperationStore.currentOperation" :icon="Refresh" :loading="renameOperationStore.loading"
+          :disabled="renameOperationStore.loading" @click="refreshRenameOperation">
+          {{ messages.common.refresh }}
+        </el-button>
         <el-button
           v-if="renameOperationStore.currentOperation"
           @click="openRenameOperationLog"
+          :disabled="!canReadLogs"
+          :title="canReadLogs ? '' : messages.auth.permissionDenied"
         >
           {{ messages.scanJobs.viewLogs }}
         </el-button>
@@ -2489,12 +2847,34 @@ onMounted(async () => {
       v-model:visible="operationLogVisible"
       :task-type="selectedOperationLogTaskType"
       :task-id="selectedOperationLogTaskId"
-      :title="selectedOperationLogTaskType === 'rollback_plan' ? messages.operationLogs.rollbackTitle : messages.operationLogs.renameTitle"
+      :title="selectedOperationLogTaskType === 'pending_move' ? messages.operationLogs.pendingMoveTitle : selectedOperationLogTaskType === 'rollback_plan' ? messages.operationLogs.rollbackTitle : messages.operationLogs.renameTitle"
     />
   </ListPageLayout>
 </template>
 
 <style scoped>
+:deep(.pending-files-pane:has(.pending-move-status)) {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.pending-move-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.pending-move-status > span {
+  overflow-wrap: anywhere;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.pending-move-error {
+  color: var(--el-color-danger);
+  overflow-wrap: anywhere;
+}
 .metadata-candidate-expanded {
   display: flex;
   flex-direction: column;

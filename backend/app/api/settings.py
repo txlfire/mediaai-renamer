@@ -3,8 +3,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.api.auth import require_permission
-from app.service.audit_service import record_audit_event, sanitize_audit_detail
+from app.api.auth import require_authenticated_user, require_permission
+from app.service.audit_service import AuditWriteContext, record_audit_event, sanitize_audit_detail
 from app.service.settings_service import (
     AI_TEST_PAGE_KEY,
     TMDB_TEST_PAGE_KEY,
@@ -17,8 +17,6 @@ from app.service.settings_service import (
     imdb_test_result_to_dict,
     list_setting_values,
     page_test_result_to_dict,
-    save_imdb_connection_test_result,
-    save_tmdb_connection_test_result,
     test_ai_connection,
     test_imdb_connection,
     test_tmdb_channel,
@@ -119,7 +117,10 @@ def _audit_request_context(request: Request) -> dict[str, str | None]:
 
 
 @router.get("")
-def get_settings(request: Request):
+def get_settings(
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
     """List effective system settings for the settings page."""
 
     return list_setting_values(request.app.state.settings)
@@ -139,6 +140,7 @@ def update_settings(
             request.app.state.settings,
             payload.values,
             operator=operator,
+            auditContext=AuditWriteContext(current_user, request.client.host if request.client else None, request.headers.get("user-agent")),
         )
     except ValueError as exc:
         record_audit_event(
@@ -157,25 +159,14 @@ def update_settings(
             **_audit_request_context(request),
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="settings.update",
-        action="update_settings",
-        result="success",
-        summary=f"保存系统设置：{len(payload.values)} 项",
-        target_type="settings",
-        actor=current_user,
-        detail={
-            "keys": sorted(payload.values.keys()),
-            "values": sanitize_audit_detail(payload.values),
-        },
-        **_audit_request_context(request),
-    )
     return result
 
 
 @router.get("/tmdb/test-result")
-def get_tmdb_test_result(request: Request):
+def get_tmdb_test_result(
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
     """Return the latest persisted TMDB connection test result."""
 
     result = get_page_test_result(request.app.state.settings, TMDB_TEST_PAGE_KEY)
@@ -194,7 +185,7 @@ def get_tmdb_test_result(request: Request):
     }
 
 
-@router.post("/tmdb/test")
+@router.post("/tmdb/test", dependencies=[Depends(require_permission("settings:write"))])
 def test_tmdb_settings(request: Request):
     """Validate current TMDB settings by calling TMDB."""
 
@@ -204,7 +195,7 @@ def test_tmdb_settings(request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/tmdb/test/{channel}")
+@router.post("/tmdb/test/{channel}", dependencies=[Depends(require_permission("settings:write"))])
 def test_tmdb_settings_channel(channel: str, request: Request):
     """Validate one TMDB channel."""
 
@@ -216,19 +207,18 @@ def test_tmdb_settings_channel(channel: str, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/tmdb/test-result")
-def save_tmdb_test_result(payload: SaveTmdbTestResultRequest, request: Request):
-    """Persist the latest TMDB connection test result."""
+@router.post("/tmdb/test-result", dependencies=[Depends(require_permission("settings:write"))])
+def save_tmdb_test_result():
+    """Reject legacy client-authored TMDB test results."""
 
-    return save_tmdb_connection_test_result(
-        request.app.state.settings,
-        payload.v4,
-        payload.v3,
-    )
+    raise HTTPException(status_code=410, detail="客户端保存 TMDB 测试结果的接口已停用，请调用 /api/settings/tmdb/test")
 
 
 @router.get("/imdb/test-result")
-def get_imdb_connection_test_result(request: Request):
+def get_imdb_connection_test_result(
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
     """Return the latest persisted IMDb connection test result."""
 
     result = get_imdb_test_result(request.app.state.settings)
@@ -247,25 +237,25 @@ def get_imdb_connection_test_result(request: Request):
     }
 
 
-@router.post("/imdb/test")
+@router.post("/imdb/test", dependencies=[Depends(require_permission("settings:write"))])
 def test_imdb_settings(request: Request):
     """Validate current IMDb reachability."""
 
     return test_imdb_connection(request.app.state.settings)
 
 
-@router.post("/imdb/test-result")
-def save_imdb_test_result(payload: SaveImdbTestResultRequest, request: Request):
-    """Persist the latest IMDb connection test result."""
+@router.post("/imdb/test-result", dependencies=[Depends(require_permission("settings:write"))])
+def save_imdb_test_result():
+    """Reject legacy client-authored IMDb test results."""
 
-    return save_imdb_connection_test_result(
-        request.app.state.settings,
-        _model_payload(payload),
-    )
+    raise HTTPException(status_code=410, detail="客户端保存 IMDb 测试结果的接口已停用，请调用 /api/settings/imdb/test")
 
 
 @router.get("/ai/test-result")
-def get_ai_connection_test_result(request: Request):
+def get_ai_connection_test_result(
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
     """Return the latest persisted AI connection test result."""
 
     result = get_page_test_result(request.app.state.settings, AI_TEST_PAGE_KEY)
@@ -284,7 +274,26 @@ def get_ai_connection_test_result(request: Request):
     }
 
 
-@router.post("/ai/test")
+@router.get("/ai/readiness")
+def get_ai_readiness(
+    request: Request,
+    _current_user=Depends(require_authenticated_user()),
+):
+    """Return the minimum AI availability state required by business pages."""
+
+    result = get_page_test_result(request.app.state.settings, AI_TEST_PAGE_KEY)
+    if result is None:
+        return {"ready": False, "status": "untested", "tested_at": None, "message": "AI 连接尚未测试"}
+    matches_current = result.config_snapshot == build_ai_config_snapshot(request.app.state.settings)
+    status = str(result.v4.get("status") or "failed")
+    if not matches_current:
+        return {"ready": False, "status": "stale", "tested_at": result.tested_at, "message": "AI 配置已变化，请重新测试连接"}
+    if status != "success":
+        return {"ready": False, "status": "failed", "tested_at": result.tested_at, "message": "AI 连接测试未通过"}
+    return {"ready": True, "status": "ready", "tested_at": result.tested_at, "message": "AI 已就绪"}
+
+
+@router.post("/ai/test", dependencies=[Depends(require_permission("settings:write"))])
 def test_ai_settings(request: Request):
     """Validate current AI provider settings."""
 
@@ -292,7 +301,10 @@ def test_ai_settings(request: Request):
 
 
 @router.get("/metadata-providers")
-def get_metadata_providers(request: Request):
+def get_metadata_providers(
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
     """List M10 metadata provider configs."""
 
     return [
@@ -315,6 +327,8 @@ def update_metadata_provider(
             request.app.state.settings,
             provider,
             _model_payload(payload),
+            auditContext=AuditWriteContext(current_user, request.client.host if request.client else None,
+                                           request.headers.get("user-agent")),
         )
     except ValueError as exc:
         record_audit_event(
@@ -334,21 +348,6 @@ def update_metadata_provider(
             **_audit_request_context(request),
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="settings.update",
-        action="update_metadata_provider",
-        result="success",
-        summary=f"保存元数据源配置：{provider}",
-        target_type="metadata_provider",
-        target_id=provider,
-        actor=current_user,
-        detail={
-            "provider": provider,
-            "values": sanitize_audit_detail(_model_payload(payload)),
-        },
-        **_audit_request_context(request),
-    )
     return metadata_provider_config_to_dict(config)
 
 
@@ -367,13 +366,16 @@ def test_metadata_provider(
 
 
 @router.get("/naming/export")
-def export_naming_settings_bundle(request: Request):
+def export_naming_settings_bundle(
+    request: Request,
+    _current_user=Depends(require_permission("settings:write")),
+):
     """Return the current naming template bundle for export."""
 
     return naming_template_bundle_to_dict(export_naming_template_bundle(request.app.state.settings))
 
 
-@router.post("/naming/import")
+@router.post("/naming/import", dependencies=[Depends(require_permission("settings:write"))])
 def import_naming_settings_bundle(payload: NamingTemplateImportRequest, request: Request):
     """Validate one imported naming template bundle."""
 
@@ -385,7 +387,7 @@ def import_naming_settings_bundle(payload: NamingTemplateImportRequest, request:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/naming/test")
+@router.post("/naming/test", dependencies=[Depends(require_permission("settings:write"))])
 def test_naming_template(payload: NamingTemplatePreviewRequest, request: Request):
     """Generate a filename preview for a candidate naming template."""
 
@@ -404,7 +406,7 @@ def test_naming_template(payload: NamingTemplatePreviewRequest, request: Request
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/naming/diff")
+@router.post("/naming/diff", dependencies=[Depends(require_permission("settings:write"))])
 def diff_naming_template(payload: NamingTemplatePreviewRequest, request: Request):
     """Compare current and candidate naming template outputs."""
 

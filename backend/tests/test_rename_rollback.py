@@ -6,20 +6,29 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from api_test_support import authenticatedClient as TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
 from app.core.logger import shutdown_logging
+from app.service.audit_service import AuditWriteContext
+from app.service.file_action_audit_service import runAuditedFileAction, flushFileActionAuditIntents
+from fastapi import Response
 from app.main import create_app
 from app.service.preview_service import generate_rename_previews, list_rename_previews, update_rename_preview
 from app.service.rename_operation_service import create_rename_dry_run, execute_rename_operation
+from app.service.shared_protocols.base import RemoteFileEntry
+from app.service.shared_protocols.base import ConnectionTestResult
+from app.service.media_source_service import set_media_source_enabled, update_media_source
 from app.service.rename_rollback_service import (
     create_rename_rollback_plan,
     dry_run_rename_rollback_plan,
     execute_rename_rollback_plan,
+    get_rename_rollback_plan,
 )
 
 
@@ -72,6 +81,61 @@ class RenameRollbackTest(unittest.TestCase):
         operation = create_rename_dry_run(self.settings, [preview.id])
         return execute_rename_operation(self.settings, operation.id)
 
+    def test_plan_creation_audit_failure_rolls_back_plan_and_items(self):
+        operation = self._execute_sample_rename()
+        with patch("app.service.rename_rollback_service.record_audit_event",
+                   side_effect=sqlite3.OperationalError("synthetic audit failure")):
+            with self.assertRaises(sqlite3.OperationalError):
+                create_rename_rollback_plan(self.settings, operation.id)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM rename_rollback_plans").fetchone()[0])
+            self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM rename_rollback_items").fetchone()[0])
+        self.assertTrue((self.media_dir / "Movie.Safe.mkv").exists())
+
+    def test_plan_dry_run_audit_failure_rolls_back_snapshots_and_state(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        with patch("app.service.rename_rollback_service.record_audit_event",
+                   side_effect=sqlite3.OperationalError("synthetic audit failure")):
+            with self.assertRaises(sqlite3.OperationalError):
+                dry_run_rename_rollback_plan(self.settings, plan.id)
+        self.assertEqual(plan, get_rename_rollback_plan(self.settings, plan.id))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertIsNone(connection.execute("SELECT snapshot_json FROM rename_rollback_items WHERE plan_id=?",
+                                                 (plan.id,)).fetchone()[0])
+
+    def test_dry_run_conflicts_are_not_audited_as_success(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        self.source.write_text("occupied", encoding="utf-8")
+        checked = dry_run_rename_rollback_plan(self.settings, plan.id)
+        self.assertEqual(1, checked.conflict_count)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            result, detail = connection.execute("SELECT result,detail_json FROM audit_events "
+                "WHERE action='dry_run_rollback_plan' AND target_id=?", (str(plan.id),)).fetchone()
+        self.assertEqual("failed", result)
+        self.assertEqual(1, json.loads(detail)["conflict_count"])
+
+    def test_rollback_maintenance_does_not_attribute_old_success_to_new_request(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        dry_run_rename_rollback_plan(self.settings, plan.id)
+        execute_rename_rollback_plan(self.settings, plan.id)
+
+        def reject():
+            self.assertEqual(0, flushFileActionAuditIntents(self.settings)["completed"])
+            raise ValueError("synthetic duplicate rollback")
+
+        with self.assertRaisesRegex(ValueError, "duplicate rollback"):
+            runAuditedFileAction(self.settings, taskType="rollback_plan", taskId=plan.id,
+                context=AuditWriteContext(), execute=reject, response=Response())
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            rows = connection.execute("SELECT result,detail_json FROM audit_events "
+                "WHERE action='execute_rollback_plan' ORDER BY id").fetchall()
+        self.assertEqual(["pending", "failed"], [row[0] for row in rows])
+        self.assertEqual("executed", json.loads(rows[-1][1])["status"])
+        self.assertTrue(self.source.exists())
+
     def test_rollback_plan_dry_run_and_execute_restores_file(self):
         operation = self._execute_sample_rename()
         target = self.media_dir / "Movie.Safe.mkv"
@@ -103,6 +167,152 @@ class RenameRollbackTest(unittest.TestCase):
         self.assertEqual("rolled_back", preview_row["status"])
         self.assertEqual("已回滚", preview_row["message"])
         self.assertGreaterEqual(log_count, 3)
+
+    def test_rollback_prepare_then_source_replacement_is_rejected_before_move(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        dry_run_rename_rollback_plan(self.settings, plan.id)
+        current = self.media_dir / "Movie.Safe.mkv"
+        import app.service.rename_rollback_service as service
+
+        originalPrepare = service.prepareLocalFileAction
+
+        def prepareAndReplace(*args, **kwargs):
+            actionId = originalPrepare(*args, **kwargs)
+            current.unlink()
+            current.write_text("replacement", encoding="utf-8")
+            return actionId
+
+        with (
+            patch.object(service, "prepareLocalFileAction", side_effect=prepareAndReplace),
+            patch.object(service, "moveFileNoReplace") as mover,
+        ):
+            executed = execute_rename_rollback_plan(self.settings, plan.id)
+
+        self.assertEqual("failed", executed.status)
+        mover.assert_not_called()
+        self.assertEqual("replacement", current.read_text(encoding="utf-8"))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            status, message = connection.execute(
+                "SELECT status,message FROM local_file_actions WHERE action_type='rollback'"
+            ).fetchone()
+        self.assertEqual("recovery_required", status)
+        self.assertIn("身份已变化", message)
+
+    def test_rollback_post_move_target_replacement_requires_recovery(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        dry_run_rename_rollback_plan(self.settings, plan.id)
+        current = self.media_dir / "Movie.Safe.mkv"
+        import app.service.rename_rollback_service as service
+
+        originalMove = service.moveFileNoReplace
+
+        def moveAndReplace(sourcePath, targetPath):
+            originalMove(sourcePath, targetPath)
+            Path(targetPath).unlink()
+            Path(targetPath).write_text("replacement", encoding="utf-8")
+
+        with patch.object(service, "moveFileNoReplace", side_effect=moveAndReplace):
+            executed = execute_rename_rollback_plan(self.settings, plan.id)
+
+        self.assertEqual("failed", executed.status)
+        self.assertFalse(current.exists())
+        self.assertEqual("replacement", self.source.read_text(encoding="utf-8"))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            status, targetIdentity, message = connection.execute(
+                "SELECT status,target_identity_json,message FROM local_file_actions WHERE action_type='rollback'"
+            ).fetchone()
+            mediaPath = connection.execute("SELECT file_path FROM media_files WHERE id=1").fetchone()[0]
+        self.assertEqual("recovery_required", status)
+        self.assertIsNone(targetIdentity)
+        self.assertIn("目标文件身份无法确认", message)
+        self.assertEqual(str(current), mediaPath)
+
+    def test_changed_local_file_after_dry_run_is_not_rolled_back(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        dry_run_rename_rollback_plan(self.settings, plan.id)
+        target = self.media_dir / "Movie.Safe.mkv"
+        target.write_text("external changed content", encoding="utf-8")
+        result = execute_rename_rollback_plan(self.settings, plan.id)
+        self.assertEqual("failed", result.items[0].status)
+        self.assertIn("已变化", result.items[0].message)
+        self.assertFalse(self.source.exists())
+        self.assertEqual("external changed content", target.read_text(encoding="utf-8"))
+
+    def test_source_root_change_preserves_completed_history_but_blocks_new_rollback(self):
+        operation = self._execute_sample_rename()
+        newRoot = self.root / "new-root"
+        newRoot.mkdir()
+        update_media_source(self.settings, 1, "changed", newRoot, True, clear_history_on_path_change=True)
+        with self.assertRaisesRegex(ValueError, "历史批次不能"):
+            create_rename_rollback_plan(self.settings, operation.id)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual("renamed", connection.execute("SELECT status FROM rename_operation_items").fetchone()[0])
+        self.assertTrue((self.media_dir / "Movie.Safe.mkv").exists())
+
+    def test_legacy_checked_plan_without_snapshot_never_moves_file(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        dry_run_rename_rollback_plan(self.settings, plan.id)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute("UPDATE rename_rollback_items SET snapshot_json = NULL WHERE plan_id = ?", (plan.id,))
+            connection.commit()
+        result = execute_rename_rollback_plan(self.settings, plan.id)
+        self.assertIn("缺少安全快照", result.items[0].message)
+        self.assertTrue((self.media_dir / "Movie.Safe.mkv").exists())
+        self.assertFalse(self.source.exists())
+
+    def test_changed_webdav_etag_after_dry_run_never_sends_move(self):
+        self._insert_webdav_renamed_operation()
+        plan = create_rename_rollback_plan(self.settings, 9)
+        entry = RemoteFileEntry(
+            path="https://nas.example/dav/Movie.Safe.mkv", name="Movie.Safe.mkv", extension=".mkv",
+            file_size=2048, modified_at="now", version='"before"',
+        )
+        with (
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "ready")),
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.get_file_info", return_value=entry) as info,
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file") as mover,
+        ):
+            dry_run_rename_rollback_plan(self.settings, plan.id)
+            info.return_value = RemoteFileEntry(
+                path=entry.path, name=entry.name, extension=entry.extension,
+                file_size=entry.file_size, modified_at=entry.modified_at, version='"after"',
+            )
+            result = execute_rename_rollback_plan(self.settings, plan.id)
+            mover.assert_not_called()
+        self.assertIn("已变化", result.items[0].message)
+
+    def test_running_rollback_blocks_duplicate_execution_source_change_and_preview_edit(self):
+        operation = self._execute_sample_rename()
+        plan = create_rename_rollback_plan(self.settings, operation.id)
+        dry_run_rename_rollback_plan(self.settings, plan.id)
+        entered = Event()
+        proceed = Event()
+
+        def checkReady(*args):
+            entered.set()
+            if not proceed.wait(timeout=10):
+                raise RuntimeError("测试等待超时")
+            return ConnectionTestResult(True, "可回滚")
+
+        with patch("app.service.shared_protocols.local.LocalProtocol.check_rename_ready", side_effect=checkReady):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(execute_rename_rollback_plan, self.settings, plan.id)
+                try:
+                    self.assertTrue(entered.wait(timeout=5))
+                    with self.assertRaises(ValueError):
+                        execute_rename_rollback_plan(self.settings, plan.id)
+                    with self.assertRaisesRegex(ValueError, "运行中任务"):
+                        set_media_source_enabled(self.settings, 1, False)
+                    with self.assertRaisesRegex(ValueError, "正在执行回滚"):
+                        update_rename_preview(self.settings, operation.items[0].rename_preview_id, "Other")
+                finally:
+                    proceed.set()
+                result = future.result(timeout=10)
+        self.assertEqual("executed", result.status)
 
     def test_rollback_dry_run_detects_existing_target(self):
         operation = self._execute_sample_rename()
@@ -137,12 +347,17 @@ class RenameRollbackTest(unittest.TestCase):
             captured_move["source_path"] = source_path
             captured_move["target_path"] = target_path
             captured_move["context_path_type"] = context.path_type if context else None
+            captured_move["expected_version"] = context.expected_source_version
             return ConnectionTestResult(True, "WebDAV MOVE 执行成功", readable=True, writable=True)
 
         plan = create_rename_rollback_plan(self.settings, 9, created_by="admin")
         with (
             patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", side_effect=fake_check_rename_ready),
             patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", side_effect=fake_move_file),
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.get_file_info", return_value=RemoteFileEntry(
+                path="https://nas.example/dav/Movie.2024.1080p.mkv", name="Movie.2024.1080p.mkv",
+                extension=".mkv", file_size=2048, modified_at="2026-01-01T00:00:00+00:00", version='"target-etag"',
+            )),
         ):
             checked = dry_run_rename_rollback_plan(self.settings, plan.id)
             executed = execute_rename_rollback_plan(self.settings, plan.id)
@@ -155,6 +370,7 @@ class RenameRollbackTest(unittest.TestCase):
         self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", captured_move["source_path"])
         self.assertEqual("https://nas.example/dav/Movie.2024.1080p.mkv", captured_move["target_path"])
         self.assertEqual("webdav", captured_move["context_path_type"])
+        self.assertEqual('"target-etag"', captured_move["expected_version"])
         with closing(sqlite3.connect(self.settings.database_path)) as connection:
             media_row = connection.execute(
                 "SELECT file_path, file_name, extension FROM media_files WHERE id = 9"
@@ -185,6 +401,41 @@ class RenameRollbackTest(unittest.TestCase):
         self.assertEqual(plan.id, recovery["rollback_plan_id"])
         self.assertEqual(executed.items[0].id, recovery["rollback_item_id"])
         self.assertEqual(9, recovery["operation_item_id"])
+
+    def test_webdav_rollback_indeterminate_remains_recovery_required(self):
+        self._insert_webdav_renamed_operation()
+        entry = RemoteFileEntry(
+            path="https://nas.example/dav/Movie.Safe.mkv",
+            name="Movie.Safe.mkv",
+            extension=".mkv",
+            file_size=2048,
+            modified_at="now",
+            version='"target-etag"',
+        )
+        plan = create_rename_rollback_plan(self.settings, 9, created_by="admin")
+        with patch(
+            "app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready",
+            return_value=ConnectionTestResult(True, "可回滚"),
+        ), patch(
+            "app.service.shared_protocols.webdav.WebDavProtocol.get_file_info",
+            return_value=entry,
+        ) as info:
+            dry_run_rename_rollback_plan(self.settings, plan.id)
+            with patch(
+                "app.service.shared_protocols.webdav.WebDavProtocol.move_file",
+                return_value=ConnectionTestResult(False, "HTTP 204 结果待核查", indeterminate=True),
+            ) as mover:
+                executed = execute_rename_rollback_plan(self.settings, plan.id)
+
+        self.assertEqual("failed", executed.status)
+        self.assertGreaterEqual(info.call_count, 2)
+        mover.assert_called_once()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            remoteRow = connection.execute(
+                "SELECT status, error_message FROM remote_operation_items WHERE operation_type='rollback'"
+            ).fetchone()
+        self.assertEqual("recovery_required", remoteRow[0])
+        self.assertIn("人工核查", remoteRow[1])
 
     def _insert_webdav_renamed_operation(self):
         with closing(sqlite3.connect(self.settings.database_path)) as connection:
@@ -237,6 +488,13 @@ class RenameRollbackTest(unittest.TestCase):
         execute_response = client.post(f"/api/rename-rollback-plans/{plan_id}/execute")
 
         self.assertEqual(200, dry_run_response.status_code)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            for action in ("create_rollback_plan", "dry_run_rollback_plan"):
+                rows = connection.execute("SELECT actor_id,actor_name,result FROM audit_events WHERE action=?",
+                                          (action,)).fetchall()
+                self.assertEqual(1, len(rows))
+                self.assertIsNotNone(rows[0][0])
+                self.assertEqual(("api-review", "success"), rows[0][1:])
         self.assertEqual(200, execute_response.status_code)
         self.assertEqual("executed", execute_response.json()["status"])
         with closing(sqlite3.connect(self.settings.database_path)) as connection:

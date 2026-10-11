@@ -6,10 +6,13 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import patch
 from urllib.error import HTTPError
+from dataclasses import replace
 
-from fastapi.testclient import TestClient
+from api_test_support import authenticatedClient as TestClient
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
@@ -19,8 +22,17 @@ from app.service.preview_service import (
     generate_rename_previews,
     list_rename_previews,
     update_rename_preview,
+    exclude_rename_preview,
 )
 from app.service.rename_operation_service import create_rename_dry_run, execute_rename_operation
+from app.service.audit_service import AuditWriteContext, record_audit_event
+from app.service.file_action_audit_service import (
+    createFileActionAuditIntent, flushFileActionAuditIntents, inspectFileActionAuditIntents, runAuditedFileAction,
+    completeFileActionAuditIntent,
+)
+from fastapi import Response
+from app.service.shared_protocols.base import ConnectionTestResult, RemoteFileEntry
+from app.service.credential_key import CredentialError
 from app.service.settings_service import update_setting_values
 
 
@@ -144,6 +156,323 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual("Movie.Safe.mkv", updated_preview.file_name)
         self.assertEqual("renamed", updated_preview.status)
 
+    def test_prepare_then_source_replacement_is_rejected_before_move(self):
+        _, operation = self._safeDryRun()
+        import app.service.rename_operation_service as service
+
+        originalPrepare = service.prepareLocalFileAction
+
+        def prepareAndReplace(*args, **kwargs):
+            actionId = originalPrepare(*args, **kwargs)
+            self.source.unlink()
+            self.source.write_text("replacement", encoding="utf-8")
+            return actionId
+
+        with (
+            patch.object(service, "prepareLocalFileAction", side_effect=prepareAndReplace),
+            patch.object(service, "moveFileNoReplace") as mover,
+        ):
+            executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", executed.status)
+        mover.assert_not_called()
+        self.assertEqual("replacement", self.source.read_text(encoding="utf-8"))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            status, message = connection.execute(
+                "SELECT status,message FROM local_file_actions"
+            ).fetchone()
+        self.assertEqual("recovery_required", status)
+        self.assertIn("身份已变化", message)
+
+    def test_post_move_target_replacement_requires_recovery(self):
+        _, operation = self._safeDryRun()
+        target = self.media_dir / "Movie.Safe.mkv"
+        import app.service.rename_operation_service as service
+
+        originalMove = service.moveFileNoReplace
+
+        def moveAndReplace(sourcePath, targetPath):
+            originalMove(sourcePath, targetPath)
+            Path(targetPath).unlink()
+            Path(targetPath).write_text("replacement", encoding="utf-8")
+
+        with patch.object(service, "moveFileNoReplace", side_effect=moveAndReplace):
+            executed = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", executed.status)
+        self.assertFalse(self.source.exists())
+        self.assertEqual("replacement", target.read_text(encoding="utf-8"))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            status, targetIdentity, message = connection.execute(
+                "SELECT status,target_identity_json,message FROM local_file_actions"
+            ).fetchone()
+            mediaPath = connection.execute("SELECT file_path FROM media_files WHERE id=1").fetchone()[0]
+        self.assertEqual("recovery_required", status)
+        self.assertIsNone(targetIdentity)
+        self.assertIn("目标文件身份无法确认", message)
+        self.assertEqual(str(self.source), mediaPath)
+
+    def _safeDryRun(self):
+        generate_rename_previews(self.settings)
+        preview = list_rename_previews(self.settings)[0]
+        update_rename_preview(self.settings, preview.id, "Movie.Safe")
+        return preview, create_rename_dry_run(self.settings, [preview.id])
+
+    def test_execute_api_audit_records_real_dataclass_outcome_and_counts(self):
+        _, operation = self._safeDryRun()
+        client = TestClient(create_app(self.settings))
+        for status, expectedAudit in (("failed", "failed"), ("partial_failed", "partial_success"), ("running", "pending"), ("completed", "failed")):
+            with self.subTest(status=status):
+                result = replace(operation, status=status, failed_count=1, renamed_count=1 if status == "partial_failed" else 0,
+                                 items=[replace(operation.items[0], status="failed", message="controlled failure")])
+                with patch("app.api.rename_operations.execute_rename_operation", return_value=result):
+                    response = client.post(f"/api/rename-operations/{operation.id}/execute")
+                self.assertEqual(200, response.status_code)
+                with closing(sqlite3.connect(self.settings.database_path)) as connection:
+                    eventResult, detailJson = connection.execute(
+                        "SELECT result, detail_json FROM audit_events WHERE event_type = 'rename.execute' ORDER BY id DESC LIMIT 1",
+                    ).fetchone()
+                detail = json.loads(detailJson)
+                self.assertEqual(expectedAudit, eventResult)
+                if status == "running":
+                    self.assertEqual("pending", response.headers["X-MediaAI-Audit-State"])
+                    self.assertIn("audit_intent_id", detail)
+                    continue
+                self.assertEqual(status, detail["status"])
+                self.assertEqual(1, detail["failed_count"])
+                self.assertEqual(1, detail["item_count"])
+                self.assertEqual("controlled failure", detail["failure_examples"][0]["message"])
+
+    def test_audit_intent_failure_prevents_file_execution(self):
+        _, operation = self._safeDryRun()
+        with patch("app.service.file_action_audit_service.record_audit_event", side_effect=sqlite3.OperationalError("audit unavailable")), \
+             patch("app.api.rename_operations.execute_rename_operation") as execute:
+            client = TestClient(create_app(self.settings), raise_server_exceptions=False)
+            response = client.post(f"/api/rename-operations/{operation.id}/execute")
+        self.assertEqual(500, response.status_code)
+        execute.assert_not_called()
+        self.assertTrue(self.source.exists())
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM file_action_audit_intents").fetchone()[0])
+
+    def test_final_audit_failure_preserves_real_result_and_can_be_flushed_once(self):
+        _, operation = self._safeDryRun()
+        def failFinal(settings, **kwargs):
+            if kwargs["result"] != "pending":
+                raise sqlite3.OperationalError("audit unavailable")
+            return record_audit_event(settings, **kwargs)
+        client = TestClient(create_app(self.settings))
+        with patch("app.service.file_action_audit_service.record_audit_event", side_effect=failFinal):
+            response = client.post(f"/api/rename-operations/{operation.id}/execute")
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("completed", response.json()["status"])
+        self.assertEqual("pending", response.headers["X-MediaAI-Audit-State"])
+        self.assertFalse(self.source.exists())
+        self.assertTrue((self.media_dir / "Movie.Safe.mkv").exists())
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            status, errorType, snapshot = connection.execute("SELECT status, last_error_type, outcome_json FROM file_action_audit_intents").fetchone()
+        self.assertEqual(("pending", "OperationalError"), (status, errorType))
+        self.assertEqual("success", json.loads(snapshot)["result"])
+        self.assertEqual(1, flushFileActionAuditIntents(self.settings)["completed"])
+        self.assertEqual(0, flushFileActionAuditIntents(self.settings)["completed"])
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM audit_events WHERE event_type = 'rename.execute'").fetchone()[0])
+
+    def test_rejected_request_snapshot_survives_final_audit_failure_and_later_task_change(self):
+        _, operation = self._safeDryRun()
+        def failFinal(settings, **kwargs):
+            if kwargs["result"] != "pending":
+                raise sqlite3.OperationalError("audit unavailable")
+            return record_audit_event(settings, **kwargs)
+        def reject():
+            raise ValueError("controlled rejection https://test:secret@example.invalid/root")
+        with patch("app.service.file_action_audit_service.record_audit_event", side_effect=failFinal):
+            with self.assertRaisesRegex(ValueError, "controlled rejection"):
+                runAuditedFileAction(self.settings, taskType="rename_operation", taskId=operation.id,
+                                     context=AuditWriteContext(userAgent="https://test:secret@example.invalid/root"),
+                                     execute=reject, response=Response())
+        execute_rename_operation(self.settings, operation.id)
+        self.assertEqual(1, flushFileActionAuditIntents(self.settings)["completed"])
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            contextJson, outcomeJson = connection.execute("SELECT context_json, outcome_json FROM file_action_audit_intents").fetchone()
+            eventResult = connection.execute("SELECT result FROM audit_events WHERE event_type = 'rename.execute' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        self.assertEqual("failed", eventResult)
+        self.assertNotIn("secret", contextJson + outcomeJson)
+        self.assertIn("controlled rejection", outcomeJson)
+
+    def test_running_intent_is_not_finalized_and_flush_limit_is_bounded(self):
+        _, operation = self._safeDryRun()
+        for _ in range(2):
+            createFileActionAuditIntent(self.settings, "rename_operation", operation.id, AuditWriteContext())
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute("UPDATE rename_operations SET status = 'running' WHERE id = ?", (operation.id,))
+            connection.commit()
+        self.assertEqual({"completed": 0, "pending": 1, "has_more": 1, "next_id": 1}, flushFileActionAuditIntents(self.settings, limit=1))
+        self.assertEqual(2, inspectFileActionAuditIntents(self.settings, limit=1, afterId=1)["next_id"])
+        for limit in (0, 5001):
+            with self.assertRaises(ValueError):
+                flushFileActionAuditIntents(self.settings, limit=limit)
+
+    def test_audit_inspection_is_readonly_and_does_not_create_missing_database(self):
+        _, operation = self._safeDryRun()
+        createFileActionAuditIntent(self.settings, "rename_operation", operation.id, AuditWriteContext())
+        before = self.settings.database_path.read_bytes()
+        report = inspectFileActionAuditIntents(self.settings)
+        self.assertEqual(1, len(report["items"]))
+        self.assertFalse(report["items"][0]["hasOutcome"])
+        self.assertEqual(before, self.settings.database_path.read_bytes())
+        missingPath = self.root / "must-not-create.sqlite3"
+        with self.assertRaises(sqlite3.OperationalError):
+            inspectFileActionAuditIntents(replace(self.settings, database_path=missingPath))
+        self.assertFalse(missingPath.exists())
+
+    def test_concurrent_audit_flush_does_not_duplicate_final_event(self):
+        _, operation = self._safeDryRun()
+        intentId = createFileActionAuditIntent(self.settings, "rename_operation", operation.id, AuditWriteContext())
+        result = execute_rename_operation(self.settings, operation.id)
+        with patch("app.service.file_action_audit_service.record_audit_event",
+                   side_effect=sqlite3.OperationalError("synthetic final failure")):
+            with self.assertRaises(sqlite3.OperationalError):
+                completeFileActionAuditIntent(self.settings, intentId, executionResult=result)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda _: flushFileActionAuditIntents(self.settings), range(2)))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM audit_events WHERE event_type = 'rename.execute'").fetchone()[0])
+
+    def test_maintenance_does_not_attribute_old_success_to_rejected_request(self):
+        _, operation = self._safeDryRun()
+        execute_rename_operation(self.settings, operation.id)
+
+        def rejectAfterMaintenance():
+            report = flushFileActionAuditIntents(self.settings)
+            self.assertEqual(0, report["completed"])
+            self.assertEqual(1, report["pending"])
+            raise ValueError("synthetic duplicate request")
+
+        with self.assertRaisesRegex(ValueError, "duplicate request"):
+            runAuditedFileAction(self.settings, taskType="rename_operation", taskId=operation.id,
+                context=AuditWriteContext(), execute=rejectAfterMaintenance, response=Response())
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            rows = connection.execute("SELECT result,detail_json FROM audit_events WHERE event_type='rename.execute' ORDER BY id").fetchall()
+        self.assertEqual(["pending", "failed"], [row[0] for row in rows])
+        self.assertEqual("completed", json.loads(rows[-1][1])["status"])
+        self.assertEqual("synthetic duplicate request", json.loads(rows[-1][1])["request_error"])
+
+    def test_repeated_execute_api_returns_existing_result_without_false_success_audit(self):
+        _, operation = self._safeDryRun()
+        client = TestClient(create_app(self.settings))
+        first = client.post(f"/api/rename-operations/{operation.id}/execute")
+        self.assertEqual(200, first.status_code)
+        self.assertEqual("completed", first.json()["status"])
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            before = connection.execute(
+                "SELECT COUNT(*) FROM audit_events "
+                "WHERE event_type='rename.execute' AND result='success'"
+            ).fetchone()[0]
+
+        repeated = client.post(f"/api/rename-operations/{operation.id}/execute")
+        self.assertEqual(200, repeated.status_code)
+        self.assertEqual("completed", repeated.json()["status"])
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            after = connection.execute(
+                "SELECT COUNT(*) FROM audit_events "
+                "WHERE event_type='rename.execute' AND result='success'"
+            ).fetchone()[0]
+            intents = connection.execute(
+                "SELECT COUNT(*) FROM file_action_audit_intents "
+                "WHERE task_type='rename_operation' AND task_id=?",
+                (operation.id,),
+            ).fetchone()[0]
+        self.assertEqual(before, after)
+        self.assertEqual(1, intents)
+
+    def test_rejected_running_request_is_audited_without_finishing_business_task(self):
+        _, operation = self._safeDryRun()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute("UPDATE rename_operations SET status='running' WHERE id=?", (operation.id,))
+            connection.commit()
+        def reject():
+            raise ValueError("synthetic busy")
+        with self.assertRaisesRegex(ValueError, "synthetic busy"):
+            runAuditedFileAction(self.settings, taskType="rename_operation", taskId=operation.id,
+                context=AuditWriteContext(), execute=reject,
+                response=Response())
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual("running", connection.execute("SELECT status FROM rename_operations WHERE id=?", (operation.id,)).fetchone()[0])
+            self.assertEqual("failed", connection.execute("SELECT result FROM audit_events WHERE event_type='rename.execute' ORDER BY id DESC LIMIT 1").fetchone()[0])
+
+    def test_execution_rejects_edited_or_excluded_preview(self):
+        for action in ("edit", "exclude"):
+            with self.subTest(action=action):
+                preview, operation = self._safeDryRun()
+                if action == "edit":
+                    update_rename_preview(self.settings, preview.id, "Movie.New")
+                else:
+                    exclude_rename_preview(self.settings, preview.id)
+                executed = execute_rename_operation(self.settings, operation.id)
+                self.assertEqual("failed", executed.status)
+                self.assertIn("重新生成干跑", executed.items[0].message)
+                self.assertTrue(self.source.exists())
+                self.assertFalse((self.media_dir / "Movie.Safe.mkv").exists())
+
+    def test_execution_rejects_changed_file_source_or_missing_snapshot(self):
+        preview, operation = self._safeDryRun()
+        self.source.write_text("changed movie", encoding="utf-8")
+        result = execute_rename_operation(self.settings, operation.id)
+        self.assertEqual(1, result.failed_count)
+        self.assertTrue(self.source.exists())
+        for change in ("source", "legacy"):
+            with self.subTest(change=change):
+                operation = create_rename_dry_run(self.settings, [preview.id])
+                with closing(sqlite3.connect(self.settings.database_path)) as connection:
+                    if change == "source":
+                        connection.execute("UPDATE media_sources SET updated_at = 'changed' WHERE id = 1")
+                    else:
+                        connection.execute(
+                            "UPDATE rename_operation_items SET snapshot_json = NULL WHERE operation_id = ?",
+                            (operation.id,),
+                        )
+                    connection.commit()
+                result = execute_rename_operation(self.settings, operation.id)
+                self.assertEqual(1, result.failed_count)
+                self.assertIn("重新生成干跑", result.items[0].message)
+                self.assertTrue(self.source.exists())
+
+    def test_duplicate_execution_and_preview_mutations_are_blocked_while_running(self):
+        preview, operation = self._safeDryRun()
+        competing = create_rename_dry_run(self.settings, [preview.id])
+        entered = Event()
+        proceed = Event()
+
+        def checkReady(*args):
+            entered.set()
+            if not proceed.wait(timeout=10):
+                raise RuntimeError("测试等待超时")
+            return ConnectionTestResult(True, "可执行")
+
+        with patch("app.service.shared_protocols.local.LocalProtocol.check_rename_ready", side_effect=checkReady) as readiness:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(execute_rename_operation, self.settings, operation.id)
+                try:
+                    self.assertTrue(entered.wait(timeout=5))
+                    duplicate = execute_rename_operation(self.settings, operation.id)
+                    self.assertEqual("running", duplicate.status)
+                    with self.assertRaisesRegex(ValueError, "其他批次"):
+                        execute_rename_operation(self.settings, competing.id)
+                    for mutate in (
+                        lambda: update_rename_preview(self.settings, preview.id, "Other"),
+                        lambda: exclude_rename_preview(self.settings, preview.id),
+                        lambda: generate_rename_previews(self.settings),
+                    ):
+                        with self.assertRaisesRegex(ValueError, "正在执行"):
+                            mutate()
+                finally:
+                    proceed.set()
+                result = future.result(timeout=10)
+        self.assertEqual("completed", result.status)
+        self.assertEqual(1, result.renamed_count)
+        self.assertEqual(1, readiness.call_count)
+
     def test_execute_updates_scan_file_index_after_successful_rename(self):
         generate_rename_previews(self.settings)
         preview = list_rename_previews(self.settings)[0]
@@ -207,6 +536,33 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual(0, operation.ready_count)
         self.assertEqual(2, operation.conflict_count)
         self.assertTrue(all(item.status == "conflict" for item in operation.items))
+
+    def test_systemic_credential_failure_stops_remaining_items(self):
+        second_source = self.media_dir / "Movie.2025.2160p.mkv"
+        second_source.write_text("movie-2", encoding="utf-8")
+        self._insert_additional_media_file(2, second_source)
+        generate_rename_previews(self.settings)
+        previews = list_rename_previews(self.settings)
+        update_rename_preview(self.settings, previews[0].id, "Movie.First")
+        update_rename_preview(self.settings, previews[1].id, "Movie.Second")
+        operation = create_rename_dry_run(self.settings, [preview.id for preview in previews])
+
+        with (
+            patch(
+                "app.service.rename_operation_service._validateItemSnapshot",
+                side_effect=CredentialError("凭据密钥缺失"),
+            ) as validate_snapshot,
+            patch("app.service.rename_operation_service.moveFileNoReplace") as mover,
+        ):
+            result = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual(["failed", "ready"], [item.status for item in result.items])
+        self.assertIn("凭据密钥缺失", result.items[0].message or "")
+        self.assertEqual(1, validate_snapshot.call_count)
+        mover.assert_not_called()
+        self.assertTrue(self.source.exists())
+        self.assertTrue(second_source.exists())
 
     def test_dry_run_marks_empty_target_name_as_conflict(self):
         generate_rename_previews(self.settings)
@@ -333,12 +689,175 @@ class RenameOperationDryRunTest(unittest.TestCase):
         self.assertEqual(1, executed.failed_count)
         self.assertIn("远程媒体源正在执行写操作", executed.items[0].message)
 
+    def test_two_remote_items_commit_individually_without_holding_write_lock_during_move(self):
+        self._insert_webdav_preview()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "INSERT INTO media_files (id, media_source_id, scan_job_id, file_path, file_name, extension, "
+                "file_size, modified_at, created_at) VALUES (4, 2, 2, ?, 'Second.mkv', '.mkv', 2048, 'now', 'now')",
+                ("https://nas.example/dav/Second.mkv",),
+            )
+            connection.execute(
+                "INSERT INTO rename_previews (id, media_file_id, media_type, parsed_title, original_extension, "
+                "suggested_name, status, created_at, updated_at) "
+                "VALUES (4, 4, 'movie', 'Second', '.mkv', 'Second.Safe.mkv', 'generated', 'now', 'now')"
+            )
+            connection.commit()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3, 4])
+        moves = []
+
+        def moveFile(sourcePath, targetPath, context=None):
+            with closing(sqlite3.connect(self.settings.database_path, timeout=0.1)) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if moves:
+                    self.assertEqual("renamed", connection.execute(
+                        "SELECT status FROM rename_operation_items WHERE id = ?", (operation.items[0].id,),
+                    ).fetchone()[0])
+                connection.rollback()
+            moves.append(sourcePath)
+            return ConnectionTestResult(True, "已移动")
+
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", side_effect=moveFile):
+            result = execute_rename_operation(self.settings, operation.id)
+        self.assertEqual(2, len(moves))
+        self.assertEqual(2, result.renamed_count)
+        self.assertEqual(0, result.failed_count)
+
+    def test_remote_move_success_with_business_failure_remains_recoverable(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3])
+        with (
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", return_value=ConnectionTestResult(True, "已移动")),
+            patch("app.service.rename_operation_service._update_successful_remote_media_record", side_effect=sqlite3.OperationalError("注入业务提交失败")),
+        ):
+            result = execute_rename_operation(self.settings, operation.id)
+        self.assertEqual("failed", result.status)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            remoteRow = connection.execute("SELECT status, error_message FROM remote_operation_items").fetchone()
+            mediaPath = connection.execute("SELECT file_path FROM media_files WHERE id = 3").fetchone()[0]
+            lockStatus = connection.execute("SELECT status FROM remote_operation_locks").fetchone()[0]
+        self.assertEqual("recovery_required", remoteRow[0])
+        self.assertIn("远端已移动", remoteRow[1])
+        self.assertTrue(mediaPath.endswith("Movie.2024.1080p.mkv"))
+        self.assertEqual("released", lockStatus)
+
+    def test_remote_move_indeterminate_remains_recovery_required(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3])
+        with patch(
+            "app.service.shared_protocols.webdav.WebDavProtocol.move_file",
+            return_value=ConnectionTestResult(False, "HTTP 204 结果待核查", indeterminate=True),
+        ) as mover:
+            result = execute_rename_operation(self.settings, operation.id)
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual(1, result.failed_count)
+        mover.assert_called_once()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            remoteRow = connection.execute(
+                "SELECT status, error_message FROM remote_operation_items"
+            ).fetchone()
+        self.assertEqual("recovery_required", remoteRow[0])
+        self.assertIn("人工核查", remoteRow[1])
+
+    def test_remote_intent_failure_releases_lease_and_does_not_move(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3])
+        with (
+            patch("app.service.rename_operation_service.create_remote_operation_item", side_effect=sqlite3.OperationalError("注入意图失败")),
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file") as mover,
+        ):
+            result = execute_rename_operation(self.settings, operation.id)
+        mover.assert_not_called()
+        self.assertEqual("failed", result.status)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual("released", connection.execute("SELECT status FROM remote_operation_locks").fetchone()[0])
+
+    def test_remote_identity_change_after_dry_run_does_not_move(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3])
+        changed = RemoteFileEntry(
+            path="https://nas.example/dav/Movie.2024.1080p.mkv", name="Movie.2024.1080p.mkv",
+            extension=".mkv", file_size=2048, modified_at="2026-01-01T00:00:00+00:00", version='"replaced"',
+        )
+        with (
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.get_file_info", return_value=changed),
+            patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file") as mover,
+        ):
+            result = execute_rename_operation(self.settings, operation.id)
+        self.assertEqual(1, result.failed_count)
+        mover.assert_not_called()
+
+    def test_remote_execution_passes_dry_run_etag_for_conditional_move(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3])
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", return_value=ConnectionTestResult(True, "已移动")) as mover:
+            result = execute_rename_operation(self.settings, operation.id)
+        self.assertEqual("completed", result.status)
+        self.assertEqual('"source-etag"', mover.call_args.args[2].expected_source_version)
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            index = connection.execute(
+                "SELECT file_path, status, fingerprint, rename_preview_id FROM scan_file_index WHERE media_source_id = 2"
+            ).fetchone()
+            targetVersion = connection.execute("SELECT target_version FROM remote_operation_items").fetchone()[0]
+        self.assertEqual("https://nas.example/dav/Movie.Safe.mkv", index[0])
+        self.assertEqual("active", index[1])
+        self.assertIn('"source-etag"', index[2])
+        self.assertEqual(3, index[3])
+        self.assertEqual('"source-etag"', targetVersion)
+
+    def test_remote_dry_run_requires_strong_etag(self):
+        self._insert_webdav_preview()
+        for version in (None, 'W/"weak"'):
+            with (
+                self.subTest(version=version),
+                patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")),
+                patch("app.service.shared_protocols.webdav.WebDavProtocol.get_file_info", return_value=RemoteFileEntry(
+                    path="https://nas.example/dav/Movie.2024.1080p.mkv", name="Movie.mkv", extension=".mkv",
+                    file_size=2048, modified_at="", version=version,
+                )),
+            ):
+                with self.assertRaisesRegex(ValueError, "强 ETag"):
+                    create_rename_dry_run(self.settings, [3])
+
+    def test_remote_lock_release_failure_does_not_erase_committed_rename(self):
+        self._insert_webdav_preview()
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.check_rename_ready", return_value=ConnectionTestResult(True, "可执行")):
+            operation = create_rename_dry_run(self.settings, [3])
+        with patch("app.service.shared_protocols.webdav.WebDavProtocol.move_file", return_value=ConnectionTestResult(True, "已移动")), patch(
+                "app.service.rename_operation_service.release_remote_operation_lock", side_effect=sqlite3.OperationalError("synthetic release failure")):
+            result = execute_rename_operation(self.settings, operation.id)
+        self.assertEqual(("completed", 1, 0, 0), (result.status, result.renamed_count, result.failed_count, result.ready_count))
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            self.assertEqual("completed", connection.execute("SELECT status FROM remote_operation_items").fetchone()[0])
+            self.assertEqual("active", connection.execute("SELECT status FROM remote_operation_locks").fetchone()[0])
+            self.assertEqual("renamed", connection.execute("SELECT status FROM rename_operation_items WHERE operation_id=?", (operation.id,)).fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM operation_logs WHERE task_id=? AND stage='rename_lock_release_failed'", (operation.id,)).fetchone()[0])
+
     def _insert_webdav_preview(self):
+        infoPatch = patch(
+            "app.service.shared_protocols.webdav.WebDavProtocol.get_file_info",
+            side_effect=lambda path, context=None: RemoteFileEntry(
+                path=path, name=path.rsplit("/", 1)[-1], extension=".mkv",
+                file_size=2048, modified_at="2026-01-01T00:00:00+00:00", version='"source-etag"',
+            ),
+        )
+        infoPatch.start()
+        self.addCleanup(infoPatch.stop)
         with closing(sqlite3.connect(self.settings.database_path)) as connection:
             connection.execute(
                 "INSERT INTO media_sources "
-                "(id, name, path, path_type, protocol, username, encrypted_secret, auth_type, enabled, created_at, updated_at) "
-                "VALUES (2, 'webdav', 'https://nas.example/dav/', 'webdav', 'webdav', NULL, NULL, 'none', 1, 'now', 'now')"
+                "(id, name, path, path_type, protocol, username, encrypted_secret, auth_type, credential_version, "
+                "capability_snapshot_json, enabled, created_at, updated_at) "
+                "VALUES (2, 'webdav', 'https://nas.example/dav/', 'webdav', 'webdav', NULL, NULL, 'none', 1, ?, 1, 'now', 'now')",
+                (json.dumps({"conditional_move": {"status": "verified", "endpoint": "https://nas.example/dav/",
+                    "credential_version": 1}}),),
             )
             connection.execute(
                 "INSERT INTO scan_jobs "
@@ -374,8 +893,8 @@ class RenameOperationDryRunTest(unittest.TestCase):
             def __exit__(self, exc_type, exc, traceback):
                 return False
 
-            def read(self):
-                return self.body
+            def read(self, size=-1):
+                return self.body if size < 0 else self.body[:size]
 
         source_xml = """<?xml version="1.0" encoding="utf-8"?>
         <d:multistatus xmlns:d="DAV:">

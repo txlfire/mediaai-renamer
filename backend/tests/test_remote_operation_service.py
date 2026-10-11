@@ -3,6 +3,11 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from unittest.mock import patch
+
+from app.service import remote_operation_service
 
 from app.core.config import AppSettings, LoggingSettings
 from app.core.database import ensure_database
@@ -34,6 +39,84 @@ class RemoteOperationServiceTest(unittest.TestCase):
         media_dir.mkdir(parents=True, exist_ok=True)
         source = create_media_source(settings, "media", media_dir, True)
         return source.id
+
+    def test_concurrent_acquisition_has_one_winner_for_new_and_expired_leases(self):
+        for expired in (False, True):
+            with self.subTest(expired=expired), tempfile.TemporaryDirectory() as temp_dir:
+                settings = self.build_settings(Path(temp_dir))
+                ensure_database(settings)
+                sourceId = self.create_source(settings)
+                lockKey = f"media-source:{sourceId}:write"
+                if expired:
+                    acquire_remote_operation_lock(settings, media_source_id=sourceId, lock_key=lockKey)
+                    with closing(sqlite3.connect(settings.database_path)) as connection:
+                        connection.execute(
+                            "UPDATE remote_operation_locks SET expires_at = ? WHERE lock_key = ?",
+                            ("2000-01-01T00:00:00+00:00", lockKey),
+                        )
+                        connection.commit()
+                startBarrier = Barrier(2)
+                readBarrier = Barrier(2)
+                originalFetch = remote_operation_service._fetch_lock
+
+                def fetchLock(connection, key):
+                    lock = originalFetch(connection, key)
+                    # 旧实现的事务外读取会同时看到可用租约；新实现写入后读取不等待。
+                    if not connection.in_transaction:
+                        readBarrier.wait(timeout=5)
+                    return lock
+
+                def acquire(owner):
+                    startBarrier.wait(timeout=5)
+                    try:
+                        return acquire_remote_operation_lock(
+                            settings, media_source_id=sourceId, lock_key=lockKey, owner=owner,
+                        )
+                    except RemoteOperationLockConflict:
+                        return None
+
+                with patch.object(remote_operation_service, "_fetch_lock", side_effect=fetchLock):
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        results = list(executor.map(acquire, ("first", "second")))
+                winners = [result for result in results if result is not None]
+                self.assertEqual(1, len(winners))
+                with closing(sqlite3.connect(settings.database_path)) as connection:
+                    token = connection.execute(
+                        "SELECT lease_token FROM remote_operation_locks WHERE lock_key = ?", (lockKey,),
+                    ).fetchone()[0]
+                self.assertEqual(winners[0].lease_token, token)
+
+    def test_expired_or_invalid_expiry_cannot_be_renewed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            sourceId = self.create_source(settings)
+            lock = acquire_remote_operation_lock(
+                settings, media_source_id=sourceId, lock_key=f"media-source:{sourceId}:write",
+            )
+            for expiry in ("2000-01-01T00:00:00+00:00", "invalid"):
+                with self.subTest(expiry=expiry):
+                    with closing(sqlite3.connect(settings.database_path)) as connection:
+                        connection.execute(
+                            "UPDATE remote_operation_locks SET expires_at = ? WHERE id = ?", (expiry, lock.id),
+                        )
+                        connection.commit()
+                    with self.assertRaises(RemoteOperationLockError):
+                        heartbeat_remote_operation_lock(settings, lock.lock_key, lock.lease_token)
+            with self.assertRaises(RemoteOperationLockConflict):
+                acquire_remote_operation_lock(settings, media_source_id=sourceId, lock_key=lock.lock_key)
+
+    def test_valid_heartbeat_preserves_token_and_extends_expiry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            sourceId = self.create_source(settings)
+            lock = acquire_remote_operation_lock(
+                settings, media_source_id=sourceId, lock_key=f"media-source:{sourceId}:write", ttl_seconds=1,
+            )
+            updated = heartbeat_remote_operation_lock(settings, lock.lock_key, lock.lease_token, ttl_seconds=60)
+            self.assertEqual(lock.lease_token, updated.lease_token)
+            self.assertGreater(updated.expires_at, lock.expires_at)
 
     def test_acquire_lock_blocks_competing_active_lease_and_release_allows_reacquire(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -141,6 +224,63 @@ class RemoteOperationServiceTest(unittest.TestCase):
             self.assertEqual("pending", second.status)
             self.assertEqual({"step": "prepared"}, second.recovery)
 
+    def test_concurrent_remote_operation_item_creation_returns_one_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            source_id = self.create_source(settings)
+            startBarrier = Barrier(2)
+
+            def createItem(_index):
+                startBarrier.wait(timeout=5)
+                return create_remote_operation_item(
+                    settings,
+                    media_source_id=source_id,
+                    operation_type="rename",
+                    idempotency_key="rename:concurrent-source:target",
+                    source_path="/remote/concurrent-source.mkv",
+                    target_path="/remote/concurrent-target.mkv",
+                    source_version='"etag-concurrent"',
+                    recovery={"step": "prepared"},
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                items = list(executor.map(createItem, range(2)))
+
+            self.assertEqual(items[0].id, items[1].id)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM remote_operation_items WHERE idempotency_key = ?",
+                    ("rename:concurrent-source:target",),
+                ).fetchone()[0]
+            self.assertEqual(1, count)
+
+    def test_idempotency_key_rejects_different_immutable_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            source_id = self.create_source(settings)
+            create_remote_operation_item(
+                settings,
+                media_source_id=source_id,
+                operation_type="rename",
+                idempotency_key="rename:payload-check",
+                source_path="/remote/source.mkv",
+                target_path="/remote/target.mkv",
+                source_version='"etag-a"',
+            )
+
+            with self.assertRaisesRegex(ValueError, "不同的请求载荷"):
+                create_remote_operation_item(
+                    settings,
+                    media_source_id=source_id,
+                    operation_type="rename",
+                    idempotency_key="rename:payload-check",
+                    source_path="/remote/source.mkv",
+                    target_path="/remote/other-target.mkv",
+                    source_version='"etag-a"',
+                )
+
     def test_update_remote_operation_item_status_records_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = self.build_settings(Path(temp_dir))
@@ -205,6 +345,32 @@ class RemoteOperationServiceTest(unittest.TestCase):
             self.assertEqual([third.id, second.id], [item.id for item in page.items])
             self.assertEqual("media", page.items[0].media_source_name)
             self.assertNotEqual(first.id, page.items[0].id)
+
+    def test_list_remote_operation_items_keeps_pages_stable_when_status_updates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            source_id = self.create_source(settings)
+            items = [
+                create_remote_operation_item(
+                    settings,
+                    media_source_id=source_id,
+                    operation_type="rename",
+                    idempotency_key=f"rename:stable:{index}",
+                    source_path=f"/remote/source-{index}.mkv",
+                    target_path=f"/remote/target-{index}.mkv",
+                )
+                for index in range(4)
+            ]
+
+            first_page = list_remote_operation_items(settings, page=1, page_size=2)
+            update_remote_operation_item_status(settings, items[0].id, "completed")
+            second_page = list_remote_operation_items(settings, page=2, page_size=2)
+
+            first_ids = {item.id for item in first_page.items}
+            second_ids = {item.id for item in second_page.items}
+            self.assertTrue(first_ids.isdisjoint(second_ids))
+            self.assertEqual({item.id for item in items}, first_ids | second_ids)
 
     def test_list_remote_operation_items_filters_source_type_and_status(self):
         with tempfile.TemporaryDirectory() as temp_dir:

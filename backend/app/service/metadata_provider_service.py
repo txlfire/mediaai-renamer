@@ -10,6 +10,8 @@ from time import perf_counter
 from urllib.parse import urlparse
 
 from app.core.config import AppSettings
+from app.service.external_request_budget_service import ExternalRequestBudget
+from app.service.audit_service import AuditWriteContext, record_audit_event
 from app.service.bangumi_client import BANGUMI_API_BASE_URL, BangumiClient
 from app.service.douban_proxy_client import DoubanProxyClient
 from app.service.media_source_secret import decrypt_secret, encrypt_secret, has_secret
@@ -184,10 +186,13 @@ def update_metadata_provider_config(
     settings: AppSettings,
     provider: str,
     payload: dict[str, object],
+    *,
+    auditContext: AuditWriteContext | None = None,
 ) -> MetadataProviderConfig:
     """保存元数据源配置；空 API Key 表示保留原密钥。"""
 
     provider = _validate_provider(provider)
+    context = auditContext or AuditWriteContext()
     current = get_metadata_provider_config(settings, provider)
     enabled = bool(payload.get("enabled", current.enabled))
     priority = _validate_int(payload.get("priority", current.priority), "优先级", 0, 1000)
@@ -231,6 +236,11 @@ def update_metadata_provider_config(
                 now,
             ),
         )
+        record_audit_event(settings, event_type="settings.update", action="update_metadata_provider",
+            result="success", summary=f"保存元数据源配置：{provider}", target_type="metadata_provider",
+            target_id=provider, actor=context.actor, actor_name="system" if context.actor is None else None,
+            ip_address=context.ipAddress, user_agent=context.userAgent,
+            detail={"provider": provider, "values": payload}, connection=connection)
         connection.commit()
         row = connection.execute(
             "SELECT * FROM metadata_provider_configs WHERE provider = ?",
@@ -246,6 +256,7 @@ def test_metadata_provider_config(settings: AppSettings, provider: str) -> dict[
     if config.provider == PROVIDER_BANGUMI:
         startedAt = perf_counter()
         client = BangumiClient(
+            requestBudget=ExternalRequestBudget(settings, "bangumi"),
             base_url=config.base_url,
             access_token=get_metadata_provider_api_key(settings, provider),
             timeout_seconds=config.timeout_seconds,
@@ -270,6 +281,7 @@ def test_metadata_provider_config(settings: AppSettings, provider: str) -> dict[
     if config.provider == PROVIDER_TVDB:
         startedAt = perf_counter()
         client = TvdbClient(
+            requestBudget=ExternalRequestBudget(settings, "tvdb"),
             base_url=config.base_url,
             api_key=get_metadata_provider_api_key(settings, provider),
             timeout_seconds=config.timeout_seconds,
@@ -301,6 +313,7 @@ def test_metadata_provider_config(settings: AppSettings, provider: str) -> dict[
     if config.provider == PROVIDER_DOUBAN_PROXY:
         startedAt = perf_counter()
         client = DoubanProxyClient(
+            requestBudget=ExternalRequestBudget(settings, "douban_proxy"),
             base_url=config.base_url,
             api_key=get_metadata_provider_api_key(settings, provider),
             timeout_seconds=config.timeout_seconds,

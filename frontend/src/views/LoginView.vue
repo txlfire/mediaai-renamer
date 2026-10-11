@@ -1,22 +1,27 @@
 <script setup lang="ts">
 import { Lock, User } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, reactive, ref } from "vue";
+import { ElMessage } from "element-plus";
+import { onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
-import { resolvePasswordAutocomplete } from "../utils/loginPreferences";
+import {
+  loadLoginPreferences,
+  resolvePasswordAutocomplete,
+  saveLoginPreferences,
+} from "../utils/loginPreferences";
 
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref<"login" | "bootstrap">("login");
+const loginPreferences = loadLoginPreferences();
 const form = reactive({
-  username: "admin",
+  username: loginPreferences.username || "admin",
   displayName: messages.auth.defaultDisplayName,
   password: "",
-  rememberPassword: false,
+  rememberPassword: loginPreferences.rememberPassword,
   rememberLogin: false,
 });
 const passwordDialogVisible = ref(false);
@@ -25,7 +30,6 @@ const passwordForm = reactive({
   newPassword: "",
   confirmPassword: "",
 });
-const showResetAdmin = computed(() => route.query.resetAdmin === "1");
 
 const redirectPath = () => {
   const redirect = route.query.redirect;
@@ -35,6 +39,7 @@ const redirectPath = () => {
 async function submitLogin() {
   try {
     await authStore.login(form.username, form.password, form.rememberLogin);
+    saveLoginPreferences(form.username, form.rememberPassword);
     await handlePostLogin(form.password);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : messages.auth.loginFailed);
@@ -76,7 +81,7 @@ async function submitChangePassword() {
     pendingCurrentPassword.value = "";
     passwordForm.newPassword = "";
     passwordForm.confirmPassword = "";
-    await router.replace(redirectPath());
+    await router.replace("/login");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : messages.auth.changePasswordFailed);
   }
@@ -87,27 +92,6 @@ async function continueWithoutChange() {
   passwordForm.newPassword = "";
   passwordForm.confirmPassword = "";
   await router.replace(redirectPath());
-}
-
-async function resetAdminPassword() {
-  try {
-    await ElMessageBox.confirm(
-      messages.auth.resetAdminPasswordConfirm,
-      messages.auth.resetAdminPassword,
-      {
-        confirmButtonText: messages.common.confirm,
-        cancelButtonText: messages.common.cancel,
-        type: "warning",
-      },
-    );
-    await authStore.resetAdminPassword();
-    ElMessage.success(messages.auth.resetAdminPasswordSuccess);
-  } catch (error) {
-    if (error === "cancel" || error === "close") {
-      return;
-    }
-    ElMessage.error(error instanceof Error ? error.message : messages.auth.resetAdminPasswordFailed);
-  }
 }
 
 onMounted(async () => {
@@ -162,15 +146,6 @@ onMounted(async () => {
             </div>
             <el-button class="login-submit" native-type="submit" type="primary" :loading="authStore.loading">
               {{ messages.auth.loginButton }}
-            </el-button>
-            <el-button
-              v-if="showResetAdmin"
-              class="login-reset"
-              text
-              :loading="authStore.loading"
-              @click="resetAdminPassword"
-            >
-              {{ messages.auth.resetAdminPassword }}
             </el-button>
           </el-form>
         </el-tab-pane>

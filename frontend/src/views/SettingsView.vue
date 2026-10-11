@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Check, Delete, Edit, InfoFilled, Key, Plus, Refresh } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { isAxiosError } from "axios";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 import type {
   AiConnectionTestResult,
@@ -10,18 +11,20 @@ import type {
   AuthUser,
   ExternalSubmissionBlockRecord,
   ExternalSubmissionBlockStatus,
-  ImdbConnectionTestResult,
+  ExternalSubmissionAuthorization,
+  ExternalSubmissionOutcome,
   ImdbStoredConnectionTestResult,
+  LogStorageStats,
   MetadataProviderConfig,
   MetadataProviderKey,
   MetadataProviderTestResult,
   NamingTemplateDiffResult,
   NamingTemplatePreviewResult,
-  TmdbChannelTestResult,
   TmdbConnectionTestResult,
 } from "../api/client";
 import {
   cleanupLogs,
+  fetchLogStorage,
   createUser,
   diffNamingTemplate,
   fetchExternalSubmissionBlocks,
@@ -32,6 +35,9 @@ import {
   resetUserPassword,
   testNamingTemplate,
   updateExternalSubmissionBlock,
+  prepareExternalSubmission,
+  submitExternalSubmission,
+  fetchExternalSubmissionOutcome,
   updateUser,
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
@@ -43,7 +49,7 @@ import { usePaginationStore } from "../stores/pagination";
 import { useSettingsStore } from "../stores/settings";
 import { getAiProviderDefaults } from "../utils/aiProviderDefaults";
 import { resolveStoredCollapsedState } from "../utils/collapsibleSettings";
-import { formatDateTime } from "../utils/displayFormat";
+import { formatDateTime, formatFileSize } from "../utils/displayFormat";
 import {
   resolveSupplementalMetadataProviderTabs,
   type SupplementalMetadataProviderKey,
@@ -61,6 +67,26 @@ const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const paginationStore = usePaginationStore();
 const activeCategory = ref("tmdb");
+const logStorage = ref<LogStorageStats | null>(null);
+let logStorageRequestVersion = 0;
+let auditRequestVersion = 0;
+let usersRequestVersion = 0;
+let externalBlocksRequestVersion = 0;
+let viewActive = true;
+
+async function loadLogStorage() {
+  const version = ++logStorageRequestVersion;
+  if (!authStore.hasPermission("audit:read")) {
+    logStorage.value = null;
+    return;
+  }
+  try {
+    const result = await fetchLogStorage();
+    if (version === logStorageRequestVersion) logStorage.value = result;
+  } catch {
+    if (version === logStorageRequestVersion) logStorage.value = null;
+  }
+}
 const pageText = messages.settings;
 const settingsWriteDisabled = computed(() => !authStore.hasPermission("settings:write"));
 const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? messages.auth.permissionDenied : ""));
@@ -82,6 +108,14 @@ const defaultSensitiveWordsDialogVisible = ref(false);
 const externalSubmissionBlocks = ref<ExternalSubmissionBlockRecord[]>([]);
 const externalSubmissionBlockTotal = ref(0);
 const externalSubmissionBlocksLoading = ref(false);
+const externalSubmissionDialogVisible = ref(false);
+const externalSubmissionGrant = ref<ExternalSubmissionAuthorization | null>(null);
+const externalSubmissionOutcome = ref<ExternalSubmissionOutcome | null>(null);
+const externalSubmissionRecordId = ref<number | null>(null);
+const externalSubmissionReason = ref("");
+const externalSubmissionBusy = ref(false);
+const externalSubmissionAttempted = ref(false);
+const externalSubmissionRequestRejected = ref(false);
 const namingWorkbenchDialogVisible = ref(false);
 const namingWorkbenchMode = ref<"test" | "diff">("test");
 const namingWorkbenchLoading = ref(false);
@@ -111,6 +145,7 @@ const form = reactive({
   language: "zh-CN",
   region: "CN",
   timeoutSeconds: "15",
+  metadataBudgetSeconds: "30",
   enabled: false,
   priority: 1,
   imdbEnabled: false,
@@ -145,10 +180,14 @@ const form = reactive({
   logLevel: "INFO",
   logPath: "logs",
   logArchiveAfterDays: "7",
+  fileLogMaxTotalMb: 512,
+  logCleanupIntervalSeconds: 60,
   logDefaultLimit: "200",
   operationLogMaxTotalMb: "128",
   operationLogMaxTaskMb: "16",
   operationLogCleanupBatchSize: "1000",
+  auditIntentMaxRecords: "20000",
+  auditIntentMaxTotalMb: "64",
   forceDryRun: true,
   requireSecondConfirmation: true,
   persistFailureDetail: true,
@@ -411,6 +450,7 @@ watch(activeCategory, (category) => {
   if (category === "audit") {
     void loadAuditEvents();
   }
+  if (category === "operations") void loadLogStorage();
 });
 
 watch(
@@ -442,6 +482,7 @@ function auditResultLabel(result: string) {
 }
 
 function auditResultTagType(result: string) {
+  if (result === "partial_success") return "warning";
   return result === "success" ? "success" : result === "failed" ? "danger" : "info";
 }
 
@@ -458,6 +499,8 @@ function openAuditDetail(event: AuditEvent) {
 }
 
 async function loadAuditEvents() {
+  if (!viewActive) return;
+  const version = ++auditRequestVersion;
   auditLoading.value = true;
   try {
     const result = await fetchAuditEvents({
@@ -467,13 +510,15 @@ async function loadAuditEvents() {
       page: auditPagination.value.currentPage,
       page_size: auditPagination.value.pageSize,
     });
+    if (!viewActive || version !== auditRequestVersion) return;
     auditEvents.value = result.items;
     auditTotal.value = result.total;
     paginationStore.setPage("audit-events", result.page);
   } catch (error) {
+    if (!viewActive || version !== auditRequestVersion) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.audit.loadFailed);
   } finally {
-    auditLoading.value = false;
+    if (viewActive && version === auditRequestVersion) auditLoading.value = false;
   }
 }
 
@@ -496,15 +541,19 @@ function resetUserForm() {
 }
 
 async function loadUsers() {
+  if (!viewActive) return;
+  const version = ++usersRequestVersion;
   usersLoading.value = true;
   try {
     const result = await fetchUsers();
+    if (!viewActive || version !== usersRequestVersion) return;
     users.value = result.items;
     availableUserPermissions.value = result.permissions;
   } catch (error) {
+    if (!viewActive || version !== usersRequestVersion) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.users.loadFailed);
   } finally {
-    usersLoading.value = false;
+    if (viewActive && version === usersRequestVersion) usersLoading.value = false;
   }
 }
 
@@ -584,6 +633,7 @@ function syncForm() {
   form.language = settingValue("tmdb.language", "zh-CN");
   form.region = settingValue("tmdb.region", "CN");
   form.timeoutSeconds = String(Math.max(10, Math.round(Number(settingValue("tmdb.timeout_ms", 15000)) / 1000)));
+  form.metadataBudgetSeconds = String(settingValue("metadata.total_timeout_seconds", 30));
   form.enabled = Boolean(settingValue("tmdb.enabled", false));
   form.priority = Number(settingValue("tmdb.priority", 1));
   form.imdbEnabled = Boolean(settingValue("imdb.enabled", false));
@@ -623,10 +673,14 @@ function syncForm() {
   form.logLevel = String(settingValue("logging.level", "INFO"));
   form.logPath = String(settingValue("logging.path", "logs"));
   form.logArchiveAfterDays = String(settingValue("logging.archive_after_days", 7));
+  form.fileLogMaxTotalMb = Number(settingValue("logging.max_total_mb", 512));
+  form.logCleanupIntervalSeconds = Number(settingValue("logging.cleanup_interval_seconds", 60));
   form.logDefaultLimit = String(settingValue("operations.log_default_limit", 200));
   form.operationLogMaxTotalMb = String(settingValue("operation_logs.max_total_mb", 128));
   form.operationLogMaxTaskMb = String(settingValue("operation_logs.max_task_mb", 16));
   form.operationLogCleanupBatchSize = String(settingValue("operation_logs.cleanup_batch_size", 1000));
+  form.auditIntentMaxRecords = String(settingValue("audit_intents.max_records", 20000));
+  form.auditIntentMaxTotalMb = String(settingValue("audit_intents.max_total_mb", 64));
   form.forceDryRun = Boolean(settingValue("operations.force_dry_run", true));
   form.requireSecondConfirmation = Boolean(settingValue("operations.require_second_confirmation", true));
   form.persistFailureDetail = Boolean(settingValue("operations.persist_failure_detail", true));
@@ -648,6 +702,7 @@ function syncForm() {
 function onlyDigits(
   key:
     | "timeoutSeconds"
+    | "metadataBudgetSeconds"
     | "imdbTimeoutSeconds"
     | "aiTimeoutSeconds"
     | "aiMaxRetries"
@@ -663,6 +718,8 @@ function onlyDigits(
     | "operationLogMaxTotalMb"
     | "operationLogMaxTaskMb"
     | "operationLogCleanupBatchSize"
+    | "auditIntentMaxRecords"
+    | "auditIntentMaxTotalMb"
     | "batchLimit"
     | "sharedConnectionTimeoutSeconds"
     | "sharedDirectoryBrowseLimit"
@@ -699,6 +756,7 @@ async function saveTmdbSettings(options: { rethrow?: boolean } = {}) {
       "tmdb.language": form.language,
       "tmdb.region": form.region,
       "tmdb.timeout_ms": timeoutSeconds * 1000,
+      "metadata.total_timeout_seconds": Number(form.metadataBudgetSeconds || 30),
       "tmdb.enabled": form.enabled,
       "tmdb.priority": priority,
       "scan.minimum_file_size": minimumFileSize,
@@ -957,18 +1015,23 @@ async function saveOperationSettings() {
       "operations.log_retention_days": Number(form.logRetentionDays || 30),
       "logging.retention_days": Number(form.logRetentionDays || 30),
       "logging.level": form.logLevel,
-      "logging.path": form.logPath.trim() || "logs",
+      "logging.path": form.logPath.trim(),
       "logging.archive_after_days": Number(form.logArchiveAfterDays || 7),
+      "logging.max_total_mb": form.fileLogMaxTotalMb,
+      "logging.cleanup_interval_seconds": form.logCleanupIntervalSeconds,
       "operations.log_default_limit": Number(form.logDefaultLimit || 200),
       "operation_logs.max_total_mb": Number(form.operationLogMaxTotalMb || 128),
       "operation_logs.max_task_mb": Number(form.operationLogMaxTaskMb || 16),
       "operation_logs.cleanup_batch_size": Number(form.operationLogCleanupBatchSize || 1000),
+      "audit_intents.max_records": Number(form.auditIntentMaxRecords || 20000),
+      "audit_intents.max_total_mb": Number(form.auditIntentMaxTotalMb || 64),
       "operations.force_dry_run": true,
       "operations.require_second_confirmation": true,
       "operations.persist_failure_detail": form.persistFailureDetail,
       "operations.batch_limit": Number(form.batchLimit || 200),
     });
     syncForm();
+    await loadLogStorage();
     ElMessage.success(pageText.saved);
   } catch (error) {
     await notifySaveFailed(error);
@@ -978,12 +1041,13 @@ async function saveOperationSettings() {
 async function cleanupLogFiles() {
   try {
     const result = await cleanupLogs();
-    ElMessage.success(
-      formatMessage(pageText.operations.logCleanupSummary, {
+    const summary = formatMessage(pageText.operations.logCleanupSummary, {
         archived: result.archived_count,
         deleted: result.deleted_count,
-      }),
-    );
+      });
+    if (result.has_more || result.over_budget) ElMessage.warning(`${summary}；${result.message || pageText.operations.logCleanupDeferred}`);
+    else ElMessage.success(summary);
+    await loadLogStorage();
   } catch (error) {
     await notifySaveFailed(error);
   }
@@ -1024,15 +1088,19 @@ async function savePrivacySettings() {
 }
 
 async function loadExternalSubmissionBlocks() {
+  if (!viewActive) return;
+  const version = ++externalBlocksRequestVersion;
   externalSubmissionBlocksLoading.value = true;
   try {
     const result = await fetchExternalSubmissionBlocks({ limit: 200 });
+    if (!viewActive || version !== externalBlocksRequestVersion) return;
     externalSubmissionBlocks.value = result.items;
     externalSubmissionBlockTotal.value = result.total;
   } catch (error) {
+    if (!viewActive || version !== externalBlocksRequestVersion) return;
     ElMessage.error(errorText(error));
   } finally {
-    externalSubmissionBlocksLoading.value = false;
+    if (viewActive && version === externalBlocksRequestVersion) externalSubmissionBlocksLoading.value = false;
   }
 }
 
@@ -1040,7 +1108,7 @@ function externalSubmissionStatusType(status: ExternalSubmissionBlockStatus) {
   if (status === "blocked") {
     return "danger";
   }
-  if (status === "override_submitted") {
+  if (["override_submitted", "override_submitting", "override_unknown", "override_failed"].includes(status)) {
     return "warning";
   }
   if (status === "ignored" || status === "archived") {
@@ -1086,26 +1154,61 @@ async function archiveExternalSubmission(record: ExternalSubmissionBlockRecord) 
 }
 
 async function overrideExternalSubmission(record: ExternalSubmissionBlockRecord) {
+  if (externalSubmissionBusy.value) return;
+  externalSubmissionBusy.value = true;
   try {
-    const reason = await ElMessageBox.prompt(
-      pageText.privacy.blockOverridePrompt,
-      pageText.privacy.blockOverrideTitle,
-      {
-        confirmButtonText: messages.common.confirm,
-        cancelButtonText: messages.common.cancel,
-        inputPattern: /.+/,
-        inputErrorMessage: pageText.privacy.blockOverrideReasonRequired,
-        type: "warning",
-      },
-    );
-    await updateExternalSubmissionDecision(
-      record,
-      "override_submitted",
-      pageText.privacy.blockDecisionOverride,
-      reason.value,
-    );
-  } catch {
-    // 用户取消确认时不提示错误。
+    externalSubmissionGrant.value = await prepareExternalSubmission(record.id);
+    externalSubmissionRecordId.value = record.id;
+    externalSubmissionOutcome.value = null;
+    externalSubmissionReason.value = "";
+    externalSubmissionAttempted.value = false;
+    externalSubmissionRequestRejected.value = false;
+    externalSubmissionDialogVisible.value = true;
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    externalSubmissionBusy.value = false;
+  }
+}
+
+async function confirmExternalSubmission() {
+  const grant = externalSubmissionGrant.value;
+  if (!grant || externalSubmissionBusy.value || externalSubmissionAttempted.value) return;
+  if (!externalSubmissionReason.value.trim()) {
+    ElMessage.warning(pageText.privacy.blockOverrideReasonRequired);
+    return;
+  }
+  externalSubmissionBusy.value = true;
+  externalSubmissionAttempted.value = true;
+  try {
+    externalSubmissionOutcome.value = await submitExternalSubmission(grant.snapshot.block_id, grant.id, externalSubmissionReason.value.trim());
+  } catch (error) {
+    ElMessage.error(errorText(error));
+    externalSubmissionRequestRejected.value = isAxiosError(error) && !!error.response && error.response.status >= 400 && error.response.status < 500;
+    externalSubmissionOutcome.value = { id: grant.id, status: externalSubmissionRequestRejected.value ? "failed" : "unknown",
+      message: externalSubmissionRequestRejected.value ? errorText(error) : pageText.privacy.blockOutcomeUnknown,
+      candidates: [], audit_pending: true };
+  } finally {
+    externalSubmissionBusy.value = false;
+    await loadExternalSubmissionBlocks();
+  }
+}
+
+async function showExternalSubmissionOutcome(recordId: number) {
+  if (externalSubmissionBusy.value) return;
+  externalSubmissionBusy.value = true;
+  try {
+    const result = await fetchExternalSubmissionOutcome(recordId);
+    externalSubmissionGrant.value = null;
+    externalSubmissionRecordId.value = recordId;
+    externalSubmissionOutcome.value = result;
+    externalSubmissionAttempted.value = true;
+    externalSubmissionRequestRejected.value = false;
+    externalSubmissionDialogVisible.value = true;
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    externalSubmissionBusy.value = false;
   }
 }
 
@@ -1722,29 +1825,12 @@ function stopAiTestingProgress() {
   aiTestingElapsedSeconds.value = 0;
 }
 
-async function runTmdbChannelTest(channel: "v4" | "v3"): Promise<TmdbChannelTestResult> {
-  startTestingProgress(channel);
-  try {
-    return await settingsStore.testTmdbSettingsChannel(channel);
-  } catch (error) {
-    return {
-      status: "failed",
-      message: error instanceof Error ? error.message : String(error),
-      error_type: "unknown",
-      response_ms: null,
-    };
-  } finally {
-    stopTestingProgress();
-  }
-}
-
 async function executeTmdbTest() {
   testResultDialogVisible.value = false;
   testResultModalAutoOpen.value = false;
+  startTestingProgress("v4");
   try {
-    const v4 = await runTmdbChannelTest("v4");
-    const v3 = await runTmdbChannelTest("v3");
-    const result = await settingsStore.saveTmdbTestResult(v4, v3);
+    const result = await settingsStore.testTmdbSettings();
     testResult.value = normalizeTmdbTestResult(result);
     testResultSnapshot.value = testResult.value.config_snapshot ?? buildTmdbFormSnapshot();
     savedTmdbSnapshot.value = testResult.value.config_snapshot ?? savedTmdbSnapshot.value;
@@ -1757,6 +1843,8 @@ async function executeTmdbTest() {
     };
     testResultSnapshot.value = buildTmdbFormSnapshot();
     lastTestTime.value = formatClock(new Date());
+  } finally {
+    stopTestingProgress();
   }
   testResultModalAutoOpen.value = true;
   testResultDialogVisible.value = true;
@@ -1767,21 +1855,29 @@ async function executeImdbTest() {
   imdbTestResultModalAutoOpen.value = false;
   startImdbTestingProgress();
   try {
-    const result = await settingsStore.testImdbSettings();
-    const saved = await settingsStore.saveImdbTestResult(result);
-    imdbTestResult.value = saved;
-    savedImdbSnapshot.value = saved.config_snapshot;
-    imdbLastTestTime.value = formatTestedAt(saved.test_time) || formatClock(new Date());
-  } catch (error) {
-    const failedResult: ImdbConnectionTestResult = {
-      status: "failed",
-      message: pageText.imdb.testFailed,
-      error_message: String(error),
+    const saved = await settingsStore.testImdbSettings();
+    imdbTestResult.value = {
+      id: 1,
+      connection_status: saved.status,
+      response_time: saved.response_ms ?? null,
+      error_message: saved.error_message ?? null,
+      config_snapshot: saved.config_snapshot ?? {},
+      test_time: saved.tested_at ?? new Date().toISOString(),
+      is_valid: saved.is_valid ?? true,
     };
-    const saved = await settingsStore.saveImdbTestResult(failedResult);
-    imdbTestResult.value = saved;
-    savedImdbSnapshot.value = saved.config_snapshot;
-    imdbLastTestTime.value = formatTestedAt(saved.test_time) || formatClock(new Date());
+    savedImdbSnapshot.value = imdbTestResult.value.config_snapshot;
+    imdbLastTestTime.value = formatTestedAt(imdbTestResult.value.test_time) || formatClock(new Date());
+  } catch (error) {
+    imdbTestResult.value = {
+      id: 1,
+      connection_status: "failed",
+      response_time: null,
+      error_message: error instanceof Error ? error.message : String(error),
+      config_snapshot: buildImdbFormSnapshot(),
+      test_time: new Date().toISOString(),
+      is_valid: false,
+    };
+    imdbLastTestTime.value = formatClock(new Date());
   } finally {
     stopImdbTestingProgress();
   }
@@ -2107,6 +2203,14 @@ onMounted(async () => {
     // The page can still be edited and saved if historical AI test loading fails.
   }
 });
+
+onBeforeUnmount(() => {
+  viewActive = false;
+  logStorageRequestVersion += 1;
+  auditRequestVersion += 1;
+  usersRequestVersion += 1;
+  externalBlocksRequestVersion += 1;
+});
 </script>
 
 <template>
@@ -2191,6 +2295,13 @@ onMounted(async () => {
                 @blur="validateTmdbTimeout"
                 @input="onlyDigits('timeoutSeconds')"
               >
+                <template #append>{{ pageText.tmdb.seconds }}</template>
+              </el-input>
+            </el-form-item>
+
+            <el-form-item :label="pageText.tmdb.metadataBudget">
+              <el-input v-model="form.metadataBudgetSeconds" class="settings-number-control" maxlength="3"
+                @input="onlyDigits('metadataBudgetSeconds')">
                 <template #append>{{ pageText.tmdb.seconds }}</template>
               </el-input>
             </el-form-item>
@@ -2599,8 +2710,12 @@ onMounted(async () => {
                       <el-button size="small" text type="info" @click="markExternalSubmissionIgnored(row)">
                         {{ pageText.privacy.blockIgnore }}
                       </el-button>
-                      <el-button size="small" text type="warning" @click="overrideExternalSubmission(row)">
+                      <el-button size="small" text type="warning" :disabled="externalSubmissionBusy || !['blocked', 'override_failed'].includes(row.status)" @click="overrideExternalSubmission(row)">
                         {{ pageText.privacy.blockOverride }}
+                      </el-button>
+                      <el-button v-if="['override_submitting', 'override_completed', 'override_failed', 'override_unknown'].includes(row.status)"
+                        size="small" text type="primary" :disabled="externalSubmissionBusy" @click="showExternalSubmissionOutcome(row.id)">
+                        {{ pageText.privacy.blockOutcome }}
                       </el-button>
                       <el-button size="small" text @click="archiveExternalSubmission(row)">
                         {{ pageText.privacy.blockArchive }}
@@ -2611,6 +2726,67 @@ onMounted(async () => {
               </el-table>
             </div>
 
+            <el-dialog v-model="externalSubmissionDialogVisible" :title="externalSubmissionOutcome ? pageText.privacy.blockOutcomeTitle : pageText.privacy.blockSnapshotTitle"
+              class="external-submission-dialog" width="min(680px, 92vw)" :close-on-click-modal="!externalSubmissionBusy" :close-on-press-escape="!externalSubmissionBusy"
+              :show-close="!externalSubmissionBusy">
+              <template v-if="externalSubmissionGrant && !externalSubmissionOutcome">
+                <el-alert :title="pageText.privacy.blockSnapshotWarning" type="warning" :closable="false" show-icon />
+                <el-alert
+                  :title="externalSubmissionGrant.snapshot.policy_evidence.matched_count > 0
+                    ? formatMessage(pageText.privacy.blockSnapshotPolicySummary, { count: externalSubmissionGrant.snapshot.policy_evidence.matched_count })
+                    : pageText.privacy.blockSnapshotPolicyEmpty"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                />
+                <el-descriptions :column="1" :label-width="105" border class="external-submission-snapshot">
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotFile">{{ externalSubmissionGrant.snapshot.file_name }}</el-descriptions-item>
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotPath">{{ externalSubmissionGrant.snapshot.file_path }}</el-descriptions-item>
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotParsed">
+                    {{ externalSubmissionGrant.snapshot.parsed.title }} · {{ externalSubmissionGrant.snapshot.parsed.year ?? '-' }}
+                    · {{ externalSubmissionGrant.snapshot.parsed.media_type }}
+                    · S{{ externalSubmissionGrant.snapshot.parsed.season ?? '-' }} E{{ externalSubmissionGrant.snapshot.parsed.episode ?? '-' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotService">
+                    {{ externalSubmissionGrant.snapshot.service.provider }} · {{ externalSubmissionGrant.snapshot.service.model ?? '-' }}
+                    · {{ externalSubmissionGrant.snapshot.service.auth_channel }}
+                  </el-descriptions-item>
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotEndpoint">{{ externalSubmissionGrant.snapshot.service.endpoint }}</el-descriptions-item>
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotPolicy">
+                    <div class="settings-word-dialog-list">
+                      <el-tag
+                        v-for="word in externalSubmissionGrant.snapshot.policy_evidence.matched_words_masked"
+                        :key="word"
+                        type="warning"
+                        effect="light"
+                      >
+                        {{ word }}
+                      </el-tag>
+                      <span v-if="externalSubmissionGrant.snapshot.policy_evidence.matched_count === 0">-</span>
+                    </div>
+                  </el-descriptions-item>
+                  <el-descriptions-item :label="pageText.privacy.blockSnapshotExpiry">{{ formatTestedAt(externalSubmissionGrant.expires_at) }}</el-descriptions-item>
+                </el-descriptions>
+                <el-form label-position="top"><el-form-item :label="pageText.privacy.blockSnapshotReason">
+                  <el-input v-model="externalSubmissionReason" type="textarea" :rows="2" maxlength="1000" show-word-limit :disabled="externalSubmissionBusy" />
+                </el-form-item></el-form>
+              </template>
+              <template v-if="externalSubmissionOutcome">
+                <el-alert :title="externalSubmissionOutcome.message" :type="externalSubmissionOutcome.status === 'completed' ? 'success' : 'warning'" :closable="false" show-icon />
+                <el-table :data="externalSubmissionOutcome.candidates" max-height="300" :empty-text="pageText.privacy.blockCandidateEmpty">
+                  <el-table-column prop="title" :label="pageText.privacy.blockCandidateTitle" min-width="150" show-overflow-tooltip />
+                  <el-table-column prop="year" :label="pageText.privacy.blockCandidateYear" width="85" />
+                  <el-table-column prop="media_type" :label="pageText.privacy.blockCandidateType" width="85" />
+                </el-table>
+              </template>
+              <template #footer>
+                <el-button :disabled="externalSubmissionBusy" @click="externalSubmissionDialogVisible = false">{{ messages.common.close }}</el-button>
+                <el-button v-if="externalSubmissionOutcome && externalSubmissionRecordId && !externalSubmissionRequestRejected" :icon="Refresh" :loading="externalSubmissionBusy"
+                  @click="showExternalSubmissionOutcome(externalSubmissionRecordId)">{{ messages.common.refresh }}</el-button>
+                <el-button v-if="externalSubmissionGrant && !externalSubmissionAttempted" type="warning" :loading="externalSubmissionBusy"
+                  @click="confirmExternalSubmission">{{ pageText.privacy.blockSubmitOnce }}</el-button>
+              </template>
+            </el-dialog>
             <el-dialog
               v-model="defaultSensitiveWordsDialogVisible"
               :title="pageText.privacy.defaultWordsAllTitle"
@@ -3084,6 +3260,15 @@ onMounted(async () => {
         </el-form>
 
         <el-form v-else-if="activeCategory === 'operations'" label-position="top" class="settings-form">
+          <div v-if="logStorage" class="log-storage-summary" role="status">
+            <span>{{ pageText.operations.fileLogStorage }} <strong>{{ formatFileSize(logStorage.managed_file_bytes) }} / {{ formatFileSize(logStorage.file_limit_bytes) }}</strong></span>
+            <span>{{ pageText.operations.operationLogStorage }} <strong>{{ formatFileSize(logStorage.operation_log_bytes) }}</strong></span>
+            <span>{{ pageText.operations.databaseFileStorage }} <strong>{{ formatFileSize(logStorage.database_file_bytes) }}</strong></span>
+            <span>WAL <strong>{{ formatFileSize(logStorage.wal_file_bytes) }}</strong></span>
+            <span>{{ pageText.operations.reusableStorage }} <strong>{{ formatFileSize(logStorage.database_reusable_bytes) }}</strong></span>
+            <el-tag v-if="logStorage.file_over_budget" type="warning">{{ pageText.operations.fileLogOverBudget }}</el-tag>
+            <small>{{ logStorage.message }}</small>
+          </div>
           <div class="settings-grid">
             <el-form-item
               v-if="!settingsWriteDisabled"
@@ -3120,6 +3305,12 @@ onMounted(async () => {
             <el-form-item :label="pageText.operations.logArchiveAfterDays">
               <el-input v-model="form.logArchiveAfterDays" maxlength="4" @input="onlyDigits('logArchiveAfterDays')" />
             </el-form-item>
+            <el-form-item :label="pageText.operations.fileLogMaxTotalMb">
+              <el-input-number v-model="form.fileLogMaxTotalMb" :min="16" :max="16384" :step="16" controls-position="right" class="log-budget-input" />
+            </el-form-item>
+            <el-form-item :label="pageText.operations.logCleanupIntervalSeconds">
+              <el-input-number v-model="form.logCleanupIntervalSeconds" :min="30" :max="86400" :step="30" controls-position="right" class="log-budget-input" />
+            </el-form-item>
             <el-form-item :label="pageText.operations.logDefaultLimit">
               <el-input v-model="form.logDefaultLimit" maxlength="5" @input="onlyDigits('logDefaultLimit')" />
             </el-form-item>
@@ -3132,6 +3323,13 @@ onMounted(async () => {
             <el-form-item :label="pageText.operations.operationLogCleanupBatchSize">
               <el-input v-model="form.operationLogCleanupBatchSize" maxlength="5" @input="onlyDigits('operationLogCleanupBatchSize')" />
             </el-form-item>
+            <el-form-item :label="pageText.operations.auditIntentMaxRecords">
+              <el-input v-model="form.auditIntentMaxRecords" maxlength="7" @input="onlyDigits('auditIntentMaxRecords')" />
+            </el-form-item>
+            <el-form-item :label="pageText.operations.auditIntentMaxTotalMb">
+              <el-input v-model="form.auditIntentMaxTotalMb" maxlength="4" @input="onlyDigits('auditIntentMaxTotalMb')" />
+            </el-form-item>
+            <p class="settings-audit-retention-hint">{{ pageText.operations.auditIntentRetentionHint }}</p>
             <el-form-item :label="pageText.operations.batchLimit">
               <el-input v-model="form.batchLimit" maxlength="5" @input="onlyDigits('batchLimit')" />
             </el-form-item>
@@ -3146,7 +3344,7 @@ onMounted(async () => {
             </el-form-item>
           </div>
           <div class="settings-actions">
-            <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(syncForm)">
+            <el-button :loading="settingsStore.loading" @click="settingsStore.loadSettings().then(() => { syncForm(); return loadLogStorage(); })">
               {{ messages.common.refresh }}
             </el-button>
             <el-button :loading="settingsStore.loading" @click="cleanupLogFiles">
@@ -3574,6 +3772,20 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.external-submission-snapshot {
+  margin: 12px 0;
+}
+.external-submission-snapshot :deep(.el-descriptions__table) {
+  table-layout: fixed;
+}
+:global(.external-submission-dialog .el-dialog__body) {
+  max-height: 65vh;
+  overflow-y: auto;
+}
+.external-submission-snapshot :deep(.el-descriptions__content) {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .naming-import-input {
   display: none;
 }
@@ -3710,6 +3922,14 @@ onMounted(async () => {
   border-radius: 999px;
   background: var(--el-color-primary-light-9);
   line-height: 1.4;
+}
+
+.settings-audit-retention-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .settings-hint-card :deep(.setting-source) {
@@ -4026,5 +4246,32 @@ onMounted(async () => {
 .metadata-provider-card .settings-test-status-bar[role="status"]:hover {
   border-color: var(--border-color);
   background: var(--panel-soft-bg);
+}
+
+.log-storage-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color-light);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.log-storage-summary strong {
+  color: var(--text-main);
+  font-weight: 500;
+}
+
+.log-storage-summary small {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+.log-budget-input {
+  width: 100%;
+  max-width: 100%;
 }
 </style>

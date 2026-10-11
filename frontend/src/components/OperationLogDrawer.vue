@@ -10,6 +10,8 @@ import {
 } from "../api/client";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { formatDateTime } from "../utils/displayFormat";
+import { useAuthStore } from "../stores/auth";
+import { createScopedRequestGate } from "../utils/scopedRequestGate";
 
 const MAX_RENDERED_LOGS = 1000;
 const POLL_INTERVAL_MS = 1500;
@@ -39,18 +41,22 @@ const levelFilter = ref("all");
 const statusMessage = ref("");
 const foldedCount = ref(0);
 const pollTimer = ref<number | null>(null);
+const requestGate = createScopedRequestGate();
+const consecutiveFailures = ref(0);
 
 const pageText = messages.operationLogs;
+const authStore = useAuthStore();
+const canReadLogs = computed(() => authStore.hasPermission("audit:read"));
 
 const drawerTitle = computed(() => props.title || pageText.title);
-const canQuery = computed(() => Boolean(props.taskType && props.taskId));
+const canQuery = computed(() => Boolean(props.taskType && props.taskId && canReadLogs.value));
 const visibleLogs = computed(() => {
   if (levelFilter.value === "all") {
     return logs.value;
   }
   return logs.value.filter((item) => item.level === levelFilter.value);
 });
-const emptyDescription = computed(() => statusMessage.value || pageText.empty);
+const emptyDescription = computed(() => !canReadLogs.value ? messages.auth.permissionDenied : statusMessage.value || pageText.empty);
 
 function clearTimer() {
   if (pollTimer.value !== null) {
@@ -86,9 +92,13 @@ function levelTagType(level: string) {
 }
 
 async function loadLogs({ reset = false, silent = false } = {}) {
-  if (!canQuery.value || loading.value) {
+  if (!canQuery.value || !props.visible) {
     return;
   }
+  const token = requestGate.begin();
+  if (token === null) return;
+  const taskType = props.taskType as string;
+  const taskId = props.taskId as number;
   if (reset) {
     logs.value = [];
     latestId.value = 0;
@@ -99,11 +109,13 @@ async function loadLogs({ reset = false, silent = false } = {}) {
   loading.value = !silent;
   try {
     const page = await fetchOperationLogs({
-      task_type: props.taskType as string,
-      task_id: props.taskId as number,
+      task_type: taskType,
+      task_id: taskId,
       after_id: reset ? 0 : latestId.value,
       limit: 100,
     });
+    if (!requestGate.isCurrent(token)) return;
+    consecutiveFailures.value = 0;
     if (reset) {
       logs.value = page.items;
     } else if (page.items.length) {
@@ -121,9 +133,12 @@ async function loadLogs({ reset = false, silent = false } = {}) {
       autoRefresh.value = false;
     }
   } catch {
-    statusMessage.value = pageText.loadFailed;
+    if (requestGate.isCurrent(token)) {
+      statusMessage.value = pageText.loadFailed;
+      consecutiveFailures.value += 1;
+    }
   } finally {
-    loading.value = false;
+    if (requestGate.finish(token)) loading.value = false;
   }
 }
 
@@ -132,7 +147,8 @@ function schedulePoll() {
   if (!drawerVisible.value || !autoRefresh.value || !canQuery.value) {
     return;
   }
-  const interval = document.visibilityState === "hidden" ? HIDDEN_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+  const baseInterval = document.visibilityState === "hidden" ? HIDDEN_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+  const interval = Math.min(30000, baseInterval * 2 ** Math.min(consecutiveFailures.value, 5));
   pollTimer.value = window.setTimeout(async () => {
     await loadLogs({ silent: true });
     schedulePoll();
@@ -180,9 +196,22 @@ async function downloadLogs() {
 }
 
 watch(
-  () => [props.visible, props.taskType, props.taskId] as const,
+  () => [props.visible, props.taskType, props.taskId, canReadLogs.value] as const,
   async ([visible]) => {
     clearTimer();
+    requestGate.invalidate();
+    consecutiveFailures.value = 0;
+    loading.value = false;
+    logs.value = [];
+    latestId.value = 0;
+    total.value = 0;
+    foldedCount.value = 0;
+    statusMessage.value = "";
+    if (!canReadLogs.value) {
+      logs.value = [];
+      latestId.value = 0;
+      total.value = 0;
+    }
     if (!visible || !canQuery.value) {
       return;
     }
@@ -198,6 +227,7 @@ watch(autoRefresh, () => {
 
 document.addEventListener("visibilitychange", schedulePoll);
 onBeforeUnmount(() => {
+  requestGate.invalidate();
   clearTimer();
   document.removeEventListener("visibilitychange", schedulePoll);
 });

@@ -7,12 +7,17 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
+import json
+import os
+import stat as fileStat
 from pathlib import Path
 import sqlite3
 import time
 from urllib.parse import unquote, urlparse
 
 from app.core.config import AppSettings
+from app.core.logger import get_logger
+from app.service.audit_service import AuditWriteContext, record_audit_event
 from app.schema.media import MediaFile, ScanJob, ScanModeSuggestion
 from app.service.media_source_service import get_media_source, get_media_source_protocol_context
 from app.service.operation_log_service import (
@@ -33,6 +38,21 @@ from app.utils.media_file import is_video_file
 SCAN_MODE_FULL = "full"
 SCAN_MODE_INCREMENTAL = "incremental"
 SCAN_MODES = {SCAN_MODE_FULL, SCAN_MODE_INCREMENTAL}
+logger = get_logger(__name__)
+
+
+def _iterLocalScanPaths(root: Path, recursive: bool, skipHidden: bool):
+    def failOnDirectoryError(exc: OSError) -> None:
+        # 子目录读失败不能被解释成空目录，否则历史索引会被误标缺失。
+        raise exc
+
+    for directory, subdirs, files in os.walk(root, onerror=failOnDirectoryError, followlinks=False):
+        subdirs[:] = sorted(name for name in subdirs if not skipHidden or not name.startswith("."))
+        for name in sorted(files):
+            if not skipHidden or not name.startswith("."):
+                yield Path(directory) / name
+        if not recursive:
+            break
 
 
 @dataclass(frozen=True)
@@ -99,7 +119,7 @@ def get_scan_mode_suggestion(settings: AppSettings, media_source_id: int) -> Sca
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         source_row = connection.execute(
-            "SELECT id FROM media_sources WHERE id = ?",
+            "SELECT id FROM media_sources WHERE id = ? AND deleted_at IS NULL",
             (media_source_id,),
         ).fetchone()
         if source_row is None:
@@ -164,13 +184,13 @@ def _fetch_scan_job(connection: sqlite3.Connection, job_id: int) -> ScanJob:
 
 
 def recover_interrupted_scan_jobs(settings: AppSettings) -> int:
-    """Mark scan jobs left running before process restart as failed."""
+    """仅将无执行租约的旧running任务标记失败，不恢复执行或释放worker槽。"""
 
     ended_at = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
         cursor = connection.execute(
             "UPDATE scan_jobs SET status = ?, error_message = ?, ended_at = ? "
-            "WHERE status = ? AND ended_at IS NULL",
+            "WHERE status = ? AND ended_at IS NULL AND execution_token IS NULL",
             (
                 "failed",
                 "服务重启后任务未完成，已标记为失败，请重新发起扫描",
@@ -286,9 +306,12 @@ def _get_index_row(
     connection: sqlite3.Connection,
     media_source_id: int,
     normalized_path: str,
+    *,
+    staging: bool = False,
 ) -> sqlite3.Row | None:
+    table = "temp.scan_index_stage" if staging else "scan_file_index"
     return connection.execute(
-        "SELECT id, fingerprint, status FROM scan_file_index "
+        f"SELECT id, fingerprint, status FROM {table} "
         "WHERE media_source_id = ? AND normalized_path = ?",
         (media_source_id, normalized_path),
     ).fetchone()
@@ -308,6 +331,7 @@ def _upsert_scan_file_index(
     file_name: str | None = None,
     extension: str | None = None,
     version: str | None = None,
+    staging: bool = False,
 ) -> tuple[str, str]:
     if normalized_path is None:
         normalized_path = _normalized_index_path(Path(file_path), Path(source_path))
@@ -316,8 +340,9 @@ def _upsert_scan_file_index(
     if extension is None:
         extension = Path(file_name).suffix.lower()
     fingerprint = _file_fingerprint(normalized_path, file_size, modified_at, extension, version)
+    table = "temp.scan_index_stage" if staging else "scan_file_index"
     connection.execute(
-        "INSERT INTO scan_file_index "
+        f"INSERT INTO {table} "
         "(media_source_id, file_path, normalized_path, file_name, extension, file_size, "
         "modified_at, fingerprint, last_scan_job_id, last_seen_at, status, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -359,6 +384,8 @@ def _upsert_scan_file_index_entry(
     source_path: Path | str,
     status: str,
     now: str,
+    *,
+    staging: bool = False,
 ) -> tuple[str, str]:
     return _upsert_scan_file_index(
         connection,
@@ -374,6 +401,7 @@ def _upsert_scan_file_index_entry(
         file_name=entry.file_name,
         extension=entry.extension,
         version=entry.version,
+        staging=staging,
     )
 
 
@@ -382,31 +410,160 @@ def _mark_missing_scan_indexes(
     media_source_id: int,
     seen_paths: set[str],
     now: str,
+    *,
+    staging: bool = False,
+    recursive: bool = True,
+    skipHidden: bool = False,
 ) -> int:
+    table = "temp.scan_index_stage" if staging else "scan_file_index"
     rows = connection.execute(
-        "SELECT normalized_path FROM scan_file_index "
+        f"SELECT normalized_path FROM {table} "
         "WHERE media_source_id = ? AND status IN ('active', 'ignored')",
         (media_source_id,),
     ).fetchall()
-    missing_paths = [str(row["normalized_path"]) for row in rows if str(row["normalized_path"]) not in seen_paths]
+    missing_paths = []
+    for row in rows:
+        path = str(row["normalized_path"])
+        parts = path.replace("\\", "/").split("/")
+        if not recursive and len(parts) > 1:
+            continue
+        if skipHidden and any(part.startswith(".") for part in parts):
+            continue
+        if path not in seen_paths:
+            missing_paths.append(path)
     for normalized_path in missing_paths:
         connection.execute(
-            "UPDATE scan_file_index SET status = 'missing', updated_at = ? "
+            f"UPDATE {table} SET status = 'missing', updated_at = ? "
             "WHERE media_source_id = ? AND normalized_path = ?",
             (now, media_source_id, normalized_path),
         )
     return len(missing_paths)
 
 
-def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = SCAN_MODE_FULL) -> ScanJob:
+def _prepareScanStage(connection: sqlite3.Connection, sourceId: int) -> None:
+    # 临时表随连接销毁；批次提交只提交暂存数据，不提前改变正式扫描结果。
+    connection.execute("PRAGMA temp_store = FILE")
+    connection.execute("CREATE TEMP TABLE scan_index_stage AS SELECT * FROM main.scan_file_index WHERE media_source_id = ?", (sourceId,))
+    connection.execute("CREATE UNIQUE INDEX temp.scan_index_stage_key ON scan_index_stage(media_source_id, normalized_path)")
+    connection.execute("CREATE TEMP TABLE scan_index_baseline AS SELECT normalized_path, fingerprint, status, updated_at, rename_preview_id FROM scan_index_stage")
+    connection.execute("CREATE TEMP TABLE scan_media_stage AS SELECT * FROM main.media_files WHERE 0")
+    connection.execute("CREATE TEMP TABLE scan_pending_stage AS SELECT * FROM main.pending_files WHERE 0")
+    connection.commit()
+
+
+def _publishScanStage(connection: sqlite3.Connection, sourceId: int) -> None:
+    connection.commit()
+    connection.execute("BEGIN IMMEDIATE")
+    changed = connection.execute(
+        "SELECT 1 FROM temp.scan_index_baseline old LEFT JOIN main.scan_file_index current "
+        "ON current.media_source_id = ? AND current.normalized_path = old.normalized_path "
+        "WHERE current.id IS NULL OR current.fingerprint IS NOT old.fingerprint OR current.status IS NOT old.status "
+        "OR current.updated_at IS NOT old.updated_at OR current.rename_preview_id IS NOT old.rename_preview_id LIMIT 1",
+        (sourceId,),
+    ).fetchone()
+    collision = connection.execute(
+        "SELECT 1 FROM temp.scan_index_stage stage JOIN main.scan_file_index current "
+        "ON current.media_source_id = ? AND current.normalized_path = stage.normalized_path "
+        "WHERE NOT EXISTS (SELECT 1 FROM temp.scan_index_baseline old WHERE old.normalized_path = stage.normalized_path) LIMIT 1",
+        (sourceId,),
+    ).fetchone()
+    if changed or collision:
+        raise ValueError("扫描期间索引已被其他操作修改，停止提交，请重新扫描")
+    for target, stage, columns in (
+        ("media_files", "scan_media_stage", "media_source_id, scan_job_id, file_path, file_name, extension, file_size, modified_at, created_at"),
+        ("pending_files", "scan_pending_stage", "media_source_id, scan_job_id, file_path, file_name, extension, file_size, reason, status, created_at"),
+    ):
+        connection.execute(f"INSERT INTO main.{target} ({columns}) SELECT {columns} FROM temp.{stage}")
+    # 已重新纳入的文件不再提供旧大小过滤操作；保留历史，不触碰在途恢复。
+    connection.execute(
+        "UPDATE main.pending_files SET status='removed' WHERE media_source_id=? "
+        "AND status='pending' AND reason='size_filtered' "
+        "AND file_path IN (SELECT file_path FROM temp.scan_media_stage) "
+        "AND NOT EXISTS (SELECT 1 FROM main.local_file_actions action "
+        "WHERE action.action_type='pending_move' AND action.record_id=pending_files.id "
+        "AND action.status IN ('prepared','applied','recovery_required'))",
+        (sourceId,),
+    )
+    columns = ("media_source_id, file_path, normalized_path, file_name, extension, file_size, modified_at, "
+               "fingerprint, last_scan_job_id, last_seen_at, status, rename_preview_id, created_at, updated_at")
+    connection.execute(
+        f"INSERT INTO main.scan_file_index ({columns}) SELECT {columns} FROM temp.scan_index_stage WHERE 1 "
+        "ON CONFLICT(media_source_id, normalized_path) DO UPDATE SET "
+        "file_path=excluded.file_path, file_name=excluded.file_name, extension=excluded.extension, "
+        "file_size=excluded.file_size, modified_at=excluded.modified_at, fingerprint=excluded.fingerprint, "
+        "last_scan_job_id=excluded.last_scan_job_id, last_seen_at=excluded.last_seen_at, status=excluded.status, updated_at=excluded.updated_at"
+    )
+
+
+def buildScanPolicy(settings: AppSettings, source, scanMode: str) -> dict:
+    effective = get_effective_settings(settings)
+    return {
+        "version": 1, "media_source_id": source.id, "source_path": source.path,
+        "source_path_type": source.path_type, "source_updated_at": source.updated_at,
+        "scan_mode": scanMode,
+        "minimum_file_size": int(effective.get("scan.minimum_file_size") or 0),
+        "batch_size": int(effective.get("scan.batch_size") or settings.scan.batch_size),
+        "batch_interval_seconds": float(effective.get("scan.batch_interval_seconds")
+            if effective.get("scan.batch_interval_seconds") is not None else settings.scan.batch_interval_seconds),
+        "skip_hidden_files": bool(effective.get("scan.skip_hidden_files", True)),
+        "recursive": bool(effective.get("scan.recursive", True)),
+        "nfs_retry_count": int(effective.get("shared.nfs_retry_count") or 1),
+        "nfs_operation_timeout_seconds": int(effective.get("shared.nfs_operation_timeout_seconds") or 30),
+        "task_timeout_seconds": settings.scan.task_timeout_seconds,
+    }
+
+
+def requireScanLease(connection: sqlite3.Connection, jobId: int, token: str) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT * FROM scan_jobs WHERE id=? AND status='running' AND execution_token=? "
+        "AND execution_expires_at>? AND source_invalidated_at IS NULL", (jobId, token, _utc_now()),
+    ).fetchone()
+    if row is None:
+        raise ValueError("扫描执行授权已失效，停止提交结果")
+    policy = json.loads(row["policy_json"])
+    source = connection.execute("SELECT * FROM media_sources WHERE id=? AND deleted_at IS NULL",
+                                (row["media_source_id"],)).fetchone()
+    if (source is None or not source["enabled"] or source["path"] != policy["source_path"]
+            or source["path_type"] != policy["source_path_type"] or source["updated_at"] != policy["source_updated_at"]):
+        raise ValueError("媒体源与受理策略不一致，停止执行")
+    if row["actor_id"] is not None:
+        actor = connection.execute("SELECT enabled,permissions_json FROM users WHERE id=?", (row["actor_id"],)).fetchone()
+        if actor is None or not actor["enabled"] or "scan:run" not in json.loads(actor["permissions_json"]):
+            raise ValueError("扫描发起用户已停用或权限被撤销")
+    return row
+
+
+def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = SCAN_MODE_FULL,
+                  *, auditContext: AuditWriteContext | None = None,
+                  acceptedJobId: int | None = None, executionToken: str | None = None) -> ScanJob:
     """执行媒体源扫描，兼容全量和增量模式。"""
 
     if scan_mode not in SCAN_MODES:
         raise ValueError("扫描模式不受支持")
 
+    context = auditContext or AuditWriteContext()
+
+    def recordScanAudit(connection: sqlite3.Connection, jobId: int, action: str, result: str, detail: dict) -> None:
+        record_audit_event(settings, event_type="scan.execute", action=action, result=result,
+                           summary="扫描任务状态变更", target_type="scan_job", target_id=jobId,
+                           actor=context.actor, actor_name="system" if context.actor is None else None,
+                           ip_address=context.ipAddress, user_agent=context.userAgent,
+                           detail=detail, connection=connection)
+
     source = get_media_source(settings, media_source_id)
     if not source.enabled:
         raise ValueError("媒体源已停用，无法发起扫描")
+    if acceptedJobId is not None:
+        with closing(sqlite3.connect(settings.database_path)) as acceptedConnection:
+            acceptedConnection.row_factory = sqlite3.Row
+            acceptedRow = requireScanLease(acceptedConnection, acceptedJobId, executionToken or "")
+            policySnapshot = json.loads(acceptedRow["policy_json"])
+        if (policySnapshot["media_source_id"] != media_source_id or policySnapshot["scan_mode"] != scan_mode
+                or policySnapshot["source_path"] != source.path or policySnapshot["source_path_type"] != source.path_type
+                or policySnapshot["source_updated_at"] != source.updated_at):
+            raise ValueError("媒体源与受理策略不一致，停止执行")
+    else:
+        policySnapshot = buildScanPolicy(settings, source, scan_mode)
     protocol = get_protocol(source.path_type)
     scan_ready = protocol.check_scan_ready(
         source.path,
@@ -418,25 +575,36 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
     normalized_source_path = protocol.normalize_path(source.path)
     source_path = Path(normalized_source_path) if source.path_type != "webdav" else normalized_source_path
     created_at = _utc_now()
-    effective_settings = get_effective_settings(settings)
-    minimum_file_size = int(effective_settings.get("scan.minimum_file_size") or 0)
-    batch_size = int(effective_settings.get("scan.batch_size") or settings.scan.batch_size)
-    batch_interval_seconds = float(
-        effective_settings.get("scan.batch_interval_seconds")
-        if effective_settings.get("scan.batch_interval_seconds") is not None
-        else settings.scan.batch_interval_seconds
-    )
-    skip_hidden_files = bool(effective_settings.get("scan.skip_hidden_files", True))
-    recursive = bool(effective_settings.get("scan.recursive", True))
-    nfs_retry_count = int(effective_settings.get("shared.nfs_retry_count") or 1)
-    nfs_operation_timeout_seconds = int(effective_settings.get("shared.nfs_operation_timeout_seconds") or 30)
+    minimum_file_size = policySnapshot["minimum_file_size"]
+    batch_size = policySnapshot["batch_size"]
+    batch_interval_seconds = policySnapshot["batch_interval_seconds"]
+    skip_hidden_files = policySnapshot["skip_hidden_files"]
+    recursive = policySnapshot["recursive"]
+    nfs_retry_count = policySnapshot["nfs_retry_count"]
+    nfs_operation_timeout_seconds = policySnapshot["nfs_operation_timeout_seconds"]
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        currentSource = connection.execute(
+            "SELECT path, enabled, updated_at FROM media_sources WHERE id = ? AND deleted_at IS NULL", (source.id,),
+        ).fetchone()
+        if (currentSource is None or not currentSource["enabled"] or currentSource["path"] != source.path
+                or currentSource["updated_at"] != source.updated_at):
+            raise ValueError("媒体源已变化，请刷新后重新发起扫描")
+        if acceptedJobId is None:
+            existing = connection.execute(
+                "SELECT id FROM scan_jobs WHERE media_source_id=? AND status IN ('queued','running') LIMIT 1",
+                (media_source_id,),
+            ).fetchone()
+            if existing:
+                raise ValueError("该媒体源已有待执行或运行中扫描，请查看现有任务")
+        else:
+            requireScanLease(connection, acceptedJobId, executionToken or "")
         cursor = connection.execute(
             "INSERT INTO scan_jobs "
             "(media_source_id, status, batch_size, batch_interval_seconds, scan_mode, "
-            "started_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "started_at, created_at, policy_json, actor_id, actor_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 media_source_id,
                 "running",
@@ -445,9 +613,16 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                 scan_mode,
                 created_at,
                 created_at,
+                json.dumps(policySnapshot, ensure_ascii=False),
+                context.actor.id if context.actor is not None else None,
+                context.actor.username if context.actor is not None else "system",
             ),
-        )
-        job_id = int(cursor.lastrowid)
+        ) if acceptedJobId is None else None
+        job_id = int(cursor.lastrowid) if cursor is not None else acceptedJobId
+        recordScanAudit(connection, job_id, "start_scan", "pending", {
+            "media_source_id": media_source_id, "scan_mode": scan_mode,
+            "minimum_file_size": minimum_file_size, "recursive": recursive, "skip_hidden_files": skip_hidden_files,
+        })
         connection.commit()
         record_operation_log(
             settings,
@@ -467,6 +642,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
         scanned_count = 0
         video_count = 0
         warning_count = 0
+        readIncomplete = False
         new_count = 0
         changed_count = 0
         skipped_count = 0
@@ -474,12 +650,33 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
         indexed_count = 0
         seen_index_paths: set[str] = set()
         warning_details: list[str] = []
-        scan_savepoint = "scan_job_processing"
+        def reportProgress() -> None:
+            if scanned_count <= 0 or scanned_count % batch_size:
+                return
+            connection.commit()
+            if acceptedJobId is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                requireScanLease(connection, job_id, executionToken or "")
+            connection.execute(
+                "UPDATE scan_jobs SET scanned_count=?, video_count=?, warning_count=? WHERE id=?",
+                (scanned_count, video_count, warning_count, job_id),
+            )
+            connection.commit()
+            record_operation_log(
+                settings, task_type=TASK_TYPE_SCAN_JOB, task_id=job_id, level=LEVEL_INFO,
+                stage="scan_progress", message=f"已扫描 {scanned_count} 个文件，识别视频 {video_count} 个",
+                progress_current=scanned_count,
+                detail={"video_count": video_count, "warning_count": warning_count, "new_count": new_count,
+                        "changed_count": changed_count, "skipped_count": skipped_count},
+            )
+            if batch_interval_seconds > 0:
+                time.sleep(batch_interval_seconds)
+
         try:
-            connection.execute(f"SAVEPOINT {scan_savepoint}")
+            _prepareScanStage(connection, source.id)
             if source.path_type == "webdav":
                 remote_entries = protocol.list_files(normalized_source_path, protocol_context, recursive=recursive)
-                scan_entries = [
+                scan_entries = (
                     _ScanFileEntry(
                         file_path=entry.path,
                         file_name=entry.name,
@@ -490,34 +687,31 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                         version=entry.version,
                     )
                     for entry in remote_entries
-                ]
+                )
             else:
                 local_source_path = Path(source_path)
-                path_iterator = local_source_path.rglob("*") if recursive else local_source_path.iterdir()
-                scan_entries = []
-                for file_path in sorted(path_iterator):
-                    if skip_hidden_files and _is_hidden_path(file_path, local_source_path):
-                        continue
-                    try:
-                        if not file_path.is_file():
+                path_iterator = _iterLocalScanPaths(local_source_path, recursive, skip_hidden_files)
+
+                def iterLocalEntries():
+                    nonlocal readIncomplete, warning_count
+                    for file_path in path_iterator:
+                        if skip_hidden_files and _is_hidden_path(file_path, local_source_path):
                             continue
-                    except OSError as exc:
-                        warning_count += 1
-                        warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
-                        continue
-                    try:
-                        stat = _stat_with_nfs_retry(file_path, nfs_retry_count, nfs_operation_timeout_seconds)
-                    except (OSError, TimeoutError) as exc:
-                        if getattr(exc, "errno", None) in {errno.EACCES, errno.ESTALE, errno.ETIMEDOUT}:
-                            warning_count += 1
-                            warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
-                            continue
-                        if isinstance(exc, TimeoutError):
-                            warning_count += 1
-                            warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
-                            continue
-                        raise
-                    scan_entries.append(_local_scan_entry(file_path, local_source_path, stat))
+                        try:
+                            stat = _stat_with_nfs_retry(file_path, nfs_retry_count, nfs_operation_timeout_seconds)
+                        except (OSError, TimeoutError) as exc:
+                            if (getattr(exc, "errno", None) in {errno.EACCES, errno.ESTALE, errno.ETIMEDOUT}
+                                    or isinstance(exc, TimeoutError)):
+                                readIncomplete = True
+                                warning_count += 1
+                                if len(warning_details) < 5:
+                                    warning_details.append(f"{file_path.name}: {_scan_error_message(exc)}")
+                                continue
+                            raise
+                        if fileStat.S_ISREG(stat.st_mode):
+                            yield _local_scan_entry(file_path, local_source_path, stat)
+
+                scan_entries = iterLocalEntries()
 
             for entry in scan_entries:
                 scanned_count += 1
@@ -531,14 +725,15 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                         entry.extension,
                         entry.version,
                     )
-                    index_row = _get_index_row(connection, media_source_id, normalized_path)
+                    index_row = _get_index_row(connection, media_source_id, normalized_path, staging=True)
                     seen_index_paths.add(normalized_path)
+                    expectedStatus = "ignored" if entry.file_size < minimum_file_size else "active"
 
                     if (
                         scan_mode == SCAN_MODE_INCREMENTAL
                         and index_row is not None
                         and str(index_row["fingerprint"]) == fingerprint
-                        and str(index_row["status"]) in {"active", "ignored"}
+                        and str(index_row["status"]) == expectedStatus
                     ):
                         _upsert_scan_file_index(
                             connection,
@@ -554,14 +749,16 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                             file_name=entry.file_name,
                             extension=entry.extension,
                             version=entry.version,
+                            staging=True,
                         )
                         skipped_count += 1
                         indexed_count += 1
+                        reportProgress()
                         continue
 
                     if index_row is None:
                         new_count += 1
-                    elif str(index_row["fingerprint"]) != fingerprint or str(index_row["status"]) == "missing":
+                    elif str(index_row["fingerprint"]) != fingerprint or str(index_row["status"]) != expectedStatus:
                         changed_count += 1
 
                     if entry.file_size < minimum_file_size:
@@ -572,6 +769,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                             entry.file_path,
                             entry.file_size,
                             "size_filtered",
+                            staging=True,
                         )
                         _upsert_scan_file_index_entry(
                             connection,
@@ -581,14 +779,17 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                             source_path,
                             "ignored",
                             now,
+                            staging=True,
                         )
                         indexed_count += 1
                         warning_count += 1
-                        warning_details.append(f"{entry.file_name}: 文件小于最小扫描大小")
+                        if len(warning_details) < 5:
+                            warning_details.append(f"{entry.file_name}: 文件小于最小扫描大小")
+                        reportProgress()
                         continue
 
                     connection.execute(
-                        "INSERT INTO media_files "
+                        "INSERT INTO temp.scan_media_stage "
                         "(media_source_id, scan_job_id, file_path, file_name, "
                         "extension, file_size, modified_at, created_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -611,38 +812,26 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                         source_path,
                         "active",
                         now,
+                        staging=True,
                     )
                     indexed_count += 1
                     video_count += 1
 
-                if scanned_count > 0 and scanned_count % batch_size == 0:
-                    record_operation_log(
-                        settings,
-                        task_type=TASK_TYPE_SCAN_JOB,
-                        task_id=job_id,
-                        level=LEVEL_INFO,
-                        stage="scan_progress",
-                        message=f"已扫描 {scanned_count} 个文件，识别视频 {video_count} 个",
-                        progress_current=scanned_count,
-                        detail={
-                            "video_count": video_count,
-                            "warning_count": warning_count,
-                            "new_count": new_count,
-                            "changed_count": changed_count,
-                            "skipped_count": skipped_count,
-                        },
-                        connection=connection,
-                    )
-                if batch_interval_seconds > 0 and scanned_count % batch_size == 0:
-                    time.sleep(batch_interval_seconds)
+                reportProgress()
 
             ended_at = _utc_now()
-            missing_count = _mark_missing_scan_indexes(
+            missing_count = 0 if readIncomplete else _mark_missing_scan_indexes(
                 connection,
                 media_source_id,
                 seen_index_paths,
                 ended_at,
+                staging=True,
+                recursive=recursive,
+                skipHidden=skip_hidden_files,
             )
+            _publishScanStage(connection, source.id)
+            if acceptedJobId is not None:
+                requireScanLease(connection, job_id, executionToken or "")
             completed_status = "partial_completed" if warning_count else "completed"
             warning_message = None
             if warning_count:
@@ -703,14 +892,49 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                     job_id,
                 ),
             )
-            connection.execute(f"RELEASE SAVEPOINT {scan_savepoint}")
+            recordScanAudit(connection, job_id, "complete_scan",
+                            "success" if completed_status == "completed" else "partial_success",
+                            {"status": completed_status, "scanned_count": scanned_count, "video_count": video_count,
+                             "warning_count": warning_count, "missing_count": missing_count})
             connection.commit()
-            cleanup_operation_logs(settings)
         except Exception as exc:
             ended_at = _utc_now()
             failure_status = _scan_failure_status(exc)
-            connection.execute(f"ROLLBACK TO SAVEPOINT {scan_savepoint}")
-            connection.execute(f"RELEASE SAVEPOINT {scan_savepoint}")
+            failure_message = _scan_error_message(exc)
+            connection.rollback()
+            if acceptedJobId is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    requireScanLease(connection, job_id, executionToken or "")
+                except Exception:
+                    connection.rollback()
+                    logger.error(
+                        "扫描失败且执行租约已失效 job_id=%s execution_token=%s original_error_type=%s",
+                        job_id,
+                        (executionToken or "")[:12],
+                        type(exc).__name__,
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+                    connection.execute("BEGIN IMMEDIATE")
+                    cursor = connection.execute(
+                        "UPDATE scan_jobs SET error_message=?, ended_at=COALESCE(ended_at, ?) "
+                        "WHERE id=? AND execution_token=?",
+                        (failure_message, ended_at, job_id, executionToken or ""),
+                    )
+                    if cursor.rowcount == 1:
+                        record_operation_log(
+                            settings,
+                            task_type=TASK_TYPE_SCAN_JOB,
+                            task_id=job_id,
+                            level=LEVEL_ERROR,
+                            stage="scan_failure_after_lease_loss",
+                            message=f"扫描失败且租约已失效：{failure_message}",
+                            progress_current=scanned_count,
+                            detail={"error_type": type(exc).__name__, "status_unchanged": True},
+                            connection=connection,
+                        )
+                    connection.commit()
+                    raise exc
             connection.execute(
                 "UPDATE scan_jobs SET status = ?, scanned_count = ?, "
                 "video_count = ?, warning_count = ?, new_count = ?, changed_count = ?, "
@@ -726,11 +950,14 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                     skipped_count,
                     missing_count,
                     indexed_count,
-                    _scan_error_message(exc),
+                    failure_message,
                     ended_at,
                     job_id,
                 ),
             )
+            recordScanAudit(connection, job_id, "complete_scan", "failed", {
+                "status": failure_status, "error_type": type(exc).__name__, "scanned_count": scanned_count,
+            })
             connection.commit()
             record_operation_log(
                 settings,
@@ -738,7 +965,7 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
                 task_id=job_id,
                 level=LEVEL_ERROR,
                 stage="scan_failed",
-                message=f"扫描失败：{_scan_error_message(exc)}",
+                message=f"扫描失败：{failure_message}",
                 progress_current=scanned_count,
                 detail={
                     "status": failure_status,
@@ -748,6 +975,13 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
             )
             raise
 
+        try:
+            cleanup_operation_logs(settings)
+        except Exception as exc:  # noqa: BLE001 - 已成功提交扫描不因日志清理失败改为失败。
+            record_operation_log(
+                settings, task_type=TASK_TYPE_SCAN_JOB, task_id=job_id, level=LEVEL_WARNING,
+                stage="log_cleanup_failed", message=f"扫描已完成，辅助日志清理失败：{type(exc).__name__}",
+            )
         return _fetch_scan_job(connection, job_id)
 
 
@@ -800,6 +1034,42 @@ def list_scan_jobs(settings: AppSettings, media_source_id: int | None = None) ->
     return [_row_to_scan_job(row) for row in rows]
 
 
+def listScanJobsPage(settings: AppSettings, mediaSourceId: int | None = None,
+                     *, page: int = 1, pageSize: int = 50, sortBy: str = "id", sortOrder: str = "desc",
+                     activeOnly: bool = False) -> dict:
+    """有界任务查询；活跃任务独立过滤，不依赖当前历史页。"""
+    sortColumns = {"id", "scan_mode", "scanned_count", "video_count", "new_count", "changed_count",
+                   "skipped_count", "missing_count", "warning_count", "batch_size", "batch_interval_seconds",
+                   "started_at", "ended_at", "created_at"}
+    if sortBy not in sortColumns or sortOrder not in {"asc", "desc"}:
+        raise ValueError("不支持的扫描任务排序")
+    if type(page) is not int or type(pageSize) is not int or not 1 <= page <= 1_000_000 or not 1 <= pageSize <= 200:
+        raise ValueError("分页参数超出范围")
+    conditions = []
+    params = []
+    if mediaSourceId is not None:
+        conditions.append("media_source_id=?")
+        params.append(mediaSourceId)
+    if activeOnly:
+        conditions.append("status IN ('queued','running')")
+    where = " WHERE " + " AND ".join(conditions) if conditions else ""
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN")
+        total = int(connection.execute(f"SELECT COUNT(*) FROM scan_jobs{where}", params).fetchone()[0])
+        resolvedPage = min(page, max(1, (total + pageSize - 1) // pageSize))
+        tieBreaker = f",id {sortOrder}" if sortBy != "id" else ""
+        rows = connection.execute(
+            "SELECT id,media_source_id,status,batch_size,batch_interval_seconds,scan_mode,scanned_count,"
+            "video_count,warning_count,new_count,changed_count,skipped_count,missing_count,indexed_count,"
+            "error_message,started_at,ended_at,created_at "
+            f"FROM scan_jobs{where} ORDER BY {sortBy} {sortOrder}{tieBreaker} LIMIT ? OFFSET ?",
+            [*params, pageSize, (resolvedPage - 1) * pageSize],
+        ).fetchall()
+    return {"items": [_row_to_scan_job(row) for row in rows], "total": total,
+            "page": resolvedPage, "page_size": pageSize}
+
+
 def list_media_files(
     settings: AppSettings,
     media_source_id: int | None = None,
@@ -826,3 +1096,33 @@ def list_media_files(
             params,
         ).fetchall()
     return [_row_to_media_file(row) for row in rows]
+
+
+def listMediaFilesPage(settings: AppSettings, mediaSourceId: int | None = None, scanJobId: int | None = None,
+                       *, page: int = 1, pageSize: int = 50, sortBy: str = "modified_at", sortOrder: str = "desc") -> dict:
+    """有界查询扫描结果；排序白名单与稳定ID次序，不改变旧列表接口。"""
+    sortColumns = {"id", "file_name", "extension", "file_size", "modified_at", "created_at", "scan_job_id", "media_source_id", "file_path"}
+    if sortBy not in sortColumns or sortOrder not in {"asc", "desc"}:
+        raise ValueError("不支持的扫描结果排序")
+    if (type(page) is not int or type(pageSize) is not int or not 1 <= page <= 1_000_000 or not 1 <= pageSize <= 200):
+        raise ValueError("分页参数超出范围")
+    conditions = []
+    params = []
+    for column, value in (("media_source_id", mediaSourceId), ("scan_job_id", scanJobId)):
+        if value is not None:
+            conditions.append(f"{column}=?")
+            params.append(value)
+    where = " WHERE " + " AND ".join(conditions) if conditions else ""
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN")
+        total = int(connection.execute(f"SELECT COUNT(*) FROM media_files{where}", params).fetchone()[0])
+        resolvedPage = min(page, max(1, (total + pageSize - 1) // pageSize))
+        tieBreaker = f",id {sortOrder}" if sortBy != "id" else ""
+        rows = connection.execute(
+            "SELECT id,media_source_id,scan_job_id,file_path,file_name,extension,file_size,modified_at,created_at "
+            f"FROM media_files{where} ORDER BY {sortBy} {sortOrder}{tieBreaker} LIMIT ? OFFSET ?",
+            [*params, pageSize, (resolvedPage - 1) * pageSize],
+        ).fetchall()
+    return {"items": [_row_to_media_file(row) for row in rows], "total": total,
+            "page": resolvedPage, "page_size": pageSize}

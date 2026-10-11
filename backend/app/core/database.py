@@ -14,11 +14,12 @@ from app.service.media_source_secret import (
     LEGACY_CREDENTIAL_VERSION,
     credential_version_for_secret,
     migrate_secret,
+    decrypt_secret,
 )
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 20
+CURRENT_SCHEMA_VERSION = 38
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -213,6 +214,10 @@ def _ensure_user_sessions_table(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_user_sessions_user_expires "
         "ON user_sessions(user_id, expires_at, revoked_at)"
     )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_expiry_cleanup "
+        "ON user_sessions(julianday(expires_at), id)"
+    )
 
 
 def _ensure_audit_events_table(connection: sqlite3.Connection) -> None:
@@ -323,6 +328,10 @@ def _ensure_remote_operation_tables(connection: sqlite3.Connection) -> None:
         "status TEXT NOT NULL DEFAULT 'pending', "
         "error_message TEXT, "
         "recovery_json TEXT, "
+        "recovery_generation INTEGER NOT NULL DEFAULT 0, "
+        "recovery_token TEXT, "
+        "recovery_phase TEXT NOT NULL DEFAULT 'idle', "
+        "recovery_heartbeat_at TEXT, "
         "created_at TEXT NOT NULL, "
         "updated_at TEXT NOT NULL, "
         "FOREIGN KEY(media_source_id) REFERENCES media_sources(id))"
@@ -515,10 +524,8 @@ def _migrate_media_source_secrets(settings: AppSettings, connection: sqlite3.Con
         try:
             migrated_secret = migrate_secret(settings, str(encrypted_secret))
             credential_version = credential_version_for_secret(migrated_secret)
-        except Exception as exc:  # pragma: no cover - 防御历史坏数据，避免阻断启动
-            logger.warning("媒体源凭据迁移失败 source_id=%s error=%s", source_id, exc)
-            migrated_secret = encrypted_secret
-            credential_version = LEGACY_CREDENTIAL_VERSION
+        except ValueError as exc:
+            raise ValueError(f"媒体源凭据迁移失败 source_id={source_id}，请保留数据库并检查原路径和密钥") from exc
         connection.execute(
             "UPDATE media_sources SET encrypted_secret = ?, credential_version = ? WHERE id = ?",
             (migrated_secret, credential_version, source_id),
@@ -528,6 +535,28 @@ def _migrate_media_source_secrets(settings: AppSettings, connection: sqlite3.Con
         "WHERE encrypted_secret IS NULL OR encrypted_secret = ''",
         (LEGACY_CREDENTIAL_VERSION,),
     )
+
+
+def _migrateProtectedCredentials(settings: AppSettings, connection: sqlite3.Connection) -> None:
+    # 一次事务覆盖所有持久化凭据；任一失败不提交部分密文。
+    from app.service.media_source_secret import encrypt_secret
+    from app.service.settings_service import SETTING_DEFINITIONS
+    _migrate_media_source_secrets(settings, connection)
+    for provider, encrypted in connection.execute(
+        "SELECT provider, api_key_encrypted FROM metadata_provider_configs WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted <> ''"
+    ).fetchall():
+        migrated = migrate_secret(settings, encrypted)
+        decrypt_secret(settings, migrated)
+        connection.execute("UPDATE metadata_provider_configs SET api_key_encrypted = ? WHERE provider = ?", (migrated, provider))
+    for key, value in connection.execute("SELECT key, value FROM system_settings").fetchall():
+        definition = SETTING_DEFINITIONS.get(key)
+        if definition and (definition.sensitive or key == "ai.provider_profiles"):
+            if value.startswith("v3:"):
+                decrypt_secret(settings, value)
+            else:
+                connection.execute("UPDATE system_settings SET value = ? WHERE key = ?", (encrypt_secret(settings, value), key))
+    for (encrypted,) in connection.execute("SELECT encrypted_secret FROM media_sources WHERE encrypted_secret LIKE 'v3:%'").fetchall():
+        decrypt_secret(settings, encrypted)
 
 
 def _run_migrations(settings: AppSettings, connection: sqlite3.Connection) -> None:
@@ -624,6 +653,199 @@ def _run_migrations(settings: AppSettings, connection: sqlite3.Connection) -> No
     if version < 20:
         _ensure_media_source_remote_protocol_columns(connection)
         _migrate_media_source_secrets(settings, connection)
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _migrateProtectedCredentials(settings, connection)
+    if version < 21:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "rename_operation_items", "snapshot_json", "TEXT")
+    if version < 22:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS local_file_actions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, media_source_id INTEGER NOT NULL, "
+        "action_type TEXT NOT NULL, record_id INTEGER NOT NULL, "
+        "source_path TEXT NOT NULL, target_path TEXT NOT NULL, "
+        "source_key TEXT NOT NULL, target_key TEXT NOT NULL, "
+        "identity_json TEXT NOT NULL, status TEXT NOT NULL, message TEXT, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_local_file_actions_source_status "
+        "ON local_file_actions(media_source_id, status)"
+    )
+    if version < 23:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "local_file_actions", "target_identity_json", "TEXT")
+    if version < 24:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "local_file_actions", "source_entry_name", "TEXT")
+    _ensure_column(connection, "local_file_actions", "target_entry_name", "TEXT")
+    _ensure_column(
+        connection,
+        "local_file_actions",
+        "action_phase",
+        "TEXT NOT NULL DEFAULT 'intent_recorded'",
+    )
+    if version < 37:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "rename_rollback_items", "snapshot_json", "TEXT")
+    if version < 25:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "media_sources", "deleted_at", "TEXT")
+    _ensure_column(connection, "media_sources", "retired_root", "TEXT")
+    _ensure_column(connection, "scan_jobs", "source_invalidated_at", "TEXT")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS media_source_history ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, media_source_id INTEGER NOT NULL, "
+        "event_type TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_source_history_source ON media_source_history(media_source_id, id)"
+    )
+    if version < 26:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS file_action_audit_intents ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, task_type TEXT NOT NULL, task_id INTEGER NOT NULL, "
+        "context_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', "
+        "last_error_type TEXT, outcome_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_action_audit_intents_status ON file_action_audit_intents(status, id)"
+    )
+    _ensure_column(connection, "file_action_audit_intents", "outcome_json", "TEXT")
+    if version < 27:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(
+        connection,
+        "file_action_audit_intents",
+        "request_phase",
+        "TEXT NOT NULL DEFAULT 'accepted'",
+    )
+    _ensure_column(connection, "file_action_audit_intents", "closed_at", "TEXT")
+    _ensure_column(connection, "file_action_audit_intents", "closed_by", "TEXT")
+    _ensure_column(connection, "file_action_audit_intents", "close_reason", "TEXT")
+    _ensure_column(connection, "file_action_audit_intents", "close_evidence", "TEXT")
+    if version < 38:
+        connection.execute(
+            "UPDATE file_action_audit_intents SET request_phase = "
+            "CASE WHEN status='completed' THEN 'completed' ELSE 'legacy_unknown' END"
+        )
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "scan_jobs", "policy_json", "TEXT")
+    _ensure_column(connection, "scan_jobs", "actor_id", "INTEGER")
+    _ensure_column(connection, "scan_jobs", "actor_name", "TEXT")
+    if version < 28:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    _ensure_column(connection, "scan_jobs", "execution_token", "TEXT")
+    _ensure_column(connection, "scan_jobs", "execution_pid", "INTEGER")
+    _ensure_column(connection, "scan_jobs", "execution_expires_at", "TEXT")
+    _ensure_column(connection, "scan_jobs", "audit_context_json", "TEXT")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_scan_jobs_queue ON scan_jobs(status, id)")
+    if version < 29:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    connection.execute("CREATE TABLE IF NOT EXISTS external_submission_authorizations ("
+        "id TEXT PRIMARY KEY, block_id INTEGER NOT NULL, actor_id INTEGER NOT NULL, actor_name TEXT NOT NULL, "
+        "fingerprint TEXT NOT NULL, snapshot_json TEXT NOT NULL, context_json TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'prepared', outcome_json TEXT, created_at TEXT NOT NULL, "
+        "expires_at TEXT NOT NULL, consumed_at TEXT, completed_at TEXT)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_external_authorizations_block "
+                       "ON external_submission_authorizations(block_id,created_at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_external_authorizations_pending "
+                       "ON external_submission_authorizations(status,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_media_files_job_modified "
+                       "ON media_files(scan_job_id,modified_at,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_media_files_source_job "
+                       "ON media_files(media_source_id,scan_job_id,id)")
+    if version < 30:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    for column, definition in (
+        ("execution_token", "TEXT"), ("execution_pid", "INTEGER"),
+        ("execution_expires_at", "TEXT"), ("actor_id", "INTEGER"),
+        ("actor_name", "TEXT"), ("audit_context_json", "TEXT"),
+        ("audit_intent_id", "INTEGER"), ("error_message", "TEXT"),
+    ):
+        _ensure_column(connection, "rename_operations", column, definition)
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rename_operations_queue ON rename_operations(status,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rename_items_operation ON rename_operation_items(operation_id,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rename_items_preview ON rename_operation_items(rename_preview_id,operation_id)")
+    if version < 31:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    for column, definition in (
+        ("execution_token", "TEXT"), ("execution_pid", "INTEGER"),
+        ("execution_expires_at", "TEXT"), ("actor_id", "INTEGER"),
+        ("actor_name", "TEXT"), ("audit_context_json", "TEXT"),
+        ("audit_intent_id", "INTEGER"), ("error_message", "TEXT"),
+        ("rolled_back_count", "INTEGER NOT NULL DEFAULT 0"), ("failed_count", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        _ensure_column(connection, "rename_rollback_plans", column, definition)
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rollback_plans_queue ON rename_rollback_plans(status,updated_at,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rollback_items_operation ON rename_rollback_items(operation_item_id,plan_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rename_queue_order ON rename_operations(status,updated_at,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rename_execution_slot ON rename_operations(id) WHERE execution_token IS NOT NULL")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_rollback_execution_slot ON rename_rollback_plans(id) WHERE execution_token IS NOT NULL")
+    if version < 32:
+        # 历史计数只来源于已持久化明细，不推断旧任务的操作者或执行授权。
+        connection.execute("UPDATE rename_rollback_plans SET rolled_back_count=(SELECT COUNT(*) FROM rename_rollback_items "
+            "WHERE plan_id=rename_rollback_plans.id AND status='rolled_back'),failed_count=(SELECT COUNT(*) "
+            "FROM rename_rollback_items WHERE plan_id=rename_rollback_plans.id AND status='failed')")
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    connection.execute("CREATE TABLE IF NOT EXISTS external_request_sites (site_key TEXT PRIMARY KEY, "
+        "last_started_at REAL NOT NULL, spacing_seconds REAL NOT NULL, updated_at REAL NOT NULL)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_external_sites_updated ON external_request_sites(updated_at)")
+    connection.execute("CREATE TABLE IF NOT EXISTS external_request_leases (token TEXT PRIMARY KEY, site_key TEXT NOT NULL, "
+        "pid INTEGER NOT NULL, global_limit INTEGER NOT NULL, site_limit INTEGER NOT NULL, started_at REAL NOT NULL)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_external_leases_site ON external_request_leases(site_key)")
+    if version < 33:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    connection.execute("CREATE TABLE IF NOT EXISTS pending_move_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "request_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, target_directory TEXT NOT NULL, "
+        "target_identity_json TEXT, status TEXT NOT NULL DEFAULT 'queued', total_count INTEGER NOT NULL, "
+        "moved_count INTEGER NOT NULL DEFAULT 0, failed_count INTEGER NOT NULL DEFAULT 0, actor_id INTEGER, "
+        "actor_name TEXT, audit_context_json TEXT, audit_intent_id INTEGER, execution_token TEXT, "
+        "execution_expires_at TEXT, execution_pid INTEGER, error_message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    connection.execute("CREATE TABLE IF NOT EXISTS pending_move_items (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "task_id INTEGER NOT NULL REFERENCES pending_move_tasks(id), pending_file_id INTEGER NOT NULL, "
+        "media_source_id INTEGER NOT NULL, source_path TEXT NOT NULL, target_path TEXT NOT NULL, "
+        "snapshot_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready', message TEXT, "
+        "UNIQUE(task_id,pending_file_id))")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_pending_move_queue ON pending_move_tasks(status,updated_at,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_pending_move_tokens ON pending_move_tasks(execution_token) WHERE execution_token IS NOT NULL")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_pending_move_item_source ON pending_move_items(media_source_id,task_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_pending_move_item_file ON pending_move_items(pending_file_id,task_id)")
+    if version < 34:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    for column, definition in (
+        ("recovery_generation", "INTEGER NOT NULL DEFAULT 0"),
+        ("recovery_token", "TEXT"),
+        ("recovery_phase", "TEXT NOT NULL DEFAULT 'idle'"),
+        ("recovery_heartbeat_at", "TEXT"),
+    ):
+        _ensure_column(connection, "remote_operation_items", column, definition)
+    if version < 35:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    for table in ("rename_operations", "rename_rollback_plans", "pending_move_tasks"):
+        _ensure_column(connection, table, "execution_instance_id", "TEXT")
+        _ensure_column(connection, table, "execution_started_at", "TEXT")
+    if version < 36:
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 

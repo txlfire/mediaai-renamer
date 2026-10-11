@@ -1,20 +1,18 @@
 /**
  * 前端路由配置。
  *
- * M1 阶段提供媒体源、扫描任务和扫描结果三个操作台页面。
+ * 页面按路由加载，认证守卫与现有路径保持不变。
  */
 
 import { createRouter, createWebHistory } from "vue-router";
+import { ref } from "vue";
+import { ElMessage } from "element-plus";
 
 import { getAuthToken } from "../api/client";
 import { useAuthStore } from "../stores/auth";
-import LoginView from "../views/LoginView.vue";
-import MediaSourcesView from "../views/MediaSourcesView.vue";
-import RenamePreviewsView from "../views/RenamePreviewsView.vue";
-import ScanJobsView from "../views/ScanJobsView.vue";
-import ScanResultsView from "../views/ScanResultsView.vue";
-import SettingsView from "../views/SettingsView.vue";
-import TaskGovernanceView from "../views/TaskGovernanceView.vue";
+import { zhCnMessages as messages } from "../locales/zh-CN";
+
+export const routeLoading = ref(true);
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,43 +24,45 @@ const router = createRouter({
     {
       path: "/login",
       name: "login",
-      component: LoginView,
+      component: () => import("../views/LoginView.vue"),
       meta: { public: true },
     },
     {
       path: "/media-sources",
       name: "media-sources",
-      component: MediaSourcesView,
+      component: () => import("../views/MediaSourcesView.vue"),
     },
     {
       path: "/scan-jobs",
       name: "scan-jobs",
-      component: ScanJobsView,
+      component: () => import("../views/ScanJobsView.vue"),
     },
     {
       path: "/scan-results",
       name: "scan-results",
-      component: ScanResultsView,
+      component: () => import("../views/ScanResultsView.vue"),
     },
     {
       path: "/rename-previews",
       name: "rename-previews",
-      component: RenamePreviewsView,
+      component: () => import("../views/RenamePreviewsView.vue"),
     },
     {
       path: "/tasks",
       name: "tasks",
-      component: TaskGovernanceView,
+      component: () => import("../views/TaskGovernanceView.vue"),
     },
     {
       path: "/settings",
       name: "settings",
-      component: SettingsView,
+      component: () => import("../views/SettingsView.vue"),
+      meta: { permission: "settings:write" },
     },
   ],
 });
 
 router.beforeEach(async (to) => {
+  routeLoading.value = true;
   const authStore = useAuthStore();
   if (to.meta.public) {
     if (authStore.isAuthenticated && to.path === "/login") {
@@ -83,7 +83,22 @@ router.beforeEach(async (to) => {
     return { path: "/login", query: { redirect: to.fullPath } };
   }
 
+  const requiredPermission = typeof to.meta.permission === "string" ? to.meta.permission : "";
+  if (requiredPermission && !authStore.hasPermission(requiredPermission)) {
+    ElMessage.warning({ message: messages.auth.permissionDenied, grouping: true });
+    return "/media-sources";
+  }
+
   return true;
+});
+
+router.afterEach(() => {
+  routeLoading.value = false;
+});
+
+router.onError(() => {
+  routeLoading.value = false;
+  ElMessage.error({ message: messages.app.pageLoadFailed, grouping: true });
 });
 
 export default router;

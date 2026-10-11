@@ -1,4 +1,4 @@
-import { defineStore } from "pinia";
+import { defineStore, type Pinia } from "pinia";
 
 import {
   bootstrapAdmin,
@@ -13,6 +13,7 @@ import {
   type AuthUser,
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
+import { resetWorkspaceState } from "./workspace";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -39,6 +40,10 @@ export const useAuthStore = defineStore("auth", {
     },
 
     clearSession(message = "") {
+      const pinia = (this as unknown as { _p?: Pinia })._p;
+      if (pinia) {
+        resetWorkspaceState(pinia);
+      }
       clearAuthToken();
       this.currentUser = null;
       this.errorMessage = message;
@@ -94,7 +99,8 @@ export const useAuthStore = defineStore("auth", {
       this.loading = true;
       this.errorMessage = "";
       try {
-        this.currentUser = await changePasswordApi({ currentPassword, newPassword });
+        await changePasswordApi({ currentPassword, newPassword });
+        this.clearSession();
       } catch (error) {
         this.errorMessage = error instanceof Error ? error.message : messages.auth.changePasswordFailed;
         throw error;

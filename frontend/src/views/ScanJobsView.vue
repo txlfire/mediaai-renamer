@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { Files, MagicStick, Notebook, Refresh, Search, VideoPlay } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import type { ScanMode } from "../api/client";
+import { fetchMediaSource, fetchScanJob, fetchScanJobsPage, fetchScanModeSuggestion, type MediaSource, type ScanJob, type ScanMode } from "../api/client";
+import { createScanTaskObserver, isScanActive } from "../utils/scanTaskObserver";
 import ListPageLayout from "../components/ListPageLayout.vue";
+import MediaSourceSelect from "../components/MediaSourceSelect.vue";
 import OperationProgressLog from "../components/OperationProgressLog.vue";
 import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
@@ -35,34 +37,72 @@ const scanProgressPercent = ref(0);
 const scanProgressText = ref("");
 const scanProgressLogs = ref<string[]>([]);
 const scanProgressSummary = ref("");
+const scanProgressStatus = ref<"success" | "warning" | "error">("success");
+const scanProgressIndeterminate = ref(false);
+const scanSubmitting = ref(false);
 const defaultSort = { prop: "id", order: "descending" as const };
 const pageText = messages.scanJobs;
 
-const pagedScanJobs = computed(() =>
-  paginationStore.paginate("scan-jobs", tableSortStore.applySort("scan-jobs", mediaStore.scanJobs)),
-);
+const pagedScanJobs = ref<ScanJob[]>([]);
+const scanJobTotal = ref(0);
+const jobsLoading = ref(false);
+const activeChecked = ref(false);
+const activeScanJob = ref<ScanJob | null>(null);
+let jobRequestVersion = 0;
+let activeRequestVersion = 0;
+let suggestionVersion = 0;
+let viewActive = true;
+const scanPagination = computed(() => paginationStore.getState("scan-jobs"));
 
-const sourceOptions = computed(() =>
-  mediaStore.mediaSources
-    .filter((source) => source.enabled)
-    .map((source) => ({
-      label: source.name,
-      value: source.id,
-    })),
-);
-const selectedSource = computed(() =>
-  mediaStore.mediaSources.find((source) => source.id === selectedSourceId.value),
-);
+const selectedSource = ref<MediaSource | null>(null);
+let sourceRequestVersion = 0;
 const canRunScan = computed(() => authStore.hasPermission("scan:run"));
-const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled && canRunScan.value));
+const canReadLogs = computed(() => authStore.hasPermission("audit:read"));
+const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled && canRunScan.value
+  && !scanSubmitting.value && activeChecked.value && !activeScanJob.value));
 const scanPermissionTitle = computed(() => (canRunScan.value ? "" : messages.auth.permissionDenied));
 const scanModeSuggestion = computed(() => mediaStore.scanModeSuggestion);
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
   tableSortStore.setSort("scan-jobs", event.prop, event.order);
+  void queryScanJobs();
 }
 
+function applyScanJob(job: ScanJob) {
+  if (!viewActive || (selectedSourceId.value && selectedSourceId.value !== job.media_source_id)) return;
+  pagedScanJobs.value = pagedScanJobs.value.map((item) => item.id === job.id ? job : item);
+  activeScanJob.value = isScanActive(job.status) ? job : null;
+  scanProgressVisible.value = true;
+  scanProgressIndeterminate.value = isScanActive(job.status);
+  scanProgressText.value = formatMessage(pageText.scanProgressLive, { id: job.id, status: formatScanJobStatus(job.status),
+    files: job.scanned_count ?? 0, videos: job.video_count ?? 0, warnings: job.warning_count ?? 0 });
+  if (isScanActive(job.status)) {
+    scanProgressPercent.value = 0;
+    scanProgressSummary.value = "";
+    return;
+  }
+  const failed = !["completed", "partial_completed"].includes(job.status);
+  scanProgressPercent.value = failed ? 0 : 100;
+  scanProgressStatus.value = failed ? "error" : job.status === "partial_completed" || mediaStore.scanRefreshFailed ? "warning" : "success";
+  scanProgressSummary.value = failed ? (job.error_message || pageText.scanFailedSummary) : job.status === "partial_completed"
+    ? formatMessage(pageText.scanPartialSummary, { videos: job.video_count ?? 0, warnings: job.warning_count ?? 0 })
+    : formatMessage(pageText.scanSuccessSummary, { files: job.scanned_count ?? 0, videos: job.video_count ?? 0 });
+  if (mediaStore.scanRefreshFailed) scanProgressSummary.value += ` ${pageText.scanRefreshFailed}`;
+}
+
+const scanObserver = createScanTaskObserver(fetchScanJob, applyScanJob, () => {
+  scanProgressText.value = pageText.scanObservationFailed;
+});
+onUnmounted(() => {
+  viewActive = false;
+  jobRequestVersion += 1;
+  activeRequestVersion += 1;
+  suggestionVersion += 1;
+  scanObserver.stop();
+});
+
 async function startScan() {
+  if (!canStartScan.value) return;
   if (!selectedSourceId.value) {
     return;
   }
@@ -71,7 +111,12 @@ async function startScan() {
     return;
   }
 
-  await ElMessageBox.confirm(
+  scanSubmitting.value = true;
+  const sourceId = selectedSourceId.value;
+  const sourceName = selectedSource.value.name;
+  const requestedMode = scanMode.value;
+  try {
+    await ElMessageBox.confirm(
     pageText.confirmScan,
     messages.renamePreviews.confirmOperationTitle,
     {
@@ -81,37 +126,102 @@ async function startScan() {
     },
   );
   scanProgressVisible.value = true;
-  scanProgressPercent.value = 15;
+  scanProgressPercent.value = 0;
+  scanProgressIndeterminate.value = true;
   scanProgressText.value = pageText.scanProgressStart;
-  scanProgressLogs.value = [formatMessage(pageText.scanLogStart, { name: selectedSource.value.name })];
+  scanProgressLogs.value = [formatMessage(pageText.scanLogStart, { name: sourceName })];
   scanProgressSummary.value = "";
-  await mediaStore.startScan(selectedSourceId.value, scanMode.value);
-  scanProgressPercent.value = 100;
-  scanProgressText.value = pageText.scanProgressDone;
-  scanProgressSummary.value = mediaStore.errorMessage ? pageText.scanFailedSummary : pageText.scanSuccessSummary;
+  if (!viewActive || selectedSourceId.value !== sourceId) return;
+  const job = await mediaStore.startScan(sourceId, requestedMode, false);
+  if (!viewActive || selectedSourceId.value !== sourceId) return;
+  if (job) {
+    applyScanJob(job);
+    if (isScanActive(job.status)) scanObserver.start(job.id);
+    await queryScanJobs(false);
+    if (viewActive && selectedSourceId.value === sourceId) await loadScanModeSuggestion(sourceId);
+  } else {
+    scanProgressIndeterminate.value = false;
+    scanProgressStatus.value = "warning";
+    scanProgressSummary.value = pageText.scanAcceptanceUnknown;
+  }
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") throw error;
+  } finally {
+    scanSubmitting.value = false;
+  }
 }
 
-async function queryScanJobs() {
-  if (!selectedSourceId.value) {
-    mediaStore.scanJobs = [];
-    return;
+async function refreshActiveScan() {
+  const version = ++activeRequestVersion;
+  activeChecked.value = false;
+  try {
+    const result = await fetchScanJobsPage({ media_source_id: selectedSourceId.value, active_only: true, page_size: 1 });
+    if (!viewActive || version !== activeRequestVersion) return;
+    activeScanJob.value = result.items[0] ?? null;
+    activeChecked.value = true;
+    if (activeScanJob.value) {
+      applyScanJob(activeScanJob.value);
+      scanObserver.start(activeScanJob.value.id);
+    } else scanObserver.stop();
+  } catch {
+    if (viewActive && version === activeRequestVersion) {
+      activeScanJob.value = null;
+      ElMessage.error(pageText.loadFailed);
+    }
   }
-  await mediaStore.loadScanJobs({ media_source_id: selectedSourceId.value });
-  await loadScanModeSuggestion(selectedSourceId.value);
+}
+
+async function queryScanJobs(resetPage = true) {
+  if (!viewActive) return;
+  if (scanPagination.value.pageSize === 0) paginationStore.setPageSize("scan-jobs", 50);
+  if (resetPage) paginationStore.setPage("scan-jobs", 1);
+  const version = ++jobRequestVersion;
+  const sourceId = selectedSourceId.value;
+  const sort = tableSortStore.sorts["scan-jobs"] ?? defaultSort;
+  jobsLoading.value = true;
+  try {
+    const result = await fetchScanJobsPage({ media_source_id: sourceId,
+      page: scanPagination.value.currentPage, page_size: scanPagination.value.pageSize,
+      sort_by: sort.order ? sort.prop : "id", sort_order: sort.order === "ascending" ? "asc" : "desc" });
+    if (!viewActive || version !== jobRequestVersion || sourceId !== selectedSourceId.value) return;
+    pagedScanJobs.value = result.items;
+    scanJobTotal.value = result.total;
+    paginationStore.setPage("scan-jobs", result.page);
+    await refreshActiveScan();
+  } catch {
+    if (viewActive && version === jobRequestVersion) {
+      pagedScanJobs.value = [];
+      scanJobTotal.value = 0;
+      ElMessage.error(pageText.loadFailed);
+    }
+  } finally {
+    if (version === jobRequestVersion) jobsLoading.value = false;
+  }
 }
 
 async function resetScanJobs() {
   selectedSourceId.value = undefined;
   scanMode.value = "full";
   mediaStore.scanModeSuggestion = null;
-  mediaStore.scanJobs = [];
+  jobRequestVersion += 1;
+  jobsLoading.value = false;
+  pagedScanJobs.value = [];
+  scanJobTotal.value = 0;
+  activeRequestVersion += 1;
+  activeChecked.value = false;
+  activeScanJob.value = null;
+  scanObserver.stop();
 }
 
 async function loadScanModeSuggestion(mediaSourceId: number) {
+  const version = ++suggestionVersion;
   try {
-    const suggestion = await mediaStore.loadScanModeSuggestion(mediaSourceId);
+    const suggestion = await fetchScanModeSuggestion(mediaSourceId);
+    if (!viewActive || version !== suggestionVersion || selectedSourceId.value !== mediaSourceId) return;
+    mediaStore.scanModeSuggestion = suggestion;
     scanMode.value = suggestion.recommended_mode;
   } catch {
+    if (!viewActive || version !== suggestionVersion || selectedSourceId.value !== mediaSourceId) return;
     mediaStore.scanModeSuggestion = null;
     scanMode.value = "full";
   }
@@ -162,7 +272,7 @@ function scanStatusTagType(status: string) {
 }
 
 function hasScanDetail(row: { status: string; error_message?: string | null }) {
-  return row.status === "partial_completed" && Boolean(row.error_message);
+  return Boolean(row.error_message);
 }
 
 function openScanLog(row: { error_message?: string | null }) {
@@ -176,19 +286,49 @@ function openScanOperationLog(row: { id: number }) {
 }
 
 onMounted(async () => {
-  await mediaStore.loadMediaSources();
+  if (!viewActive) return;
   const routeSourceId = Number(route.query.media_source_id);
   if (Number.isFinite(routeSourceId) && routeSourceId > 0) {
     selectedSourceId.value = routeSourceId;
+    await nextTick();
     await queryScanJobs();
+  } else {
+    await queryScanJobs();
+    if (!viewActive) return;
+    const active = activeScanJob.value;
+    if (active) {
+      selectedSourceId.value = active.media_source_id;
+      // 等待选源watch清理旧观察器后，再接续已经存在的任务。
+      await nextTick();
+      await queryScanJobs();
+    }
   }
 });
 
 watch(selectedSourceId, async (value) => {
+  selectedSource.value = null;
+  const sourceVersion = ++sourceRequestVersion;
+  scanObserver.stop();
+  scanProgressVisible.value = false;
+  jobRequestVersion += 1;
+  suggestionVersion += 1;
+  jobsLoading.value = false;
+  pagedScanJobs.value = [];
+  scanJobTotal.value = 0;
+  activeChecked.value = false;
+  activeScanJob.value = null;
+  activeRequestVersion += 1;
   if (!value) {
     mediaStore.scanModeSuggestion = null;
     scanMode.value = "full";
     return;
+  }
+  void refreshActiveScan();
+  try {
+    const source = await fetchMediaSource(value);
+    if (viewActive && sourceVersion === sourceRequestVersion && value === selectedSourceId.value) selectedSource.value = source;
+  } catch {
+    if (viewActive && sourceVersion === sourceRequestVersion) ElMessage.error(messages.selectors.selectionUnavailable);
   }
   await loadScanModeSuggestion(value);
 });
@@ -197,29 +337,22 @@ watch(selectedSourceId, async (value) => {
 <template>
   <ListPageLayout :title="messages.scanJobs.title" :description="messages.scanJobs.description">
     <template #filters>
-      <el-select
+      <MediaSourceSelect
         v-model="selectedSourceId"
         class="source-select scan-job-source-select tall-select"
         popper-class="tall-select-dropdown"
         :placeholder="messages.scanJobs.selectMediaSource"
-        clearable
-      >
-        <el-option
-          v-for="item in sourceOptions"
-          :key="item.value"
-          :label="item.label"
-          :value="item.value"
-        />
-      </el-select>
-      <el-button class="query-action-button" :icon="Search" :disabled="!selectedSourceId" @click="queryScanJobs">{{ messages.common.query }}</el-button>
+        enabled-only
+      />
+      <el-button class="query-action-button" :icon="Search" :disabled="!selectedSourceId" :loading="jobsLoading" @click="queryScanJobs()">{{ messages.common.query }}</el-button>
       <el-button @click="resetScanJobs">{{ messages.common.reset }}</el-button>
     </template>
 
     <template #filterActions>
       <div class="scan-mode-selector">
         <el-radio-group v-model="scanMode" :disabled="!selectedSourceId || mediaStore.loading" size="large">
-          <el-radio-button label="full">{{ messages.scanJobs.scanModes.full }}</el-radio-button>
-          <el-radio-button label="incremental">{{ messages.scanJobs.scanModes.incremental }}</el-radio-button>
+          <el-radio-button value="full">{{ messages.scanJobs.scanModes.full }}</el-radio-button>
+          <el-radio-button value="incremental">{{ messages.scanJobs.scanModes.incremental }}</el-radio-button>
         </el-radio-group>
         <el-tooltip
           v-if="scanModeSuggestion"
@@ -241,8 +374,8 @@ watch(selectedSourceId, async (value) => {
       >
         {{ messages.scanJobs.startScan }}
       </el-button>
-      <el-button :icon="Refresh" :disabled="!selectedSourceId" @click="queryScanJobs">{{ messages.common.refresh }}</el-button>
-      <el-button :icon="Notebook" @click="mediaStore.openLogDrawer">{{ messages.scanJobs.viewLogs }}</el-button>
+      <el-button :icon="Refresh" :disabled="!selectedSourceId || jobsLoading" @click="queryScanJobs(false)">{{ messages.common.refresh }}</el-button>
+      <el-button :icon="Notebook" :disabled="!canReadLogs" :title="canReadLogs ? '' : messages.auth.permissionDenied" @click="mediaStore.openLogDrawer">{{ messages.scanJobs.viewLogs }}</el-button>
     </template>
 
     <el-alert v-if="mediaStore.errorMessage" type="error" :title="mediaStore.errorMessage" show-icon />
@@ -252,10 +385,13 @@ watch(selectedSourceId, async (value) => {
       :text="scanProgressText"
       :logs="scanProgressLogs"
       :summary="scanProgressSummary"
+      :status="scanProgressStatus"
+      :indeterminate="scanProgressIndeterminate"
     />
 
     <template #table>
       <el-table
+        v-loading="jobsLoading"
         :data="pagedScanJobs"
         class="data-table scan-jobs-table"
         height="100%"
@@ -354,10 +490,11 @@ watch(selectedSourceId, async (value) => {
                   @click="viewRenamePreviews(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="messages.scanJobs.viewLogs" placement="top">
+              <el-tooltip :content="canReadLogs ? messages.scanJobs.viewLogs : messages.auth.permissionDenied" placement="top">
                 <el-button
                   class="table-action-button action-view"
                   :icon="Notebook"
+                  :disabled="!canReadLogs"
                   text
                   circle
                   @click="openScanOperationLog(row)"
@@ -370,7 +507,8 @@ watch(selectedSourceId, async (value) => {
     </template>
 
     <template #pagination>
-      <TablePagination pagination-key="scan-jobs" :total="mediaStore.scanJobs.length" />
+      <TablePagination pagination-key="scan-jobs" :total="scanJobTotal" server
+        @page-change="queryScanJobs(false)" @page-size-change="queryScanJobs()" />
     </template>
 
     <el-dialog v-model="scanLogDialogVisible" :title="messages.scanJobs.viewLogs" width="640px">

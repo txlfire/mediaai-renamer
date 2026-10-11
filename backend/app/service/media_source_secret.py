@@ -4,12 +4,15 @@ import base64
 import hmac
 import hashlib
 import secrets
+from cryptography.fernet import InvalidToken
 
 from app.core.config import AppSettings
+from app.service.credential_key import CredentialError, credentialCipher
 
-CURRENT_CREDENTIAL_VERSION = 2
+CURRENT_CREDENTIAL_VERSION = 3
 LEGACY_CREDENTIAL_VERSION = 1
-VERSIONED_SECRET_PREFIX = "v2:"
+VERSIONED_SECRET_PREFIX = "v3:"
+V2_SECRET_PREFIX = "v2:"
 _NONCE_LENGTH = 16
 _TAG_LENGTH = 32
 
@@ -45,11 +48,11 @@ def _encrypt_v2_secret(settings: AppSettings, secret: str) -> str:
         hashlib.sha256,
     ).digest()
     payload = base64.urlsafe_b64encode(nonce + encrypted + tag).decode("ascii")
-    return f"{VERSIONED_SECRET_PREFIX}{payload}"
+    return f"{V2_SECRET_PREFIX}{payload}"
 
 
 def _decrypt_v2_secret(settings: AppSettings, encrypted_secret: str) -> str:
-    payload = encrypted_secret[len(VERSIONED_SECRET_PREFIX):]
+    payload = encrypted_secret[len(V2_SECRET_PREFIX):]
     decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
     if len(decoded) < _NONCE_LENGTH + _TAG_LENGTH:
         raise ValueError("媒体源密文格式无效")
@@ -76,7 +79,7 @@ def _decrypt_legacy_secret(settings: AppSettings, encrypted_secret: str) -> str:
 def encrypt_secret(settings: AppSettings, secret: str | None) -> str | None:
     if secret is None:
         return None
-    return _encrypt_v2_secret(settings, secret)
+    return VERSIONED_SECRET_PREFIX + credentialCipher(settings, create=True).encrypt(secret.encode("utf-8")).decode("ascii")
 
 
 def has_secret(encrypted_secret: str | None) -> bool:
@@ -88,6 +91,8 @@ def credential_version_for_secret(encrypted_secret: str | None) -> int:
         return LEGACY_CREDENTIAL_VERSION
     if encrypted_secret.startswith(VERSIONED_SECRET_PREFIX):
         return CURRENT_CREDENTIAL_VERSION
+    if encrypted_secret.startswith(V2_SECRET_PREFIX):
+        return 2
     return LEGACY_CREDENTIAL_VERSION
 
 
@@ -100,12 +105,17 @@ def migrate_secret(settings: AppSettings, encrypted_secret: str | None) -> str |
         return encrypted_secret
     if not should_migrate_secret(encrypted_secret):
         return encrypted_secret
-    return encrypt_secret(settings, _decrypt_legacy_secret(settings, encrypted_secret))
+    return encrypt_secret(settings, decrypt_secret(settings, encrypted_secret))
 
 
 def decrypt_secret(settings: AppSettings, encrypted_secret: str | None) -> str | None:
     if not encrypted_secret:
         return None
     if encrypted_secret.startswith(VERSIONED_SECRET_PREFIX):
+        try:
+            return credentialCipher(settings).decrypt(encrypted_secret[len(VERSIONED_SECRET_PREFIX):].encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeError) as exc:
+            raise CredentialError("凭据解密失败，密钥不匹配或密文损坏；原数据未清空") from exc
+    if encrypted_secret.startswith(V2_SECRET_PREFIX):
         return _decrypt_v2_secret(settings, encrypted_secret)
     return _decrypt_legacy_secret(settings, encrypted_secret)

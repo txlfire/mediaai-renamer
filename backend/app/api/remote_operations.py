@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from app.api.auth import require_authenticated_user, require_permission
-from app.service.audit_service import record_audit_event
+from app.api.auth import require_authenticated_user
+from app.service.audit_service import AuditWriteContext
+from app.service.file_action_audit_service import runAuditedFileAction
 from app.service.remote_operation_recovery_service import (
     RemoteOperationRecoveryConflict,
     recover_remote_operation,
@@ -21,13 +22,6 @@ from app.service.remote_operation_service import (
 router = APIRouter(prefix="/api/remote-operations", tags=["remote-operations"])
 
 
-def _audit_request_context(request: Request) -> dict[str, str | None]:
-    return {
-        "ip_address": request.client.host if request.client else None,
-        "user_agent": request.headers.get("user-agent"),
-    }
-
-
 @router.get("")
 def list_remote_operations_api(
     request: Request,
@@ -38,6 +32,7 @@ def list_remote_operations_api(
     status: Literal[
         "pending",
         "recovering",
+        "remote_applied",
         "completed",
         "failed",
         "recovery_required",
@@ -75,43 +70,25 @@ def get_remote_operation_api(
 def recover_remote_operation_api(
     item_id: int,
     request: Request,
-    current_user=Depends(require_permission("rename:execute")),
+    response: Response,
+    current_user=Depends(require_authenticated_user()),
 ):
     """安全恢复单个远程操作。"""
 
     try:
-        result = recover_remote_operation(
-            request.app.state.settings,
-            item_id,
-            owner=current_user.username if current_user else None,
+        item = get_remote_operation_item(request.app.state.settings, item_id)
+        permission = "rollback:execute" if item.operation_type == "rollback" else "rename:execute"
+        if permission not in current_user.permissions:
+            raise HTTPException(status_code=403, detail=f"权限不足：需要 {permission}")
+        result = runAuditedFileAction(
+            request.app.state.settings, taskType="remote_operation_recovery", taskId=item_id,
+            context=AuditWriteContext(current_user, request.client.host if request.client else None,
+                                      request.headers.get("user-agent")), response=response,
+            execute=lambda: recover_remote_operation(request.app.state.settings, item_id, owner=current_user.username),
         )
     except (RemoteOperationRecoveryConflict, RemoteOperationLockConflict) as exc:
-        record_audit_event(
-            request.app.state.settings,
-            event_type="remote_operation.recover",
-            action="recover_remote_operation",
-            result="failed",
-            summary=f"远程操作需要人工恢复：{item_id}",
-            target_type="remote_operation",
-            target_id=item_id,
-            actor=current_user,
-            detail={"item_id": item_id, "reason": str(exc)},
-            **_audit_request_context(request),
-        )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    record_audit_event(
-        request.app.state.settings,
-        event_type="remote_operation.recover",
-        action="recover_remote_operation",
-        result="success",
-        summary=f"恢复远程操作：{item_id}",
-        target_type="remote_operation",
-        target_id=item_id,
-        actor=current_user,
-        detail={"item_id": item_id, "action": result.action, "status": result.item.status},
-        **_audit_request_context(request),
-    )
     return result

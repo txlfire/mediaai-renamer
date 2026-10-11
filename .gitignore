@@ -3,6 +3,7 @@
 .env.*
 .ssh-github/
 config/config.toml
+credentials.key
 
 # Python
 __pycache__/
@@ -22,6 +23,10 @@ npm-cache/
 *.db
 data/*
 !data/.gitkeep
+media/*
+!media/Test/
+media/Test/*
+!media/Test/.gitkeep
 logs/
 /releases/
 tests/integration/webdav/.tmp/
@@ -29,6 +34,11 @@ tests/integration/webdav/.tmp/
 # Local agent/runtime artifacts
 .codex/
 .planning/
+.agents/
+.reasonix/
+.codegraph/
+.hallmark/
+docs/development/m5/backups/
 
 # OS / editor
 .DS_Store

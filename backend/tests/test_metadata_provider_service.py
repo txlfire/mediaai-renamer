@@ -2,6 +2,9 @@
 
 import tempfile
 import unittest
+import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +13,8 @@ from app.core.database import ensure_database
 from app.service.bangumi_client import BangumiClient
 from app.service.douban_proxy_client import DoubanProxyClient
 from app.service.metadata_provider_service import (
+    get_metadata_provider_config,
+    get_metadata_provider_api_key,
     test_metadata_provider_config,
     update_metadata_provider_config,
 )
@@ -25,6 +30,34 @@ class MetadataProviderServiceTest(unittest.TestCase):
             database_path=root / "mediaai.sqlite3",
             logging=LoggingSettings(log_dir=root / "logs", console_output=False),
         )
+
+    def test_provider_audit_failure_rolls_back_config_and_secret(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            before = get_metadata_provider_config(settings, "bangumi")
+            with patch("app.service.metadata_provider_service.record_audit_event",
+                       side_effect=sqlite3.OperationalError("synthetic audit failure")):
+                with self.assertRaises(sqlite3.OperationalError):
+                    update_metadata_provider_config(settings, "bangumi",
+                        {"enabled": True, "priority": 1, "api_key": "synthetic-private-key"})
+            self.assertEqual(before, get_metadata_provider_config(settings, "bangumi"))
+            self.assertEqual("", get_metadata_provider_api_key(settings, "bangumi"))
+
+    def test_provider_audit_has_context_and_redacted_secret(self):
+        from app.service.audit_service import AuditWriteContext
+        with tempfile.TemporaryDirectory() as tempDir:
+            settings = self.build_settings(Path(tempDir))
+            ensure_database(settings)
+            update_metadata_provider_config(settings, "bangumi", {"api_key": "synthetic-private-key"},
+                auditContext=AuditWriteContext(ipAddress="127.0.0.1", userAgent="Synthetic Test"))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                rows = connection.execute("SELECT actor_name,ip_address,user_agent,detail_json FROM audit_events "
+                    "WHERE action='update_metadata_provider'").fetchall()
+            self.assertEqual(1, len(rows))
+            self.assertEqual(("system", "127.0.0.1", "Synthetic Test"), rows[0][:3])
+            self.assertNotIn("synthetic-private-key", rows[0][3])
+            self.assertEqual("******", json.loads(rows[0][3])["values"]["api_key"])
 
     def test_bangumi_connection_test_uses_saved_config_and_decrypted_token(self):
         with tempfile.TemporaryDirectory() as temp_dir:

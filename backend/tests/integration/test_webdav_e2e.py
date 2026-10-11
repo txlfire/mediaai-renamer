@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import closing
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -12,7 +13,7 @@ import tempfile
 import unittest
 from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import Request, HTTPSHandler, build_opener
 from uuid import uuid4
 
 from app.core.config import AppSettings, LoggingSettings
@@ -30,6 +31,7 @@ from app.service.remote_operation_service import (
 )
 from app.service.shared_protocols.base import SharedPathContext
 from app.service.shared_protocols.registry import get_protocol
+from app.service.shared_protocols.webdav import _confined_url, _normalize_webdav_url, _RejectRedirect
 
 
 @unittest.skipUnless(
@@ -41,7 +43,7 @@ class WebDavEndToEndTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.base_url = os.environ["MEDIAAI_WEBDAV_TEST_URL"].rstrip("/")
+        cls.base_url = _normalize_webdav_url(os.environ["MEDIAAI_WEBDAV_TEST_URL"]).rstrip("/")
         cls.username = os.environ["MEDIAAI_WEBDAV_TEST_USERNAME"]
         cls.password = os.environ["MEDIAAI_WEBDAV_TEST_PASSWORD"]
         cls.ca_cert = os.environ["MEDIAAI_WEBDAV_TEST_CA_CERT"]
@@ -51,19 +53,54 @@ class WebDavEndToEndTest(unittest.TestCase):
     def setUp(self):
         self.remote_prefix = f"case-{uuid4().hex}"
         self.root_url = f"{self.base_url}/{self.remote_prefix}/"
-        self._request("MKCOL", self.root_url)
+        self.remoteCreated = False
+        # setUp后续失败也会清理；没有确认创建成功时不得删除既有目录。
+        self.addCleanup(self._cleanupRemote)
+        try:
+            self._request("PROPFIND", self.root_url, headers={"Depth": "0"})
+        except HTTPError as exc:
+            exc.close()
+            if exc.code != 404:
+                raise
+        else:
+            raise AssertionError("临时目录已经存在，拒绝使用或删除")
+        try:
+            status = self._request("MKCOL", self.root_url)
+        except Exception as exc:
+            raise AssertionError(f"临时目录创建结果未确认，请只读核对：{self.root_url}") from exc
+        if status != 201:
+            raise AssertionError("未确认新建临时目录，拒绝使用或自动删除")
+        self.remoteCreated = True
         self.context = SharedPathContext(
             path_type="webdav",
+            root_url=self.root_url,
             username=self.username,
             secret=self.password,
             has_secret=True,
+            conditional_move_status="verified",
         )
 
-    def tearDown(self):
+    def _cleanupRemote(self):
+        if not self.remoteCreated:
+            return
         try:
-            self._request("DELETE", self.root_url)
-        except HTTPError:
-            pass
+            status = self._request("DELETE", self.root_url)
+            if status not in {200, 204}:
+                raise AssertionError(f"临时目录清理未完成，请核对：{self.root_url}")
+        except HTTPError as exc:
+            exc.close()
+            if exc.code != 404:
+                raise AssertionError(f"临时目录清理失败，请核对：{self.root_url}") from exc
+        # 删除响应不等于全部删除成功，独立PROPFIND确认不存在。
+        try:
+            self._request("PROPFIND", self.root_url, headers={"Depth": "0"})
+        except HTTPError as exc:
+            exc.close()
+            if exc.code != 404:
+                raise AssertionError(f"无法确认临时目录清理结果：{self.root_url}") from exc
+        else:
+            raise AssertionError(f"临时目录仍然存在，请核对：{self.root_url}")
+        self.remoteCreated = False
 
     def test_https_basic_connection_succeeds(self):
         result = self.protocol.test_connection(self.root_url, self.context)
@@ -141,8 +178,10 @@ class WebDavEndToEndTest(unittest.TestCase):
         source_url = self._url("Movie.Original.mkv")
         target_url = self._url("Movie.Safe.mkv")
         self._request("PUT", source_url, body=b"source")
+        sourceVersion = self.protocol.get_file_info(source_url, self.context).version
         self.assertTrue(self.protocol.move_file(source_url, target_url, self.context).success)
-        settings, item_id = self._build_failed_recovery(source_url, target_url)
+        targetVersion = self.protocol.get_file_info(target_url, self.context).version
+        settings, item_id = self._build_failed_recovery(source_url, target_url, sourceVersion, targetVersion)
 
         result = recover_remote_operation(settings, item_id, owner="integration")
 
@@ -157,7 +196,8 @@ class WebDavEndToEndTest(unittest.TestCase):
         target_url = self._url("Movie.Safe.mkv")
         self._request("PUT", source_url, body=b"source")
         self._request("PUT", target_url, body=b"target")
-        settings, item_id = self._build_failed_recovery(source_url, target_url)
+        sourceVersion = self.protocol.get_file_info(source_url, self.context).version
+        settings, item_id = self._build_failed_recovery(source_url, target_url, sourceVersion)
 
         with self.assertRaises(RemoteOperationRecoveryConflict):
             recover_remote_operation(settings, item_id, owner="integration")
@@ -173,7 +213,8 @@ class WebDavEndToEndTest(unittest.TestCase):
         source_url = self._url("Movie.Original.mkv")
         target_url = self._url("Movie.Safe.mkv")
         self._request("PUT", source_url, body=b"source")
-        settings, item_id = self._build_failed_recovery(source_url, target_url)
+        sourceVersion = self.protocol.get_file_info(source_url, self.context).version
+        settings, item_id = self._build_failed_recovery(source_url, target_url, sourceVersion)
         acquire_remote_operation_lock(
             settings,
             media_source_id=1,
@@ -196,14 +237,22 @@ class WebDavEndToEndTest(unittest.TestCase):
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
     ):
+        url = _confined_url(url, self.root_url)
+        if self.ssl_context.verify_mode != ssl.CERT_REQUIRED or not self.ssl_context.check_hostname:
+            raise ValueError("集成测试必须校验证书和主机名")
+        for name, value in (headers or {}).items():
+            if name.lower() == "destination":
+                _confined_url(value, self.root_url)
         token = base64.b64encode(f"{self.username}:{self.password}".encode("utf-8")).decode("ascii")
         request_headers = {"Authorization": f"Basic {token}"}
         request_headers.update(headers or {})
         request = Request(url, data=body, method=method, headers=request_headers)
-        with urlopen(request, context=self.ssl_context, timeout=10) as response:
+        opener = build_opener(HTTPSHandler(context=self.ssl_context), _RejectRedirect())
+        with opener.open(request, timeout=10) as response:
             return response.status
 
-    def _build_failed_recovery(self, source_url: str, target_url: str) -> tuple[AppSettings, int]:
+    def _build_failed_recovery(self, source_url: str, target_url: str,
+                               sourceVersion: str | None, targetVersion: str | None = None) -> tuple[AppSettings, int]:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         root = Path(temp_dir.name)
@@ -223,6 +272,13 @@ class WebDavEndToEndTest(unittest.TestCase):
             secret=self.password,
         )
         self.assertEqual(1, media_source.id)
+        with closing(sqlite3.connect(settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE media_sources SET capability_snapshot_json=? WHERE id=?",
+                (json.dumps({"conditional_move": {"status": "verified", "endpoint": self.root_url,
+                    "credential_version": media_source.credential_version}}), media_source.id),
+            )
+            connection.commit()
         self._insert_rename_business_records(settings, source_url, target_url)
         item = create_remote_operation_item(
             settings,
@@ -231,6 +287,8 @@ class WebDavEndToEndTest(unittest.TestCase):
             idempotency_key=f"integration:{uuid4().hex}",
             source_path=source_url,
             target_path=target_url,
+            source_version=sourceVersion,
+            target_version=targetVersion,
             recovery={
                 "operation_id": 1,
                 "operation_item_id": 1,

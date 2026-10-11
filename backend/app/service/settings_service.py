@@ -1,7 +1,7 @@
 """System hot settings service."""
 
-from contextlib import closing
-from dataclasses import dataclass
+from contextlib import closing, ExitStack
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -9,8 +9,12 @@ import os
 import re
 import sqlite3
 import time
+from urllib.request import Request
+from urllib.error import URLError
+from pathlib import Path
 
-from app.core.config import AppSettings
+from app.core.config import AppSettings, LoggingSettings
+from app.service.external_request_budget_service import ExternalRequestBudget, ExternalBudgetWaitError, ExternalBudgetUnavailable
 from app.schema.settings import PageTestResult, SettingValue
 from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider, OpenAiCompatibleProvider
 from app.service.tmdb_client import TmdbClient
@@ -475,7 +479,7 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         key="logging.path",
         category="logging",
         default="logs",
-        value_type="string",
+        value_type="required_string",
         description="Log storage path",
     ),
     "logging.archive_after_days": SettingDefinition(
@@ -486,6 +490,14 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         description="Archive logs older than days",
         min_value=1,
         max_value=3650,
+    ),
+    "logging.cleanup_interval_seconds": SettingDefinition(
+        key="logging.cleanup_interval_seconds", category="logging", default=60, value_type="int",
+        description="后台日志维护间隔（秒）", min_value=30, max_value=86400,
+    ),
+    "logging.max_total_mb": SettingDefinition(
+        key="logging.max_total_mb", category="logging", default=512, value_type="int",
+        description="文件日志及归档总量上限（MB）", min_value=16, max_value=16384,
     ),
     "operations.log_default_limit": SettingDefinition(
         key="operations.log_default_limit",
@@ -522,6 +534,18 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         description="Operation log cleanup batch size",
         min_value=100,
         max_value=10000,
+    ),
+    "audit_intents.max_records": SettingDefinition(
+        key="audit_intents.max_records", category="operations", default=20000, value_type="int",
+        description="审计辅助记录数量上限", min_value=100, max_value=1000000,
+    ),
+    "metadata.total_timeout_seconds": SettingDefinition(
+        key="metadata.total_timeout_seconds", category="metadata", default=30, value_type="int",
+        description="多源匹配整体等待预算（秒）", min_value=1, max_value=300,
+    ),
+    "audit_intents.max_total_mb": SettingDefinition(
+        key="audit_intents.max_total_mb", category="operations", default=64, value_type="int",
+        description="审计辅助记录逻辑容量上限（MB）", min_value=1, max_value=4096,
     ),
     "operations.force_dry_run": SettingDefinition(
         key="operations.force_dry_run",
@@ -773,7 +797,7 @@ def _tmdb_error_message(channel: str, error_type: str, http_status: int | None, 
     return f"{channel} 连接失败：{reason}"
 
 
-def _test_tmdb_channel(channel: str, effective: dict[str, object]) -> dict[str, object]:
+def _test_tmdb_channel(channel: str, effective: dict[str, object], settings: AppSettings) -> dict[str, object]:
     timeout_ms = int(effective.get("tmdb.timeout_ms") or 15000)
     started_at = time.perf_counter()
     if channel == "v4":
@@ -781,6 +805,7 @@ def _test_tmdb_channel(channel: str, effective: dict[str, object]) -> dict[str, 
         if not token:
             return {"status": "skipped", "message": "未配置 V4 令牌", "response_ms": None}
         client = TmdbClient(
+            requestBudget=ExternalRequestBudget(settings, "tmdb"),
             v4_token=token,
             language=str(effective.get("tmdb.language") or "zh-CN"),
             region=str(effective.get("tmdb.region") or "CN"),
@@ -792,6 +817,7 @@ def _test_tmdb_channel(channel: str, effective: dict[str, object]) -> dict[str, 
         if not api_key:
             return {"status": "skipped", "message": "未配置 V3 API 密钥", "response_ms": None}
         client = TmdbClient(
+            requestBudget=ExternalRequestBudget(settings, "tmdb"),
             api_key=api_key,
             language=str(effective.get("tmdb.language") or "zh-CN"),
             region=str(effective.get("tmdb.region") or "CN"),
@@ -907,9 +933,10 @@ def save_tmdb_connection_test_result(
     settings: AppSettings,
     v4_result: dict[str, object],
     v3_result: dict[str, object],
+    *,
+    config_snapshot: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    effective = get_effective_settings(settings)
-    snapshot = _tmdb_config_snapshot(effective)
+    snapshot = config_snapshot or _tmdb_config_snapshot(get_effective_settings(settings))
     effective_channel = "none"
     if v4_result.get("status") == "success":
         effective_channel = "v4"
@@ -930,7 +957,7 @@ def save_tmdb_connection_test_result(
 def test_tmdb_channel(settings: AppSettings, channel: str) -> dict[str, object]:
     """Test one TMDB channel for frontend progress reporting."""
 
-    return _test_tmdb_channel(channel, get_effective_settings(settings))
+    return _test_tmdb_channel(channel, get_effective_settings(settings), settings)
 
 
 def page_test_result_to_dict(result: PageTestResult | None) -> dict[str, object] | None:
@@ -968,8 +995,10 @@ def ai_test_result_to_dict(result: PageTestResult | None) -> dict[str, object] |
 def save_ai_connection_test_result(
     settings: AppSettings,
     result: dict[str, object],
+    *,
+    effective_settings: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    effective = get_effective_settings(settings)
+    effective = effective_settings or get_effective_settings(settings)
     snapshot = _ai_config_snapshot(effective)
     status = str(result.get("status") or "failed")
     normalized = {
@@ -1019,6 +1048,7 @@ def test_ai_connection(settings: AppSettings, provider: AiProvider | None = None
                 "response_ms": 0,
                 "error_type": "client",
             },
+            effective_settings=effective,
         )
     if not api_key:
         return save_ai_connection_test_result(
@@ -1029,9 +1059,11 @@ def test_ai_connection(settings: AppSettings, provider: AiProvider | None = None
                 "response_ms": 0,
                 "error_type": "client",
             },
+            effective_settings=effective,
         )
 
     config = AiProviderConfig(
+        requestBudget=ExternalRequestBudget(settings, "ai"),
         provider=provider_name,
         model=model,
         api_key=api_key,
@@ -1040,7 +1072,7 @@ def test_ai_connection(settings: AppSettings, provider: AiProvider | None = None
         max_retries=int(effective.get("ai.max_retries") or 0),
     )
     ai_provider = provider or (DeepSeekProvider(config) if provider_name == "deepseek" else OpenAiCompatibleProvider(config))
-    return save_ai_connection_test_result(settings, ai_provider.test_connection())
+    return save_ai_connection_test_result(settings, ai_provider.test_connection(), effective_settings=effective)
 
 
 def get_imdb_test_result(settings: AppSettings) -> dict[str, object] | None:
@@ -1069,11 +1101,13 @@ def get_imdb_test_result(settings: AppSettings) -> dict[str, object] | None:
 def save_imdb_connection_test_result(
     settings: AppSettings,
     result: dict[str, object],
+    *,
+    config_snapshot: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Persist the latest IMDb connection test result."""
 
     effective = get_effective_settings(settings)
-    snapshot = _imdb_config_snapshot(effective)
+    snapshot = config_snapshot or _imdb_config_snapshot(effective)
     now = _utc_now()
     status = str(result.get("status") or result.get("connection_status") or "failed")
     if status not in {"success", "failed"}:
@@ -1122,27 +1156,41 @@ def test_imdb_connection(settings: AppSettings) -> dict[str, object]:
     timeout_seconds = int(effective.get("imdb.timeout_ms") or 10000) / 1000
     started_at = time.perf_counter()
     try:
-        req = url_request.Request(
+        req = Request(
             "https://www.imdb.com/",
             headers={"User-Agent": "MediaAI-Renamer/1.0"},
             method="GET",
         )
-        with url_request.urlopen(req, timeout=timeout_seconds) as response:
+        with ExternalRequestBudget(settings, "imdb").open(req, timeout_seconds) as response:
             status_code = getattr(response, "status", 200)
             if status_code >= 400:
                 raise RuntimeError(f"HTTP {status_code}")
-        return {
+        result = {
             "status": "success",
             "message": "IMDb连接成功",
             "response_ms": round((time.perf_counter() - started_at) * 1000),
         }
+    except (ExternalBudgetWaitError, ExternalBudgetUnavailable) as exc:
+        result = {"status": "failed", "message": str(exc), "error_message": str(exc),
+                  "response_ms": round((time.perf_counter() - started_at) * 1000)}
     except (RuntimeError, OSError, URLError) as exc:
-        return {
+        result = {
             "status": "failed",
             "message": "IMDb连接失败请检查网络或代理设置",
             "response_ms": round((time.perf_counter() - started_at) * 1000),
             "error_message": str(exc),
         }
+    saved = save_imdb_connection_test_result(
+        settings,
+        result,
+        config_snapshot=_imdb_config_snapshot(effective),
+    )
+    return {
+        **result,
+        "tested_at": saved["test_time"],
+        "config_snapshot": saved["config_snapshot"],
+        "is_valid": saved["is_valid"],
+    }
 
 
 def _parse_bool(value: object) -> bool:
@@ -1425,12 +1473,22 @@ def validate_setting_value(
 
 
 def _load_database_values(settings: AppSettings) -> dict[str, tuple[str, str | None]]:
+    from app.service.media_source_secret import decrypt_secret
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             "SELECT key, value, updated_at FROM system_settings"
         ).fetchall()
-    return {str(row["key"]): (str(row["value"]), row["updated_at"]) for row in rows}
+    return {
+        str(row["key"]): (
+            decrypt_secret(settings, str(row["value"]))
+            if str(row["value"]).startswith("v3:") and (
+                str(row["key"]) == "ai.provider_profiles"
+                or (SETTING_DEFINITIONS.get(str(row["key"])) and SETTING_DEFINITIONS[str(row["key"])].sensitive)
+            ) else str(row["value"]),
+            row["updated_at"],
+        ) for row in rows
+    }
 
 
 def _effective_value(
@@ -1455,6 +1513,7 @@ def get_effective_settings(settings: AppSettings) -> dict[str, object]:
     database_values = _load_database_values(settings)
     effective: dict[str, object] = {}
     for definition in SETTING_DEFINITIONS.values():
+        definition = _instanceDefinition(settings, definition)
         try:
             value, _, _ = _effective_value(definition, database_values)
         except ValueError:
@@ -1472,6 +1531,20 @@ def get_effective_settings(settings: AppSettings) -> dict[str, object]:
     return effective
 
 
+def _instanceDefinition(settings: AppSettings, definition: SettingDefinition) -> SettingDefinition:
+    if definition.key == "logging.path":
+        return replace(definition, default=str(settings.logging.log_dir))
+    if definition.key == "logging.level":
+        return replace(definition, default=settings.logging.level)
+    return definition
+
+
+def resolveRuntimeLogging(settings: AppSettings, effective: dict[str, object] | None = None) -> LoggingSettings:
+    values = effective if effective is not None else get_effective_settings(settings)
+    return replace(settings.logging, log_dir=Path(str(values.get("logging.path") or settings.logging.log_dir)),
+                   level=str(values.get("logging.level") or settings.logging.level))
+
+
 def _mask_secret(value: object) -> str:
     text = str(value)
     if not text:
@@ -1486,6 +1559,7 @@ def list_setting_values(settings: AppSettings) -> list[SettingValue]:
     database_values = _load_database_values(settings)
     values: list[SettingValue] = []
     for definition in SETTING_DEFINITIONS.values():
+        definition = _instanceDefinition(settings, definition)
         try:
             value, source, updated_at = _effective_value(definition, database_values)
         except ValueError:
@@ -1512,9 +1586,14 @@ def update_setting_values(
     settings: AppSettings,
     values: dict[str, object],
     operator: str = "admin",
+    *,
+    auditContext=None,
 ) -> list[SettingValue]:
     """Validate and persist hot settings."""
 
+    from app.service.media_source_secret import encrypt_secret
+    from app.service.audit_service import AuditWriteContext, record_audit_event
+    context = auditContext or AuditWriteContext()
     current_effective = get_effective_settings(settings)
     parsed_values: dict[str, tuple[SettingDefinition, object]] = {}
     for key, value in values.items():
@@ -1535,7 +1614,19 @@ def update_setting_values(
 
     now = _utc_now()
     _apply_naming_template_metadata_updates(current_effective, parsed_values, now)
-    with closing(sqlite3.connect(settings.database_path)) as connection:
+    with ExitStack() as resources:
+        preparedLog = None
+        if any(key in parsed_values for key in ("logging.path", "logging.level")):
+            from app.core.logger import loggingConfigurationLock, prepareLogging
+            resources.enter_context(loggingConfigurationLock)
+            nextValues = get_effective_settings(settings)
+            nextValues.update({key: value for key, (_, value) in parsed_values.items()})
+            try:
+                preparedLog = prepareLogging(resolveRuntimeLogging(settings, nextValues))
+            except OSError as exc:
+                raise ValueError("日志目录无法创建或写入，请检查路径和权限") from exc
+            resources.callback(preparedLog.close)
+        connection = resources.enter_context(closing(sqlite3.connect(settings.database_path)))
         for key, (definition, parsed_value) in parsed_values.items():
             connection.execute(
                 "INSERT INTO system_settings "
@@ -1551,7 +1642,9 @@ def update_setting_values(
                 (
                     key,
                     definition.category,
-                    _serialize_value(parsed_value),
+                    encrypt_secret(settings, _serialize_value(parsed_value))
+                    if definition.sensitive or key == "ai.provider_profiles"
+                    else _serialize_value(parsed_value),
                     definition.description,
                     1 if definition.sensitive else 0,
                     operator,
@@ -1571,7 +1664,14 @@ def update_setting_values(
             )
         if any(key in IMDB_TEST_SNAPSHOT_KEYS for key in parsed_values):
             connection.execute("UPDATE imdb_test_result SET is_valid = 0 WHERE id = 1")
+        record_audit_event(settings, event_type="settings.update", action="update_settings", result="success",
+                           summary=f"保存系统设置：{len(values)} 项", target_type="settings", actor=context.actor,
+                           actor_name=operator if context.actor is None else None,
+                           ip_address=context.ipAddress, user_agent=context.userAgent,
+                           detail={"keys": sorted(values.keys()), "values": values}, connection=connection)
         connection.commit()
+        if preparedLog is not None:
+            preparedLog.activate()
 
     return list_setting_values(settings)
 
@@ -1613,8 +1713,10 @@ def _apply_naming_template_metadata_updates(
 def test_tmdb_connection(settings: AppSettings) -> dict[str, object]:
     """Test V4 token and V3 API key separately, return per-channel results."""
 
+    effective = get_effective_settings(settings)
     return save_tmdb_connection_test_result(
         settings,
-        test_tmdb_channel(settings, "v4"),
-        test_tmdb_channel(settings, "v3"),
+        _test_tmdb_channel("v4", effective, settings),
+        _test_tmdb_channel("v3", effective, settings),
+        config_snapshot=_tmdb_config_snapshot(effective),
     )

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.auth import require_authenticated_user, require_permission
-from app.service.audit_service import record_audit_event
+from app.service.audit_service import AuditWriteContext, record_audit_event
+from app.service.file_action_audit_service import runAuditedFileAction
+from app.service.rollback_queue_service import acceptRollback
 from app.service.rename_rollback_service import (
     create_rename_rollback_plan,
     dry_run_rename_rollback_plan,
@@ -37,6 +39,8 @@ def create_rollback_plan_api(
             request.app.state.settings,
             operation_id,
             created_by=current_user.username if current_user else None,
+            auditContext=AuditWriteContext(current_user, request.client.host if request.client else None,
+                                           request.headers.get("user-agent")),
         )
     except ValueError as exc:
         record_audit_event(
@@ -52,18 +56,6 @@ def create_rollback_plan_api(
             **_audit_request_context(request),
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="rename.rollback",
-        action="create_rollback_plan",
-        result="success",
-        summary=f"创建回滚计划：{plan.id}",
-        target_type="rollback_plan",
-        target_id=plan.id,
-        actor=current_user,
-        detail={"operation_id": operation_id, "plan_id": plan.id, "item_count": plan.item_count},
-        **_audit_request_context(request),
-    )
     return plan
 
 
@@ -101,7 +93,9 @@ def dry_run_rollback_plan_api(
     """执行回滚 dry-run。"""
 
     try:
-        plan = dry_run_rename_rollback_plan(request.app.state.settings, plan_id)
+        plan = dry_run_rename_rollback_plan(request.app.state.settings, plan_id,
+            auditContext=AuditWriteContext(current_user, request.client.host if request.client else None,
+                                           request.headers.get("user-agent")))
     except ValueError as exc:
         record_audit_event(
             request.app.state.settings,
@@ -116,23 +110,6 @@ def dry_run_rollback_plan_api(
             **_audit_request_context(request),
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="rename.rollback",
-        action="dry_run_rollback_plan",
-        result="success",
-        summary=f"回滚 dry-run：{plan_id}",
-        target_type="rollback_plan",
-        target_id=plan_id,
-        actor=current_user,
-        detail={
-            "plan_id": plan_id,
-            "status": plan.status,
-            "executable_count": plan.executable_count,
-            "conflict_count": plan.conflict_count,
-        },
-        **_audit_request_context(request),
-    )
     return plan
 
 
@@ -140,42 +117,33 @@ def dry_run_rollback_plan_api(
 def execute_rollback_plan_api(
     plan_id: int,
     request: Request,
+    response: Response,
     current_user=Depends(require_permission("rollback:execute")),
 ):
     """执行回滚计划。"""
 
     try:
-        plan = execute_rename_rollback_plan(request.app.state.settings, plan_id)
-    except ValueError as exc:
-        record_audit_event(
-            request.app.state.settings,
-            event_type="rename.rollback",
-            action="execute_rollback_plan",
-            result="failed",
-            summary=f"执行回滚失败：{plan_id}",
-            target_type="rollback_plan",
-            target_id=plan_id,
-            actor=current_user,
-            detail={"plan_id": plan_id, "reason": str(exc)},
-            **_audit_request_context(request),
+        existing = get_rename_rollback_plan(request.app.state.settings, plan_id)
+        if existing.status != "checked":
+            return existing
+        plan = runAuditedFileAction(
+            request.app.state.settings, taskType="rollback_plan", taskId=plan_id,
+            context=AuditWriteContext(current_user, request.client.host if request.client else None, request.headers.get("user-agent")),
+            execute=lambda: execute_rename_rollback_plan(request.app.state.settings, plan_id), response=response,
         )
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record_audit_event(
-        request.app.state.settings,
-        event_type="rename.rollback",
-        action="execute_rollback_plan",
-        result="success",
-        summary=f"执行回滚计划：{plan_id}",
-        target_type="rollback_plan",
-        target_id=plan_id,
-        actor=current_user,
-        detail={
-            "plan_id": plan_id,
-            "status": plan.status,
-            "item_count": plan.item_count,
-            "executable_count": plan.executable_count,
-            "conflict_count": plan.conflict_count,
-        },
-        **_audit_request_context(request),
-    )
     return plan
+
+
+@router.post("/rename-rollback-plans/{plan_id}/execute-async", status_code=202)
+def accept_rollback_plan_api(
+    plan_id: int, request: Request, current_user=Depends(require_permission("rollback:execute")),
+):
+    """只受理一次，结果通过现有详情接口读取，不在HTTP请求中执行文件动作。"""
+    try:
+        return acceptRollback(request.app.state.settings, plan_id,
+            AuditWriteContext(current_user, request.client.host if request.client else None,
+                              request.headers.get("user-agent")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

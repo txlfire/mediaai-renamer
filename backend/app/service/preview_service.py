@@ -281,7 +281,10 @@ def _query_media_files(
     scan_job_id: int | None,
     media_file_ids: list[int] | None,
 ) -> list[sqlite3.Row]:
-    conditions: list[str] = []
+    conditions: list[str] = [
+        "ms.deleted_at IS NULL",
+        "NOT EXISTS (SELECT 1 FROM scan_jobs job WHERE job.id = mf.scan_job_id AND job.source_invalidated_at IS NOT NULL)",
+    ]
     params: list[object] = []
     if media_source_id is not None:
         conditions.append("mf.media_source_id = ?")
@@ -346,10 +349,14 @@ def generate_rename_previews(
             elif status == "generated":
                 generated_count += 1
 
+            if not connection.in_transaction:
+                connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT edited_name FROM rename_previews WHERE media_file_id = ?",
+                "SELECT id, edited_name FROM rename_previews WHERE media_file_id = ?",
                 (row["id"],),
             ).fetchone()
+            if existing:
+                _assertPreviewEditable(connection, int(existing["id"]))
             edited_name = None
             if existing and existing["edited_name"] and not overwrite_edited:
                 edited_name = existing["edited_name"]
@@ -411,15 +418,13 @@ def generate_rename_previews(
     return PreviewGenerationSummary(generated_count, needs_review_count, edited_kept_count)
 
 
-def list_rename_previews(
-    settings: AppSettings,
+def _previewReadFilters(
     media_source_id: int | None = None,
     scan_job_id: int | None = None,
     status: str | None = None,
     media_type: str | None = None,
     keyword: str | None = None,
-) -> list[RenamePreview]:
-    """List rename previews with optional filters."""
+) -> tuple[str, list[object]]:
 
     conditions: list[str] = []
     params: list[object] = []
@@ -447,6 +452,73 @@ def list_rename_previews(
         params.extend([pattern, pattern, pattern, pattern, pattern])
 
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    return where_clause, params
+
+
+_PREVIEW_FROM = " FROM rename_previews rp JOIN media_files mf ON mf.id = rp.media_file_id"
+_PREVIEW_SORTS = {"id": "rp.id", "status": "rp.status", "file_name": "mf.file_name",
+    "current_target_name": "COALESCE(NULLIF(rp.edited_name,''),rp.suggested_name)",
+    "metadata_match_score": "COALESCE(rp.metadata_match_score,0)", "media_type": "rp.media_type",
+    "parsed_year": "rp.parsed_year", "updated_at": "rp.updated_at"}
+
+
+def listRenamePreviewsPage(settings: AppSettings, *, page: int = 1, page_size: int = 50,
+    sort_by: str = "id", sort_order: str = "asc", media_source_id: int | None = None,
+    scan_job_id: int | None = None, status: str | None = None, media_type: str | None = None,
+    keyword: str | None = None) -> dict:
+    if page < 1 or not 1 <= page_size <= 200:
+        raise ValueError("分页参数超出允许范围")
+    if sort_by not in _PREVIEW_SORTS or sort_order not in {"asc", "desc"}:
+        raise ValueError("排序参数不受支持")
+    where, params = _previewReadFilters(media_source_id, scan_job_id, status, media_type, keyword)
+    effective = get_effective_settings(settings)
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN")
+        groups = connection.execute("SELECT rp.status,COUNT(*)" + _PREVIEW_FROM + where + " GROUP BY rp.status", params).fetchall()
+        stats = {str(row[0]): int(row[1]) for row in groups}
+        total = sum(stats.values())
+        actualPage = min(page, max(1, (total + page_size - 1) // page_size))
+        rows = connection.execute("SELECT rp.*,mf.file_path,mf.file_name" + _PREVIEW_FROM + where +
+            f" ORDER BY {_PREVIEW_SORTS[sort_by]} {sort_order},rp.id ASC LIMIT ? OFFSET ?",
+            [*params, page_size, (actualPage - 1) * page_size]).fetchall()
+    return {"items": [_row_to_preview(row, effective) for row in rows], "total": total,
+            "page": actualPage, "page_size": page_size, "stats": stats}
+
+
+def selectRenamePreviewTargets(settings: AppSettings, *, action: str, media_source_id: int | None = None,
+    scan_job_id: int | None = None, status: str | None = None, media_type: str | None = None,
+    keyword: str | None = None) -> dict:
+    eligibility = {
+        "rename": "rp.status IN ('generated','edited')",
+        "multi_source": "rp.status NOT IN ('renamed','excluded')",
+        "ai": "rp.status NOT IN ('renamed','excluded') AND (rp.metadata_match_status IS NULL OR rp.metadata_match_status IN ('','failed','low_confidence'))",
+        "tmdb": "(rp.metadata_match_status IS NULL OR rp.metadata_match_status='')",
+    }
+    if action not in eligibility:
+        raise ValueError("批量操作类型不受支持")
+    where, params = _previewReadFilters(media_source_id, scan_job_id, status, media_type, keyword)
+    where += " AND (" + eligibility[action] + ")"
+    limit = max(1, min(10000, int(get_effective_settings(settings).get("operations.batch_limit") or 200)))
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN")
+        total = int(connection.execute("SELECT COUNT(*)" + _PREVIEW_FROM + where, params).fetchone()[0])
+        # 不截取前N项冒充全部：超过配置上限时只返回数量，调用方必须拒绝执行。
+        rows = [] if total > limit else connection.execute(
+            "SELECT rp.id,rp.status,rp.parsed_title,mf.file_name,"
+            "COALESCE(NULLIF(rp.edited_name,''),rp.suggested_name) AS current_target_name"
+            + _PREVIEW_FROM + where + " ORDER BY rp.id LIMIT ?", [*params, limit]).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total, "limit": limit,
+            "over_limit": total > limit, "scope": "filtered_results", "operation_executed": False}
+
+
+def list_rename_previews(
+    settings: AppSettings, media_source_id: int | None = None, scan_job_id: int | None = None,
+    status: str | None = None, media_type: str | None = None, keyword: str | None = None,
+) -> list[RenamePreview]:
+    """保留旧数组契约；分页读取使用独立入口。"""
+    where_clause, params = _previewReadFilters(media_source_id, scan_job_id, status, media_type, keyword)
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
@@ -466,6 +538,47 @@ def list_rename_previews(
     return [_row_to_preview(row, effective_settings) for row in rows]
 
 
+def _assertPreviewEditable(connection: sqlite3.Connection, previewId: int) -> None:
+    # 与批次认领串行化；查询和后续写入必须处于同一事务。
+    if not connection.in_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    historical = connection.execute(
+        "SELECT 1 FROM rename_previews preview JOIN media_files file ON file.id = preview.media_file_id "
+        "JOIN media_sources source ON source.id = file.media_source_id WHERE preview.id = ? "
+        "AND (source.deleted_at IS NOT NULL OR EXISTS (SELECT 1 FROM scan_jobs job "
+        "WHERE job.id = file.scan_job_id AND job.source_invalidated_at IS NOT NULL))", (previewId,),
+    ).fetchone()
+    if historical:
+        raise ValueError("媒体源已变更或退役，历史预览不能修改或执行，请重新扫描")
+    active = connection.execute(
+        "SELECT 1 FROM rename_operation_items item "
+        "JOIN rename_operations operation ON operation.id = item.operation_id "
+        "WHERE item.rename_preview_id = ? AND item.status = 'ready' "
+        "AND (operation.status IN ('queued','running') OR operation.execution_token IS NOT NULL) LIMIT 1", (previewId,),
+    ).fetchone()
+    if active:
+        raise ValueError("预览正在执行重命名，暂不能修改或排除")
+    rollback = connection.execute(
+        "SELECT 1 FROM rename_rollback_items rollback "
+        "JOIN rename_rollback_plans plan ON plan.id = rollback.plan_id "
+        "JOIN rename_operation_items item ON item.id = rollback.operation_item_id "
+        "WHERE item.rename_preview_id = ? AND (plan.status IN ('queued','running') OR plan.execution_token IS NOT NULL) LIMIT 1", (previewId,),
+    ).fetchone()
+    if rollback:
+        raise ValueError("预览正在执行回滚，暂不能修改或排除")
+    unresolved = connection.execute(
+        "SELECT 1 FROM local_file_actions action WHERE action.status IN ('prepared', 'applied', 'recovery_required') "
+        "AND ((action.action_type = 'rename' AND action.record_id IN "
+        "(SELECT id FROM rename_operation_items WHERE rename_preview_id = ?)) "
+        "OR (action.action_type = 'rollback' AND action.record_id IN "
+        "(SELECT rollback.id FROM rename_rollback_items rollback JOIN rename_operation_items item "
+        "ON item.id = rollback.operation_item_id WHERE item.rename_preview_id = ?))) LIMIT 1",
+        (previewId, previewId),
+    ).fetchone()
+    if unresolved:
+        raise ValueError("预览存在未完成本地动作，请先核对和恢复")
+
+
 def update_rename_preview(
     settings: AppSettings,
     preview_id: int,
@@ -482,6 +595,7 @@ def update_rename_preview(
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        _assertPreviewEditable(connection, preview_id)
         row = connection.execute(
             "SELECT rp.original_extension, mf.file_path, mf.file_name "
             "FROM rename_previews rp JOIN media_files mf ON mf.id = rp.media_file_id "
@@ -502,11 +616,7 @@ def update_rename_preview(
         )
         connection.commit()
 
-    previews = list_rename_previews(settings)
-    for preview in previews:
-        if preview.id == preview_id:
-            return preview
-    raise ValueError("命名预览不存在")
+    return _preview_by_id(settings, preview_id)
 
 
 def exclude_rename_preview(settings: AppSettings, preview_id: int, reason: str = "manual_excluded") -> RenamePreview:
@@ -515,6 +625,7 @@ def exclude_rename_preview(settings: AppSettings, preview_id: int, reason: str =
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        _assertPreviewEditable(connection, preview_id)
         row = connection.execute(
             "SELECT rp.id, mf.media_source_id, mf.scan_job_id, mf.file_path, mf.file_size "
             "FROM rename_previews rp JOIN media_files mf ON mf.id = rp.media_file_id "
@@ -721,6 +832,7 @@ def _update_preview_metadata(
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        _assertPreviewEditable(connection, preview_id)
         row = _get_preview_row(connection, preview_id)
         suggested_name = row["suggested_name"]
         edited_name = row["edited_name"]
@@ -914,13 +1026,15 @@ def match_rename_preview_metadata(
     provider: MetadataProvider | None = None,
     metadata_match_source: str = METADATA_MATCH_SOURCE_PARSED_TITLE,
     auto_backfill: bool = True,
+    *,
+    authorization=None,
 ) -> RenamePreview:
     """Match one preview against TMDB and auto-backfill high confidence results."""
 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         row = _get_preview_row(connection, preview_id)
-    guard = _check_metadata_external_submission(settings, row, metadata_match_source)
+    guard = _check_metadata_external_submission(settings, row, metadata_match_source, authorization=authorization)
     if not guard.allowed:
         return _update_preview_metadata(
             settings,
@@ -1323,6 +1437,8 @@ def _check_metadata_external_submission(
     settings: AppSettings,
     row: sqlite3.Row,
     metadata_match_source: str,
+    *,
+    authorization=None,
 ):
     parsed = _parsed_from_preview(row, metadata_match_source)
     return check_external_submission(
@@ -1333,4 +1449,5 @@ def _check_metadata_external_submission(
         file_path=str(row["file_path"]),
         match_title=parsed.title,
         target_service="tmdb",
+        authorization=authorization, parsedPayload=asdict(parsed),
     )

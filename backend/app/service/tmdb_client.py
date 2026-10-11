@@ -5,20 +5,63 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import json
+import traceback
+from pathlib import Path
+
+from app.core.logger import get_logger
 
 from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate
+from app.service.external_request_budget_service import openExternalRequest, clientRequestDeadline, ExternalBudgetWaitError, ExternalBudgetUnavailable
 
 
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
+MAX_TMDB_RESPONSE_BYTES = 4 * 1024 * 1024
+
+
+class InvalidTmdbResponseError(RuntimeError):
+    """外部 TMDB 响应格式无效，不携带原始正文。"""
+
+
+def recordTmdbDiagnostic(exc: Exception, *, channel: str, phase: str, providerId: int | None = None) -> dict:
+    cause = exc.__cause__ or exc
+    status = cause.code if isinstance(cause, HTTPError) else None
+    errorType = "internal"
+    if isinstance(exc, ExternalBudgetWaitError):
+        errorType = "budget_wait"
+    elif isinstance(exc, ExternalBudgetUnavailable):
+        errorType = "budget_unavailable"
+    elif isinstance(exc, InvalidTmdbResponseError):
+        errorType = "invalid_response"
+    elif status == 429:
+        errorType = "rate_limit"
+    elif status in {401, 403}:
+        errorType = "authentication"
+    elif status and status >= 500:
+        errorType = "server"
+    elif isinstance(cause, TimeoutError):
+        errorType = "timeout"
+    elif isinstance(cause, URLError):
+        errorType = "timeout" if isinstance(cause.reason, TimeoutError) else "network"
+    elif isinstance(exc, (RuntimeError, OSError)):
+        errorType = "request"
+    diagnostic = {"code": "tmdb_detail_unavailable" if phase == "detail" else "tmdb_auth_fallback",
+                  "phase": phase, "channel": channel, "provider_id": providerId,
+                  "error_type": errorType, "http_status": status, "exception_type": type(exc).__name__}
+    if errorType in {"budget_wait", "budget_unavailable"}:
+        diagnostic["submission_executed"] = False
+    if errorType == "internal":
+        diagnostic["frames"] = [{"module": Path(frame.filename).name, "function": frame.name, "line": frame.lineno}
+                                for frame in traceback.extract_tb(exc.__traceback__)[-8:]]
+    try:
+        get_logger(__name__).warning("TMDB诊断 %s", json.dumps(diagnostic, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 - 详情降级的辅助诊断不覆盖主结果。
+        pass
+    return diagnostic
 
 
 class TmdbClient:
-    """Small synchronous TMDB client with a mock-friendly search interface.
-
-    Supports V4 (Bearer token) and V3 (API key) authentication.
-    When v4_token is provided, it takes priority over api_key.
-    """
+    """使用 /3 API；V4 表示优先使用读取令牌的 Bearer 认证，不代表 /4 端点。"""
 
     def __init__(
         self,
@@ -27,12 +70,14 @@ class TmdbClient:
         language: str = "zh-CN",
         region: str = "CN",
         timeout_ms: int = 10000,
+        requestBudget=None,
     ):
         self.api_key = api_key
         self.v4_token = v4_token
         self.language = language
         self.region = region
         self.timeout_seconds = max(1, timeout_ms / 1000)
+        self.requestBudget = requestBudget
 
     def _get_json(self, path: str, params: dict[str, object]) -> dict[str, Any]:
         base_params: dict[str, object] = {
@@ -44,7 +89,7 @@ class TmdbClient:
         )
         headers = {
             "Accept": "application/json",
-            "User-Agent": "MediaAI-Renamer/0.3",
+            "User-Agent": "MediaAI-Renamer",
         }
 
         if self.v4_token:
@@ -59,19 +104,33 @@ class TmdbClient:
             headers=headers,
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
+            with openExternalRequest(self.requestBudget, request, self.timeout_seconds, urlopen) as response:
+                body = response.read(MAX_TMDB_RESPONSE_BYTES + 1)
+                if len(body) > MAX_TMDB_RESPONSE_BYTES:
+                    raise InvalidTmdbResponseError("TMDB 响应超出大小上限")
+                payload = json.loads(body.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise InvalidTmdbResponseError("TMDB 响应不是对象")
+                return payload
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise InvalidTmdbResponseError("TMDB 服务响应格式无效") from exc
         except HTTPError as exc:
+            try:
+                exc.close()
+            except Exception:  # noqa: BLE001 - 保留请求错误，不回显正文或覆盖主因。
+                pass
             raise RuntimeError(f"HTTP {exc.code}") from exc
         except URLError as exc:
-            raise RuntimeError(str(exc.reason)) from exc
+            raise RuntimeError("TMDB 网络请求失败") from exc
 
+    @clientRequestDeadline
     def test_connection(self) -> bool:
         """Validate API key and network access with a lightweight TMDB endpoint."""
 
         self._get_json("/configuration", {})
         return True
 
+    @clientRequestDeadline
     def search(self, parsed: ParsedMediaName) -> list[MetadataCandidate]:
         """Search TMDB candidates for movie or episode-style parsed names."""
 
@@ -87,7 +146,10 @@ class TmdbClient:
             },
         )
         candidates: list[MetadataCandidate] = []
-        for item in payload.get("results", []):
+        results = payload.get("results", [])
+        if not isinstance(results, list):
+            raise InvalidTmdbResponseError("TMDB results 字段不是数组")
+        for item in results:
             if not isinstance(item, dict):
                 continue
             detail = self._detail_for_item(item, media_type)
@@ -104,8 +166,10 @@ class TmdbClient:
                 detail_path,
                 {"append_to_response": "credits,external_ids,translations"},
             )
-        except Exception:
-            return {}
+        except Exception as exc:
+            diagnostic = recordTmdbDiagnostic(exc, channel="v4" if self.v4_token else "v3", phase="detail",
+                                              providerId=provider_id if isinstance(provider_id, int) else None)
+            return {"metadata_diagnostics": [diagnostic]}
 
     def _candidate_from_item(self, item: dict[str, Any], media_type: str) -> MetadataCandidate:
         title = str(item.get("title") or item.get("name") or "")

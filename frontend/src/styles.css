@@ -2,6 +2,11 @@
  * 全局样式。
  *
  * M1 提供应用级布局、主题变量和通用操作台样式。
+ *
+ * 主题为两个正交轴（详见 design.md「主题架构」）：
+ *   - scheme（方案）：亮/暗，只承担中性色；选择器 :root 与 :root[data-scheme="dark"]
+ *   - palette（配色）：点缀色，亮暗各一套值；选择器 :root[data-palette="…"]
+ * 新增一套配色只需追加一个 palette 块，不得新增任何组件级 CSS。
  */
 
 :root {
@@ -10,13 +15,14 @@
   --sidebar-expanded-min-width: 240px;
   --sidebar-collapsed-width: 64px;
   --sidebar-transition: 300ms ease-in-out;
+
+  /* ── scheme: light —— 中性色（随亮暗变化，不随配色变化） ── */
   --app-bg: #f4f7fb;
   --panel-bg: #ffffff;
   --panel-soft-bg: #f8fafc;
   --sidebar-bg: #ffffff;
   --sidebar-text: #1f2937;
   --sidebar-muted: #64748b;
-  --sidebar-active: #2563eb;
   --text-main: #1f2937;
   --text-muted: #64748b;
   --border-color: #d8e1ec;
@@ -35,9 +41,62 @@
   --button-default-disabled-text: #5f7fa8;
   --button-quiet-bg: #eef4fb;
   --button-quiet-hover-bg: #e1ebf6;
+  /* scheme 扩展 token（由原 dark 组件覆盖块中的硬编码色提升而来） */
+  --text-strong: #1f2937;
+  --table-text: #1f2937;
+  --text-weak: #64748b;
+  --text-subtle: #94a3b8;
+  --input-placeholder: #94a3b8;
+  --table-row-hover-bg: #f1f5f9;
+
+  /* ── palette: default —— 点缀色（亮暗各一值，配色间可替换） ── */
+  /* 品牌强调：值按方案分两套，--brand-accent 与 --brand-accent-ink 为方案别名。 */
+  /* 亮色由 :root 指向 -light，暗色由 :root[data-scheme="dark"] 指向 -dark；配色块只覆盖 4 个真值。 */
+  --brand-accent-light: #2563eb;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #3b82f6;
+  --brand-accent-dark-ink: #ffffff;
+  --brand-accent: var(--brand-accent-light);
+  --brand-accent-ink: var(--brand-accent-light-ink);
+  --semantic-success: #16a34a;
+  --semantic-warning: #d97706;
+  --semantic-danger: #dc2626;
+  --semantic-info: #2563eb;
+  --action-edit: #2563eb;
+  --action-edit-hover: #1d4ed8;
+  --action-view: #0891b2;
+  --action-view-hover: #0e7490;
+  --action-magic: #7c3aed;
+  --action-magic-hover: #6d28d9;
+  --action-run: #16a34a;
+  --action-run-hover: #15803d;
+  --action-toggle: #16a34a;
+  --action-toggle-hover: #15803d;
+  --action-sync: #16a34a;
+  --action-sync-hover: #15803d;
+  --action-ai: #2563eb;
+  --action-ai-hover: #1d4ed8;
+  --action-delete: #dc2626;
+  --action-delete-hover: #b91c1c;
+  --action-edit-dark: #60a5fa;
+  --action-edit-dark-hover: #93c5fd;
+  --action-view-dark: #22d3ee;
+  --action-view-dark-hover: #67e8f9;
+  --action-magic-dark: #c4b5fd;
+  --action-magic-dark-hover: #ddd6fe;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync-dark: #4ade80;
+  --action-sync-dark-hover: #86efac;
+  --action-ai-dark: #60a5fa;
+  --action-ai-dark-hover: #93c5fd;
+  --action-delete-dark: #f87171;
+  --action-delete-dark-hover: #fca5a5;
 }
 
-:root[data-theme="dark"] {
+:root[data-scheme="dark"] {
   color-scheme: dark;
   --app-bg: #101418;
   --panel-bg: #171e26;
@@ -45,7 +104,6 @@
   --sidebar-bg: #0d1117;
   --sidebar-text: #e5edf5;
   --sidebar-muted: #8b9aaa;
-  --sidebar-active: #3b82f6;
   --text-main: #e5edf5;
   --text-muted: #9aa8b6;
   --border-color: #2a3642;
@@ -79,6 +137,16 @@
   --button-default-disabled-text: #94a6bb;
   --button-quiet-bg: #1f2933;
   --button-quiet-hover-bg: #273443;
+  /* scheme 扩展 token：暗色取值 */
+  --text-strong: #e5edf5;
+  --table-text: #d8e3ed;
+  --text-weak: #8b9aaa;
+  --text-subtle: #b0b8c4;
+  --input-placeholder: #7f8da0;
+  --table-row-hover-bg: #243140;
+  /* 品牌强调的方案别名：暗色指向 -dark 真值（配色块无需重复） */
+  --brand-accent: var(--brand-accent-dark);
+  --brand-accent-ink: var(--brand-accent-dark-ink);
 }
 
 * {
@@ -263,8 +331,9 @@ body.el-popup-parent--hidden {
 
 .side-menu a.active,
 .side-menu a:hover {
-  color: #ffffff;
-  background: var(--sidebar-active);
+  /* 文本色用 palette 的 ink（压强调色之上），满足对比度门禁 */
+  color: var(--brand-accent-ink);
+  background: var(--brand-accent);
 }
 
 .is-collapsed .app-sidebar {
@@ -932,101 +1001,101 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   background: var(--panel-bg);
 }
 
-:root[data-theme="dark"] .el-table {
+:root[data-scheme="dark"] .el-table {
   --el-table-bg-color: var(--table-row-bg);
   --el-table-tr-bg-color: var(--table-row-bg);
   --el-table-header-bg-color: var(--table-header-bg);
-  --el-table-header-text-color: #d8e3ed;
-  --el-table-text-color: #d8e3ed;
+  --el-table-header-text-color: var(--table-text);
+  --el-table-text-color: var(--table-text);
   --el-table-border-color: var(--border-color);
-  --el-table-row-hover-bg-color: #243140;
+  --el-table-row-hover-bg-color: var(--table-row-hover-bg);
   --el-fill-color-lighter: var(--table-header-bg);
   --el-bg-color: var(--panel-bg);
 }
 
-:root[data-theme="dark"] .el-table__header-wrapper,
-:root[data-theme="dark"] .el-table__fixed-header-wrapper {
+:root[data-scheme="dark"] .el-table__header-wrapper,
+:root[data-scheme="dark"] .el-table__fixed-header-wrapper {
   background-color: var(--table-header-bg);
 }
 
-:root[data-theme="dark"] .el-table__header th,
-:root[data-theme="dark"] .el-table__header tr {
+:root[data-scheme="dark"] .el-table__header th,
+:root[data-scheme="dark"] .el-table__header tr {
   background-color: var(--table-header-bg);
-  color: #e5edf5;
+  color: var(--text-strong);
 }
 
-:root[data-theme="dark"] .el-table th.el-table__cell,
-:root[data-theme="dark"] .el-table tr,
-:root[data-theme="dark"] .el-table td.el-table__cell {
+:root[data-scheme="dark"] .el-table th.el-table__cell,
+:root[data-scheme="dark"] .el-table tr,
+:root[data-scheme="dark"] .el-table td.el-table__cell {
   background-color: var(--table-row-bg);
-  color: #d8e3ed;
+  color: var(--table-text);
 }
 
-:root[data-theme="dark"] .el-table__inner-wrapper,
-:root[data-theme="dark"] .el-table__body-wrapper,
-:root[data-theme="dark"] .el-table__empty-block {
-  background-color: var(--table-row-bg);
-}
-
-:root[data-theme="dark"] .el-table__empty-text {
-  color: #8b9aaa;
+:root[data-scheme="dark"] .el-table__inner-wrapper,
+:root[data-scheme="dark"] .el-table__body-wrapper,
+:root[data-scheme="dark"] .el-table__empty-block {
   background-color: var(--table-row-bg);
 }
 
-:root[data-theme="dark"] .data-table .el-table__empty-text {
+:root[data-scheme="dark"] .el-table__empty-text {
+  color: var(--text-weak);
+  background-color: var(--table-row-bg);
+}
+
+:root[data-scheme="dark"] .data-table .el-table__empty-text {
   background: var(--table-row-bg);
   box-shadow: none;
 }
 
-:root[data-theme="dark"] .data-table .el-empty__description p {
-  color: #b0b8c4;
+:root[data-scheme="dark"] .data-table .el-empty__description p {
+  color: var(--text-subtle);
   text-shadow: none;
 }
 
-:root[data-theme="dark"] .el-table th.el-table__cell {
+:root[data-scheme="dark"] .el-table th.el-table__cell {
   background-color: var(--table-header-bg);
-  color: #e5edf5;
+  color: var(--text-strong);
 }
 
-:root[data-theme="dark"] .el-input__wrapper,
-:root[data-theme="dark"] .el-select__wrapper,
-:root[data-theme="dark"] .el-textarea__inner {
+:root[data-scheme="dark"] .el-input__wrapper,
+:root[data-scheme="dark"] .el-select__wrapper,
+:root[data-scheme="dark"] .el-textarea__inner {
   background-color: var(--input-bg);
   box-shadow: 0 0 0 1px var(--border-color) inset;
 }
 
-:root[data-theme="dark"] .el-input__inner,
-:root[data-theme="dark"] .el-select__selected-item,
-:root[data-theme="dark"] .el-form-item__label {
-  color: #d8e3ed;
+:root[data-scheme="dark"] .el-input__inner,
+:root[data-scheme="dark"] .el-select__selected-item,
+:root[data-scheme="dark"] .el-form-item__label {
+  color: var(--table-text);
 }
 
-:root[data-theme="dark"] .el-input__inner::placeholder {
-  color: #7f8da0;
+:root[data-scheme="dark"] .el-input__inner::placeholder {
+  color: var(--input-placeholder);
 }
 
-:root[data-theme="dark"] .el-drawer,
-:root[data-theme="dark"] .el-popper,
-:root[data-theme="dark"] .el-select-dropdown,
-:root[data-theme="dark"] .el-message-box,
-:root[data-theme="dark"] .el-card,
-:root[data-theme="dark"] .el-alert {
+:root[data-scheme="dark"] .el-drawer,
+:root[data-scheme="dark"] .el-popper,
+:root[data-scheme="dark"] .el-select-dropdown,
+:root[data-scheme="dark"] .el-message-box,
+:root[data-scheme="dark"] .el-card,
+:root[data-scheme="dark"] .el-alert {
   background-color: var(--panel-bg);
-  color: #d8e3ed;
+  color: var(--table-text);
 }
 
-:root[data-theme="dark"] .el-button.is-text {
+:root[data-scheme="dark"] .el-button.is-text {
   --el-button-bg-color: var(--button-quiet-bg);
   --el-button-border-color: var(--border-color);
   --el-button-hover-bg-color: var(--button-quiet-hover-bg);
   color: var(--sidebar-text);
 }
 
-:root[data-theme="dark"] .el-drawer__header {
-  color: #e5edf5;
+:root[data-scheme="dark"] .el-drawer__header {
+  color: var(--text-strong);
 }
 
-:root[data-theme="dark"] .el-tag {
+:root[data-scheme="dark"] .el-tag {
   border-color: var(--border-color);
 }
 
@@ -1062,7 +1131,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   padding: 16px;
 }
 
-:root[data-theme="dark"] .cleanup-summary div {
+:root[data-scheme="dark"] .cleanup-summary div {
   background: var(--input-bg);
 }
 
@@ -1756,7 +1825,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   height: 96px;
   min-width: 100%;
   min-height: 96px;
-  color: #b0b8c4;
+  color: var(--text-subtle);
   background: var(--el-fill-color-light);
   box-shadow: none;
 }
@@ -1785,7 +1854,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 }
 
 .data-table .el-empty__description p {
-  color: #b0b8c4;
+  color: var(--text-subtle);
   font-size: 14px;
   font-weight: 400;
   line-height: 1.4;
@@ -2180,128 +2249,152 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 }
 
 .table-action-button.action-edit {
-  --el-button-bg-color: rgba(37, 99, 235, 0.12);
-  --el-button-border-color: rgba(37, 99, 235, 0.28);
-  --el-button-hover-bg-color: rgba(37, 99, 235, 0.18);
-  color: #2563eb;
+  --el-button-bg-color: color-mix(in srgb, var(--action-edit) 12%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-edit) 28%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-edit) 18%, transparent);
+  color: var(--action-edit);
 }
 
 .table-action-button.action-edit:hover {
-  color: #1d4ed8;
+  color: var(--action-edit-hover);
   background: transparent;
 }
 
-:root[data-theme="dark"] .table-action-button.action-edit {
-  --el-button-bg-color: rgba(96, 165, 250, 0.16);
-  --el-button-border-color: rgba(96, 165, 250, 0.32);
-  --el-button-hover-bg-color: rgba(96, 165, 250, 0.22);
-  color: #60a5fa;
+:root[data-scheme="dark"] .table-action-button.action-edit {
+  --el-button-bg-color: color-mix(in srgb, var(--action-edit-dark) 16%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-edit-dark) 32%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-edit-dark) 22%, transparent);
+  color: var(--action-edit-dark);
 }
 
-:root[data-theme="dark"] .table-action-button.action-edit:hover {
-  color: #93c5fd;
+:root[data-scheme="dark"] .table-action-button.action-edit:hover {
+  color: var(--action-edit-dark-hover);
   background: transparent;
 }
 
 .table-action-button.action-view {
-  --el-button-bg-color: rgba(8, 145, 178, 0.12);
-  --el-button-border-color: rgba(8, 145, 178, 0.28);
-  --el-button-hover-bg-color: rgba(8, 145, 178, 0.18);
-  color: #0891b2;
+  --el-button-bg-color: color-mix(in srgb, var(--action-view) 12%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-view) 28%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-view) 18%, transparent);
+  color: var(--action-view);
 }
 
 .table-action-button.action-view:hover {
-  color: #0e7490;
+  color: var(--action-view-hover);
   background: transparent;
 }
 
 .table-action-button.action-magic {
-  --el-button-bg-color: rgba(124, 58, 237, 0.12);
-  --el-button-border-color: rgba(124, 58, 237, 0.28);
-  --el-button-hover-bg-color: rgba(124, 58, 237, 0.18);
-  color: #7c3aed;
+  --el-button-bg-color: color-mix(in srgb, var(--action-magic) 12%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-magic) 28%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-magic) 18%, transparent);
+  color: var(--action-magic);
 }
 
 .table-action-button.action-magic:hover {
-  color: #6d28d9;
+  color: var(--action-magic-hover);
   background: transparent;
 }
 
-:root[data-theme="dark"] .table-action-button.action-view {
-  --el-button-bg-color: rgba(34, 211, 238, 0.16);
-  --el-button-border-color: rgba(34, 211, 238, 0.32);
-  --el-button-hover-bg-color: rgba(34, 211, 238, 0.22);
-  color: #22d3ee;
+:root[data-scheme="dark"] .table-action-button.action-view {
+  --el-button-bg-color: color-mix(in srgb, var(--action-view-dark) 16%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-view-dark) 32%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-view-dark) 22%, transparent);
+  color: var(--action-view-dark);
 }
 
-:root[data-theme="dark"] .table-action-button.action-magic {
-  --el-button-bg-color: rgba(196, 181, 253, 0.16);
-  --el-button-border-color: rgba(196, 181, 253, 0.32);
-  --el-button-hover-bg-color: rgba(196, 181, 253, 0.22);
-  color: #c4b5fd;
+:root[data-scheme="dark"] .table-action-button.action-magic {
+  --el-button-bg-color: color-mix(in srgb, var(--action-magic-dark) 16%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-magic-dark) 32%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-magic-dark) 22%, transparent);
+  color: var(--action-magic-dark);
 }
 
 .table-action-button.action-sync,
 .table-action-button.action-run,
 .table-action-button.action-toggle {
-  --el-button-bg-color: rgba(22, 163, 74, 0.12);
-  --el-button-border-color: rgba(22, 163, 74, 0.28);
-  --el-button-hover-bg-color: rgba(22, 163, 74, 0.18);
-  color: #16a34a;
+  --action-color: var(--action-run);
+  --action-hover-color: var(--action-run-hover);
+  --el-button-bg-color: color-mix(in srgb, var(--action-color) 12%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-color) 28%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-color) 18%, transparent);
+  color: var(--action-color);
+}
+
+.table-action-button.action-sync {
+  --action-color: var(--action-sync);
+  --action-hover-color: var(--action-sync-hover);
+}
+
+.table-action-button.action-toggle {
+  --action-color: var(--action-toggle);
+  --action-hover-color: var(--action-toggle-hover);
 }
 
 .table-action-button.action-ai {
-  --el-button-bg-color: rgba(37, 99, 235, 0.12);
-  --el-button-border-color: rgba(37, 99, 235, 0.28);
-  --el-button-hover-bg-color: rgba(37, 99, 235, 0.18);
-  color: #2563eb;
+  --el-button-bg-color: color-mix(in srgb, var(--action-ai) 12%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-ai) 28%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-ai) 18%, transparent);
+  color: var(--action-ai);
 }
 
 .table-action-button.action-sync:hover,
 .table-action-button.action-run:hover,
 .table-action-button.action-toggle:hover {
-  color: #15803d;
+  color: var(--action-hover-color);
   background: transparent;
 }
 
 .table-action-button.action-ai:hover {
-  color: #1d4ed8;
+  color: var(--action-ai-hover);
   background: transparent;
 }
 
 .table-action-button.action-delete {
-  --el-button-bg-color: rgba(220, 38, 38, 0.12);
-  --el-button-border-color: rgba(220, 38, 38, 0.28);
-  --el-button-hover-bg-color: rgba(220, 38, 38, 0.18);
-  color: #dc2626;
+  --el-button-bg-color: color-mix(in srgb, var(--action-delete) 12%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-delete) 28%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-delete) 18%, transparent);
+  color: var(--action-delete);
 }
 
 .table-action-button.action-delete:hover {
-  color: #b91c1c;
+  color: var(--action-delete-hover);
   background: transparent;
 }
 
-:root[data-theme="dark"] .table-action-button.action-sync,
-:root[data-theme="dark"] .table-action-button.action-run,
-:root[data-theme="dark"] .table-action-button.action-toggle {
-  --el-button-bg-color: rgba(74, 222, 128, 0.16);
-  --el-button-border-color: rgba(74, 222, 128, 0.32);
-  --el-button-hover-bg-color: rgba(74, 222, 128, 0.22);
-  color: #4ade80;
+:root[data-scheme="dark"] .table-action-button.action-sync,
+:root[data-scheme="dark"] .table-action-button.action-run,
+:root[data-scheme="dark"] .table-action-button.action-toggle {
+  --action-color: var(--action-run-dark);
+  --action-hover-color: var(--action-run-dark-hover);
+  --el-button-bg-color: color-mix(in srgb, var(--action-color) 16%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-color) 32%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-color) 22%, transparent);
+  color: var(--action-color);
 }
 
-:root[data-theme="dark"] .table-action-button.action-ai {
-  --el-button-bg-color: rgba(96, 165, 250, 0.16);
-  --el-button-border-color: rgba(96, 165, 250, 0.32);
-  --el-button-hover-bg-color: rgba(96, 165, 250, 0.22);
-  color: #60a5fa;
+:root[data-scheme="dark"] .table-action-button.action-sync {
+  --action-color: var(--action-sync-dark);
+  --action-hover-color: var(--action-sync-dark-hover);
 }
 
-:root[data-theme="dark"] .table-action-button.action-delete {
-  --el-button-bg-color: rgba(248, 113, 113, 0.16);
-  --el-button-border-color: rgba(248, 113, 113, 0.32);
-  --el-button-hover-bg-color: rgba(248, 113, 113, 0.22);
-  color: #f87171;
+:root[data-scheme="dark"] .table-action-button.action-toggle {
+  --action-color: var(--action-toggle-dark);
+  --action-hover-color: var(--action-toggle-dark-hover);
+}
+
+:root[data-scheme="dark"] .table-action-button.action-ai {
+  --el-button-bg-color: color-mix(in srgb, var(--action-ai-dark) 16%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-ai-dark) 32%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-ai-dark) 22%, transparent);
+  color: var(--action-ai-dark);
+}
+
+:root[data-scheme="dark"] .table-action-button.action-delete {
+  --el-button-bg-color: color-mix(in srgb, var(--action-delete-dark) 16%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--action-delete-dark) 32%, transparent);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--action-delete-dark) 22%, transparent);
+  color: var(--action-delete-dark);
 }
 
 .table-pagination {
@@ -2991,8 +3084,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   background: var(--button-quiet-bg);
 }
 
-:root[data-theme="dark"] .directory-item .el-icon {
-  color: #60a5fa;
+:root[data-scheme="dark"] .directory-item .el-icon {
+  color: var(--action-view-dark);
 }
 
 .drawer-toolbar {
@@ -3499,10 +3592,10 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   font-size: 0.875rem;
 }
 
-:root[data-theme="dark"] .naming-builder-warnings {
-  border-color: #8a6a24;
-  background: #332a14;
-  color: #f6d98a;
+:root[data-scheme="dark"] .naming-builder-warnings {
+  border-color: color-mix(in srgb, var(--semantic-warning) 28%, transparent);
+  background: color-mix(in srgb, var(--semantic-warning) 12%, transparent);
+  color: var(--semantic-warning);
 }
 
 .naming-element-group {

@@ -15,6 +15,10 @@ _PROTOCOLS: dict[str, SharedProtocol] = {
 }
 
 
+class UnsupportedProtocolError(ValueError):
+    """当前部署不支持该路径协议。"""
+
+
 _FUTURE_PROTOCOLS = [
     ProtocolCapabilities(
         protocol="ftp",
@@ -80,7 +84,7 @@ def get_protocol(path_type: str) -> SharedProtocol:
     try:
         return _PROTOCOLS[path_type]
     except KeyError as exc:
-        raise ValueError("不支持的路径类型") from exc
+        raise UnsupportedProtocolError("不支持的路径类型") from exc
 
 
 def list_protocol_capabilities() -> list[ProtocolCapabilities]:

@@ -1,6 +1,7 @@
 """Metadata search orchestration service."""
 
 from typing import Protocol
+import time
 
 from app.core.logger import get_logger
 from app.core.config import AppSettings
@@ -9,6 +10,7 @@ from app.schema.metadata import MetadataCandidate, MetadataMatchSummary
 from app.service.metadata_matcher import MATCH_STATUS_FAILED, score_metadata_candidate
 from app.service.settings_service import get_effective_settings
 from app.service.tmdb_client import TmdbClient
+from app.service.external_request_budget_service import ExternalRequestBudget, ExternalBudgetWaitError, ExternalBudgetUnavailable, transportDeadline
 
 logger = get_logger(__name__)
 
@@ -78,6 +80,18 @@ def match_metadata_candidates(
     provider: MetadataProvider | None = None,
     imdb_provider: MetadataProvider | None = None,
 ) -> MetadataMatchSummary:
+    """TMDB 认证切换共用总预算，不为 V3 重新计时。"""
+    effective = get_effective_settings(settings)
+    with transportDeadline(time.monotonic() + int(effective.get("tmdb.timeout_ms") or 10000) / 1000):
+        return _match_metadata_candidates(settings, parsed, provider, imdb_provider)
+
+
+def _match_metadata_candidates(
+    settings: AppSettings,
+    parsed: ParsedMediaName,
+    provider: MetadataProvider | None = None,
+    imdb_provider: MetadataProvider | None = None,
+) -> MetadataMatchSummary:
     """Search candidates and return them sorted by weighted match score."""
 
     effective = get_effective_settings(settings)
@@ -101,6 +115,7 @@ def match_metadata_candidates(
 
     if v4_token:
         v4_client = TmdbClient(
+            requestBudget=ExternalRequestBudget(settings, "tmdb"),
             v4_token=v4_token,
             language=str(effective.get("tmdb.language") or "zh-CN"),
             region=str(effective.get("tmdb.region") or "CN"),
@@ -109,11 +124,14 @@ def match_metadata_candidates(
         try:
             candidates = v4_client.search(parsed)
             return _build_supplemented_summary(effective, parsed, candidates, "TMDB (V4)", imdb_provider)
+        except (ExternalBudgetWaitError, ExternalBudgetUnavailable) as exc:
+            return _failed(str(exc))
         except Exception as exc:
             logger.warning("V4 请求失败，准备降级至 V3: %s", exc)
 
     if api_key:
         v3_client = TmdbClient(
+            requestBudget=ExternalRequestBudget(settings, "tmdb"),
             api_key=api_key,
             language=str(effective.get("tmdb.language") or "zh-CN"),
             region=str(effective.get("tmdb.region") or "CN"),

@@ -6,12 +6,17 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import AppSettings, AuthSettings, LoggingSettings
 from app.main import create_app
 from app.service.settings_service import update_setting_values
+from app.admin_recovery import recoverAdminPassword
+from app.core.database import ensure_database
+from app.service.auth_service import ensure_default_admin
 
 
 class AuthApiTest(unittest.TestCase):
@@ -244,6 +249,40 @@ class AuthApiTest(unittest.TestCase):
             self.assertTrue(login_response.json()["user"]["mustChangePassword"])
             self.assertEqual(409, bootstrap_response.status_code)
 
+    def test_default_admin_audit_failure_rolls_back_creation(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tempDir:
+            root = Path(tempDir)
+            settings = AppSettings(data_dir=root, database_path=root / "test.db",
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+                auth=AuthSettings(default_admin_enabled=True))
+            ensure_database(settings)
+            with patch("app.service.audit_service.record_audit_event",
+                       side_effect=sqlite3.OperationalError("synthetic audit failure")):
+                with self.assertRaises(sqlite3.OperationalError):
+                    ensure_default_admin(settings)
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+    def test_concurrent_default_admin_initialization_creates_one_user_and_audit(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tempDir:
+            root = Path(tempDir)
+            settings = AppSettings(data_dir=root, database_path=root / "test.db",
+                logging=LoggingSettings(log_dir=root / "logs", console_output=False),
+                auth=AuthSettings(default_admin_enabled=True, default_admin_password="SyntheticInitial123!"))
+            ensure_database(settings)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: ensure_default_admin(settings), range(2)))
+            self.assertEqual(1, sum(user is not None for user in results))
+            self.assertIsNone(ensure_default_admin(settings))
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+                rows = connection.execute("SELECT actor_id,actor_name,detail_json FROM audit_events "
+                    "WHERE action='create_default_admin'").fetchall()
+            self.assertEqual(1, len(rows))
+            self.assertIsNone(rows[0][0])
+            self.assertEqual("local_initialization", rows[0][1])
+            self.assertNotIn("SyntheticInitial123!", rows[0][2])
+
     def test_change_password_clears_default_password_prompt(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             client = self.build_client_with_auth(
@@ -324,13 +363,13 @@ class AuthApiTest(unittest.TestCase):
             )
 
             reset_response = client.post("/api/auth/reset-admin-password")
+            self.assertEqual(403, reset_response.status_code)
+            recoverAdminPassword(client.app.state.settings)
             reset_login_response = client.post(
                 "/api/auth/login",
                 json={"username": "admin", "password": "123456"},
             )
 
-            self.assertEqual(200, reset_response.status_code)
-            self.assertTrue(reset_response.json()["mustChangePassword"])
             self.assertEqual(200, reset_login_response.status_code)
             self.assertTrue(reset_login_response.json()["user"]["mustChangePassword"])
 

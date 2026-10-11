@@ -16,6 +16,11 @@ class SpaStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope: Scope) -> Response:
         """返回静态资源；无扩展名路径缺失时返回 index.html。"""
 
+        normalized = path.replace("\\", "/").lstrip("/")
+        if scope["method"] in {"GET", "HEAD"} and (normalized == "api" or normalized.startswith("api/")):
+            # API命名空间不属于静态站点，不能以HTML首页伪装成功或公开同名静态文件。
+            raise HTTPException(status_code=404)
+
         try:
             response = await super().get_response(path, scope)
         except HTTPException as exc:
