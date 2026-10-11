@@ -2,6 +2,8 @@
 
 本文档说明 `scripts/` 目录下每个脚本的用途、推荐调用方式和关键执行步骤。脚本默认应在项目根目录通过 `npm` 命令或直接路径调用。
 
+自动化审核工具还必须遵守 [Harness 开发服务启动规约](../docs/development/reviews/discussions/harness-development-service-startup.md)：不得绕过项目脚本直接启动 `uvicorn` 或 Vite，隔离实例不得复用标准端口，验证结束必须停止并清理。
+
 ## 开发服务启停
 
 ### `dev-windows.ps1`
