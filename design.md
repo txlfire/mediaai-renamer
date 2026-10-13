@@ -80,7 +80,7 @@ Element Plus 覆盖变量集中在 `styles.css`（`--el-*`），是**本项目�
 ## Exports
 
 `frontend/src/styles.css` 是本项目的源头，不额外生成 `tokens.css`（避免两处真值）。
-如需 Tailwind v4 `@theme` / DTCG `tokens.json` / shadcn 变量，另说一声再追加。
+当前实现采用 Vue 3、Element Plus 和 CSS 自定义属性，不引入 Tailwind 或其他 UI 依赖。
 
 ## 主题架构：两轴正交（scheme × palette）
 
@@ -157,7 +157,7 @@ Element Plus 覆盖变量集中在 `styles.css`（`--el-*`），是**本项目�
 
 **若某强调色无法同时满足"ink 达标"与"作为强调底可用"**：允许该配色改用深色 ink（如暗色方案用深紫而非白字），**不得**放宽门禁。
 
-> **门禁与既有 default 的真实差距（实测，已登记为待处理）**：`--text-muted: #64748b` 对 `--app-bg: #f4f7fb` 仅 **4.43:1**，略低于 4.5；对 `--panel-bg` 为 4.76 达标。这是**既有 default 配色的问题，不是本门禁过严**。若改为 `#5b6b80` 可达 5.06。属独立决策，不在糖果粉紫范围内。
+说明文字使用 `--text-muted`：亮色 `#5b6b80`，暗色 `#9aa8b6`。默认暗色品牌文字使用深色 ink `#071a31`，不使用白字。
 
 ### 登记要求
 
@@ -165,9 +165,11 @@ Element Plus 覆盖变量集中在 `styles.css`（`--el-*`），是**本项目�
 
 | 配色 | 状态 | `--brand-accent`（亮/暗） | 备注 |
 | --- | --- | --- | --- |
-| `default` | 已启用 | `#2563eb` / `#3b82f6` | 现网值，即原 `--sidebar-active`。**已实机核对**：亮色 `getComputedStyle` 读到 `--app-bg: #f4f7fb`、`--panel-bg: #ffffff`、`--sidebar-active: #2563eb`、激活导航 `rgb(37, 99, 235)`；暗色读到 `--app-bg: #101418`、`--panel-bg: #171e26`、`--sidebar-bg: #0d1117`、`--text-main: #e5edf5`、`--text-muted: #9aa8b6`、`--border-color: #2a3642`、`--table-row-bg: #171e26`、`--table-header-bg: #202a35`、`--input-bg: #202a35`、`--sidebar-active: #3b82f6` |
-| `candy`（糖果粉紫） | **已定值，待实施** | `#db2777` / `#f472b6` | 见下表；依赖阶段 1 的 palette 层 |
-| `candy` 各 token 实测 | | | |
+| `default` | 已接入 | `#2563eb` / `#3b82f6` | ink 为 `#ffffff` / `#071a31`；与 candy 共用中性色 |
+| `candy`（糖果粉紫） | 已接入 | `#db2777` / `#f472b6` | ink 为 `#ffffff` / `#500724`；仅修改点缀色 |
+
+#### Candy Token 取值
+
 | token | 亮色值 | 对白底 | 暗色值 | 对暗面板 |
 | --- | --- | --- | --- | --- |
 | `--brand-accent` | `#db2777` | 白字 **4.60** ✓ | `#f472b6` | **6.34** ✓ |
@@ -188,6 +190,12 @@ Element Plus 覆盖变量集中在 `styles.css`（`--el-*`），是**本项目�
 
 **糖果粉紫只改点缀色，不动任何中性色。** 面板、背景、文本、边框保持 scheme 层的值。
 
+外观入口位于侧栏版本信息旁。显示模式支持跟随系统、亮色、暗色；配色支持默认、糖果粉紫。两项分别保存到浏览器 `mediaai-theme-mode` 与 `mediaai-theme-palette`，不修改服务端设置。旧主题键保持兼容，未知配色回退默认；选择跟随系统只改变显示模式，不改变配色。
+
+主按钮与查询按钮共用品牌 ink 和强调色。hover/active 使用 `--brand-accent-hover`：亮色为品牌色混入 10% 黑色，暗色为品牌色混入 10% 白色，避免框架默认混色降低文字对比度。禁用查询按钮使用中性禁用 token。
+
+2026-10-13 headless Edge 读取运行页面 computed token：default 亮/暗的品牌 ink 对比度为 5.17/4.75，candy 为 4.60/5.68；说明文字对应用背景为 5.06/7.62。界面矩阵和限制见 [收尾工作日志](docs/work-logs/progress-2026-10-13-review-closeout.md)。CSS 视口模拟不代替实际 Windows 与浏览器组合缩放验收。
+
 ## 工具引用与改判规则
 
 本文件是**被审对象**，不是工具的执行指令。三个已安装的只读审查工具会读它或据它判定：
@@ -202,19 +210,15 @@ Element Plus 覆盖变量集中在 `styles.css`（`--el-*`），是**本项目�
 
 工具选择与计划执行流程见 [`.codex/skills/mediaai-frontend-ui/SKILL.md`](.codex/skills/mediaai-frontend-ui/SKILL.md) 的"Review tools"一节，此处不重复。
 
-## 待补齐（本项目当前的真实缺口）
+## 控件约束
 
-1. **焦点可见性**：全站仅 3 处 `:focus-visible`，其中 2 处是 `outline: none`（`styles.css:176`、`:3228`），
-   实际只有 1 处（`:1206`）给出可见焦点环。**违反本文件的"焦点环必须可见"与 WCAG 2.4.7。**
-   （更正：本条原写"违反 Hallmark 硬要求"不准确 —— Hallmark 的 `audit` 并不以焦点环为判据，且 `improve-ui` 明确排除无障碍类发现。**此类问题须交给 `fixing-accessibility`**，否则两个审查工具都不会报告它。）
-2. **间距/字号未 token 化**：间距为字面值，未建立 `--space-*`；无字号阶梯变量。
-   圆角基本统一在 6px，但有 `7px`×2、`8px`×3 的漂移值。
-3. **数字对齐**（**未采纳为契约**）：仅 `styles.css:777`、`:1496` 使用 `tabular-nums`；而本应用大量展示文件大小、计数、进度、日期、ID（如 `ScanJobsView` 连续 9 个数字列）。**注意**：`improve-ui` 已实测判定其"无契约、不予报告"—— 要让它可被强制，须先把规则正式写入本文件。
-4. **图标一致性**：项目只装 `@element-plus/icons-vue`（正确），但有 3 处用 emoji 充当功能图标
-   （`RenamePreviewsView.vue:2172` 的 📊、`SettingsView.vue:1583`/`:1618` 的 🟢🔴），
-   违反"全项目单一图标库"，且 emoji 跨平台渲染不一致。**依据为 Hallmark 判据**（非本文件既有规则）。
-5. **Token 漂移**：`LoginView.vue:221,222,232` 有 3 处硬编码颜色（双斜向渐变 + 大投影），未走 token。
-   **同时**：`LoginView.vue:221-222` 是全项目**唯一**使用装饰性渐变的表面（其余全屏/面板底色均为 token 纯色），此点已由 `improve-ui` 依本文件"优先复用既有共享样式"判为成立 finding（见 `design-plans/remove-login-page-gradient.md`）。
+- 原生按钮与表格操作按钮保留可见键盘焦点；设置连接结果栏使用原生 button，禁用状态同时阻止键盘和鼠标激活。
+- 扫描任务和任务治理数字列使用 `tabular-nums`。
+- 功能图标统一使用 `@element-plus/icons-vue`，状态同时保留文字，不仅靠颜色区分。
+- 登录背景和阴影使用共享 token，不使用装饰性渐变。
+- 固定操作列尺寸包含按钮宽度、间距、单元格内边距及边框余量。长内容在表格内部滚动，不撑宽页面；Provider 的当前和操作列固定在右侧。
+
+间距与字号尚未全面 token 化，不属于本轮主题交付；全站无障碍合规不由上述控件验证推导。
 
 ## 明确不适用的 Hallmark 判据（对本项目是误报，不要照做）
 

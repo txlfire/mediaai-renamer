@@ -46,6 +46,23 @@ class WebDavSecurityTest(unittest.TestCase):
                 self.assertFalse(result.success)
                 self.assertNotIn("synthetic-password", result.message + (result.suggestion or ""))
 
+    def test_destination_variants_are_confined_and_conflicts_never_sent(self):
+        for key in ("destination", "DESTINATION", "Destination"):
+            with self.subTest(key=key), patch("app.service.shared_protocols.webdav.urlopen") as send:
+                with self.assertRaises(ValueError):
+                    _request(self.rootUrl + "source", "MOVE", self.context,
+                             extra_headers={key: "https://other.invalid/target"})
+                send.assert_not_called()
+        with patch("app.service.shared_protocols.webdav.urlopen") as send:
+            with self.assertRaisesRegex(ValueError, "重复"):
+                _request(self.rootUrl + "source", "MOVE", self.context,
+                         extra_headers={"destination": self.rootUrl + "a", "Destination": self.rootUrl + "b"})
+            send.assert_not_called()
+            _request(self.rootUrl + "source", "MOVE", self.context,
+                     extra_headers={"destination": self.rootUrl + "a", "Destination": self.rootUrl + "a"})
+            request = send.call_args.args[0]
+            self.assertEqual(self.rootUrl + "a", request.get_header("Destination"))
+
     def test_https_and_chinese_paths_remain_supported(self):
         value = _normalize_webdav_url(self.rootUrl + "电影/我的电影.mkv")
         self.assertIn("%E7%94%B5", value)

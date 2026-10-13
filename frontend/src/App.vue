@@ -60,7 +60,7 @@ const sidebarToggleLabel = computed(() =>
   appStore.sidebarCollapsed ? messages.app.sidebar.expandTooltip : messages.app.sidebar.collapseTooltip,
 );
 
-const themeLabel = computed(() => (isDarkTheme.value ? messages.app.theme.toLight : messages.app.theme.toDark));
+const themeLabel = computed(() => messages.app.theme.settings);
 
 function updateSystemTheme() {
   if (appStore.themeMode === "system") {
@@ -68,8 +68,12 @@ function updateSystemTheme() {
   }
 }
 
-function toggleLightDarkTheme() {
-  appStore.setThemeMode(isDarkTheme.value ? "light" : "dark");
+function selectThemeMode(value: unknown) {
+  if (value === "system" || value === "light" || value === "dark") appStore.setThemeMode(value);
+}
+
+function selectThemePalette(value: unknown) {
+  if (value === "default" || value === "candy") appStore.setThemePalette(value);
 }
 
 async function logout() {
@@ -160,11 +164,30 @@ onUnmounted(() => {
 
         <div class="version-theme-row">
           <span v-if="!appStore.sidebarCollapsed" class="version-text">{{ versionText }}</span>
-          <el-tooltip :content="themeLabel" placement="top">
-            <el-button class="theme-toggle" circle @click="toggleLightDarkTheme">
-              <el-icon><component :is="isDarkTheme ? Sunny : Moon" /></el-icon>
-            </el-button>
-          </el-tooltip>
+          <el-popover placement="right-end" trigger="click" :width="260">
+            <template #reference>
+              <el-button class="theme-toggle" circle :aria-label="themeLabel" :title="themeLabel">
+                <el-icon><component :is="isDarkTheme ? Sunny : Moon" /></el-icon>
+              </el-button>
+            </template>
+            <div class="theme-preferences">
+              <fieldset>
+                <legend>{{ messages.app.theme.scheme }}</legend>
+                <el-radio-group :model-value="appStore.themeMode" :aria-label="messages.app.theme.scheme" @change="selectThemeMode">
+                  <el-radio-button value="system">{{ messages.app.theme.system }}</el-radio-button>
+                  <el-radio-button value="light">{{ messages.app.theme.light }}</el-radio-button>
+                  <el-radio-button value="dark">{{ messages.app.theme.dark }}</el-radio-button>
+                </el-radio-group>
+              </fieldset>
+              <fieldset>
+                <legend>{{ messages.app.theme.palette }}</legend>
+                <el-radio-group :model-value="appStore.themePalette" :aria-label="messages.app.theme.palette" @change="selectThemePalette">
+                  <el-radio-button value="default"><span class="palette-swatch palette-swatch-default" aria-hidden="true"></span>{{ messages.app.theme.defaultPalette }}</el-radio-button>
+                  <el-radio-button value="candy"><span class="palette-swatch palette-swatch-candy" aria-hidden="true"></span>{{ messages.app.theme.candyPalette }}</el-radio-button>
+                </el-radio-group>
+              </fieldset>
+            </div>
+          </el-popover>
         </div>
 
         <el-button class="logout-button" :icon="SwitchButton" text :loading="authStore.loading" @click="logout">

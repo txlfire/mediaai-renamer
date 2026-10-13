@@ -1,3 +1,4 @@
+import { getSessionGeneration, sessionRequest, SessionChangedError } from "../utils/sessionGeneration";
 import { defineStore } from "pinia";
 
 import {
@@ -35,6 +36,7 @@ export const usePendingFileStore = defineStore("pendingFiles", {
     },
     async executePendingMove(ids: number[], target: string, onProgress?: (task: PendingMoveTask) => void,
       beforeSubmit?: (requestId: string) => Promise<void>) {
+      const sessionGeneration = getSessionGeneration();
       if (this.moveLoading || this.moveUncertain || ["queued", "running"].includes(this.currentMoveTask?.status ?? "")) return;
       this.moveLoading = true;
       this.moveError = "";
@@ -47,17 +49,18 @@ export const usePendingFileStore = defineStore("pendingFiles", {
         // 局域网HTTP也使用可用的getRandomValues，不依赖安全上下文限定的randomUUID。
         const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, "0")).join("");
         this.moveRequestId = requestId;
-        await beforeSubmit?.(requestId);
+        await sessionRequest(beforeSubmit?.(requestId), sessionGeneration);
         if (version !== this.moveVersion) return;
         submitted = true;
-        const task = await acceptPendingMove([...ids], target, requestId);
+        const task = await sessionRequest(acceptPendingMove([...ids], target, requestId), sessionGeneration);
         if (version !== this.moveVersion) return;
         this.currentMoveTask = task;
         this.moveTaskId = task.id;
         this.moveUncertain = false;
         onProgress?.(task);
-        await this.pollPendingMove(task.id, version, onProgress);
+        await sessionRequest(this.pollPendingMove(task.id, version, onProgress), sessionGeneration);
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         if (version !== this.moveVersion) return;
         const response = (error as { response?: { status?: number; data?: { detail?: string } } })?.response;
         if (!submitted || (!this.currentMoveTask && [400, 401, 403, 404, 422].includes(response?.status ?? 0))) {
@@ -69,26 +72,30 @@ export const usePendingFileStore = defineStore("pendingFiles", {
           this.moveError = messages.renamePreviews.pendingFiles.queryBeforeRetry;
         }
       } finally {
-        // 离页仅停止观察；但尚未发出的请求没有未知副作用，可以解除本地阻塞。
-        if (!submitted) {
-          this.moveUncertain = false;
-          this.moveRequestId = null;
+if (sessionGeneration === getSessionGeneration()) {
+          // 离页仅停止观察；但尚未发出的请求没有未知副作用，可以解除本地阻塞。
+          if (!submitted) {
+            this.moveUncertain = false;
+            this.moveRequestId = null;
+          }
+          if (version === this.moveVersion) this.moveLoading = false;
         }
-        if (version === this.moveVersion) this.moveLoading = false;
       }
     },
     async pollPendingMove(taskId: number, version: number, onProgress?: (task: PendingMoveTask) => void) {
+      const sessionGeneration = getSessionGeneration();
       while (version === this.moveVersion && this.currentMoveTask?.id === taskId
         && ["queued", "running"].includes(this.currentMoveTask.status)) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await sessionRequest(new Promise(resolve => setTimeout(resolve, 1000)), sessionGeneration);
         if (version !== this.moveVersion || this.currentMoveTask?.id !== taskId) return;
-        const task = await fetchPendingMove(taskId);
+        const task = await sessionRequest(fetchPendingMove(taskId), sessionGeneration);
         if (version !== this.moveVersion || this.currentMoveTask?.id !== taskId) return;
         this.currentMoveTask = task;
         onProgress?.(task);
       }
     },
     async refreshPendingMove(taskId?: number, requestId?: string, onProgress?: (task: PendingMoveTask) => void) {
+      const sessionGeneration = getSessionGeneration();
       if (this.moveLoading) return;
       const id = taskId ?? (requestId ? undefined : this.moveTaskId ?? this.currentMoveTask?.id);
       const key = requestId ?? this.moveRequestId;
@@ -109,53 +116,62 @@ export const usePendingFileStore = defineStore("pendingFiles", {
         this.moveTaskId = taskId;
       }
       try {
-        const task = id ? await fetchPendingMove(id) : await findPendingMove(key!);
+        const task = id ? await sessionRequest(fetchPendingMove(id), sessionGeneration) : await sessionRequest(findPendingMove(key!), sessionGeneration);
         if (version !== this.moveVersion) return;
         if (!task) throw new Error("not found");
         this.currentMoveTask = task;
         this.moveTaskId = task.id;
         this.moveUncertain = false;
         onProgress?.(task);
-        await this.pollPendingMove(task.id, version, onProgress);
+        await sessionRequest(this.pollPendingMove(task.id, version, onProgress), sessionGeneration);
       } catch {
+        if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
         if (version === this.moveVersion) this.moveError = messages.renamePreviews.pendingFiles.queryBeforeRetry;
       } finally {
-        if (version === this.moveVersion) this.moveLoading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          if (version === this.moveVersion) this.moveLoading = false;
+        }
       }
     },
     async loadPendingFiles(filters?: PendingFileFilters) {
+      const sessionGeneration = getSessionGeneration();
       this.filters = { ...(filters ?? this.filters) };
-      this.pendingFiles = await fetchPendingFiles(this.filters);
+      this.pendingFiles = await sessionRequest(fetchPendingFiles(this.filters), sessionGeneration);
       this.refreshFailed = false;
     },
 
     async removePendingFile(id: number) {
-      await removePendingFile(id);
+      const sessionGeneration = getSessionGeneration();
+      await sessionRequest(removePendingFile(id), sessionGeneration);
       this.pendingFiles = this.pendingFiles.filter((item) => item.id !== id);
     },
 
     async clearPendingFiles(filters?: PendingFileFilters) {
-      const result = await clearPendingFiles(filters ?? this.filters);
+      const sessionGeneration = getSessionGeneration();
+      const result = await sessionRequest(clearPendingFiles(filters ?? this.filters), sessionGeneration);
       this.pendingFiles = this.pendingFiles.filter((item) => item.status !== "pending");
       return result.removed_count;
     },
 
     async movePendingFiles(ids: number[], targetDirectory: string, refreshHistory = true) {
+      const sessionGeneration = getSessionGeneration();
       try {
-        const moved = await movePendingFiles(ids, targetDirectory);
+        const moved = await sessionRequest(movePendingFiles(ids, targetDirectory), sessionGeneration);
         if (Array.isArray(moved)) {
           const movedIds = new Set(moved.map((item) => item.id));
           this.pendingFiles = this.pendingFiles.filter((item) => !movedIds.has(item.id));
         } else {
           this.currentMoveTask = moved;
-          if (refreshHistory) await this.loadPendingFiles();
+          if (refreshHistory) await sessionRequest(this.loadPendingFiles(), sessionGeneration);
           else this.refreshFailed = true;
         }
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         try {
-          if (refreshHistory) await this.loadPendingFiles();
+          if (refreshHistory) await sessionRequest(this.loadPendingFiles(), sessionGeneration);
           else this.refreshFailed = true;
         } catch {
+        if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
           this.refreshFailed = true;
         }
         throw error;
@@ -163,11 +179,14 @@ export const usePendingFileStore = defineStore("pendingFiles", {
     },
 
     async parseWithAi(id: number): Promise<AiParseResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       try {
-        return await parsePendingFileWithAi(id);
+        return await sessionRequest(parsePendingFileWithAi(id), sessionGeneration);
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
   },

@@ -1,3 +1,4 @@
+import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 import { defineStore } from "pinia";
 
 import {
@@ -44,37 +45,43 @@ export const useMediaStore = defineStore("media", {
   }),
   actions: {
     async loadMediaSources() {
-      this.mediaSources = await fetchMediaSources();
+      const sessionGeneration = getSessionGeneration();
+      this.mediaSources = await sessionRequest(fetchMediaSources(), sessionGeneration);
     },
 
     async addMediaSource(payload: MediaSourceCreatePayload) {
-      await createMediaSource(payload);
-      await this.loadMediaSources();
+      const sessionGeneration = getSessionGeneration();
+      await sessionRequest(createMediaSource(payload), sessionGeneration);
+      await sessionRequest(this.loadMediaSources(), sessionGeneration);
     },
 
     async editMediaSource(
       sourceId: number,
       payload: MediaSourceUpdatePayload,
     ): Promise<MediaSourceMutationResult> {
-      const result = await updateMediaSource(sourceId, payload);
-      await this.loadMediaSources();
+      const sessionGeneration = getSessionGeneration();
+      const result = await sessionRequest(updateMediaSource(sourceId, payload), sessionGeneration);
+      await sessionRequest(this.loadMediaSources(), sessionGeneration);
       return result;
     },
 
     async toggleMediaSource(sourceId: number, enabled: boolean) {
-      await setMediaSourceEnabled(sourceId, enabled);
-      await this.loadMediaSources();
+      const sessionGeneration = getSessionGeneration();
+      await sessionRequest(setMediaSourceEnabled(sourceId, enabled), sessionGeneration);
+      await sessionRequest(this.loadMediaSources(), sessionGeneration);
     },
 
     async removeMediaSource(sourceId: number): Promise<MediaSourceMutationResult> {
-      const result = await deleteMediaSource(sourceId);
-      await this.loadMediaSources();
+      const sessionGeneration = getSessionGeneration();
+      const result = await sessionRequest(deleteMediaSource(sourceId), sessionGeneration);
+      await sessionRequest(this.loadMediaSources(), sessionGeneration);
       return result;
     },
 
     async removeMediaSources(sourceIds: number[]): Promise<MediaSourceMutationResult> {
-      const result = await bulkDeleteMediaSources(sourceIds);
-      await this.loadMediaSources();
+      const sessionGeneration = getSessionGeneration();
+      const result = await sessionRequest(bulkDeleteMediaSources(sourceIds), sessionGeneration);
+      await sessionRequest(this.loadMediaSources(), sessionGeneration);
       return result;
     },
 
@@ -83,20 +90,23 @@ export const useMediaStore = defineStore("media", {
     },
 
     async loadScanJobs(filters: ScanJobFilters = {}) {
-      this.scanJobs = await fetchScanJobs(filters);
+      const sessionGeneration = getSessionGeneration();
+      this.scanJobs = await sessionRequest(fetchScanJobs(filters), sessionGeneration);
     },
 
     async loadScanModeSuggestion(mediaSourceId: number) {
-      this.scanModeSuggestion = await fetchScanModeSuggestion(mediaSourceId);
+      const sessionGeneration = getSessionGeneration();
+      this.scanModeSuggestion = await sessionRequest(fetchScanModeSuggestion(mediaSourceId), sessionGeneration);
       return this.scanModeSuggestion;
     },
 
     async startScan(mediaSourceId: number, scanMode: ScanMode = "full", refreshHistory = true) {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       this.scanRefreshFailed = false;
       try {
-        const job = await acceptScanJob(mediaSourceId, scanMode);
+        const job = await sessionRequest(acceptScanJob(mediaSourceId, scanMode), sessionGeneration);
         if (!refreshHistory) return job;
         this.scanJobs = [...this.scanJobs.filter((item) => item.id !== job.id), job];
         const refreshes = [
@@ -104,32 +114,39 @@ export const useMediaStore = defineStore("media", {
           this.loadScanModeSuggestion(mediaSourceId),
         ];
         if (useAuthStore().hasPermission("audit:read")) refreshes.push(this.loadLogs());
-        const results = await Promise.allSettled(refreshes);
+        const results = await sessionRequest(Promise.allSettled(refreshes), sessionGeneration);
         this.scanRefreshFailed = results.some((item) => item.status === "rejected");
         return job;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.scanJobFailed;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
     async loadMediaFiles(filters: MediaFileFilters = {}) {
-      this.mediaFiles = await fetchMediaFiles(filters);
+      const sessionGeneration = getSessionGeneration();
+      this.mediaFiles = await sessionRequest(fetchMediaFiles(filters), sessionGeneration);
     },
 
     async loadLogs() {
-      this.logItems = await fetchLogs();
+      const sessionGeneration = getSessionGeneration();
+      this.logItems = await sessionRequest(fetchLogs(), sessionGeneration);
     },
 
     async cleanupLogs(): Promise<LogCleanupSummary> {
-      const result = await cleanupLogs();
-      await this.loadLogs();
+      const sessionGeneration = getSessionGeneration();
+      const result = await sessionRequest(cleanupLogs(), sessionGeneration);
+      await sessionRequest(this.loadLogs(), sessionGeneration);
       return result;
     },
 
     async openLogDrawer() {
-      await this.loadLogs();
+      const sessionGeneration = getSessionGeneration();
+      await sessionRequest(this.loadLogs(), sessionGeneration);
       this.logDrawerVisible = true;
     },
   },

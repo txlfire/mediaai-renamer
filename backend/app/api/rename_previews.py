@@ -9,6 +9,7 @@ from app.schema.metadata import MetadataCandidate
 from app.service.preview_service import (
     METADATA_MATCH_SOURCE_PARSED_TITLE,
     METADATA_MATCH_SOURCES,
+    MetadataBatchLimitError,
     apply_ai_parse_candidate,
     apply_metadata_candidate,
     exclude_rename_preview,
@@ -277,12 +278,15 @@ def match_all_metadata(
 ):
     """Run TMDB metadata matching for all unmatched previews in current scope."""
 
-    return match_all_unmatched_metadata(
-        request.app.state.settings,
-        media_source_id=payload.media_source_id,
-        scan_job_id=payload.scan_job_id,
-        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
-    )
+    try:
+        return match_all_unmatched_metadata(
+            request.app.state.settings,
+            media_source_id=payload.media_source_id,
+            scan_job_id=payload.scan_job_id,
+            metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+        )
+    except MetadataBatchLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/metadata-match/all/ai-fallback")
@@ -293,12 +297,15 @@ def match_all_metadata_with_ai_fallback(
 ):
     """Run TMDB first for scoped unmatched previews, then AI fallback."""
 
-    return match_all_unmatched_metadata_with_ai_fallback(
-        request.app.state.settings,
-        media_source_id=payload.media_source_id,
-        scan_job_id=payload.scan_job_id,
-        metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
-    )
+    try:
+        return match_all_unmatched_metadata_with_ai_fallback(
+            request.app.state.settings,
+            media_source_id=payload.media_source_id,
+            scan_job_id=payload.scan_job_id,
+            metadata_match_source=_validate_metadata_match_source(payload.metadata_match_source),
+        )
+    except MetadataBatchLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{preview_id}/metadata-multi-match")

@@ -1,14 +1,17 @@
-import { createRenderer, nextTick, ssrContextKey } from "vue";
+import { createRenderer, nextTick, reactive, ssrContextKey } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  page: vi.fn(), jobs: vi.fn(), error: vi.fn(),
+  page: vi.fn(), jobs: vi.fn(), error: vi.fn(), route: { query: {} as Record<string, string> },
   store: { mediaFiles: [] as { id: number }[], mediaSources: [], scanJobs: [], loadMediaSources: vi.fn() },
 }));
 vi.mock("../api/client", () => ({ fetchMediaFilesPage: mocks.page, fetchScanJobs: mocks.jobs }));
 vi.mock("../stores/media", () => ({ useMediaStore: () => mocks.store }));
-vi.mock("vue-router", () => ({ useRoute: () => ({ query: {} }) }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await import("vue");
+  return { useRoute: () => reactive(mocks.route) };
+});
 vi.mock("element-plus", () => ({ ElMessage: { error: mocks.error } }));
 vi.mock("../components/ListPageLayout.vue", () => ({ default: { render: () => null } }));
 vi.mock("../components/FullscreenTablePanel.vue", () => ({ default: { render: () => null } }));
@@ -43,6 +46,7 @@ function deferredPage() {
 describe("server scan-result request isolation", () => {
   beforeEach(async () => {
     setActivePinia(createPinia());
+    mocks.route.query = {};
     mocks.store.mediaFiles = [];
     mocks.store.mediaSources = [];
     mocks.store.scanJobs = [];
@@ -107,5 +111,16 @@ describe("server scan-result request isolation", () => {
     expect(mocks.page.mock.calls[0][0].page_size).toBe(50);
     expect(usePaginationStore().getState("scan-results").pageSize).toBe(50);
     expect(usePaginationStore().getState("scan-results").currentPage).toBe(1);
+  });
+
+  it("applies changed route filters and clears rows when the task leaves the URL", async () => {
+    mocks.page.mockResolvedValue({ items: [{ id: 2 }], total: 1, page: 1, page_size: 50 });
+    reactive(mocks.route).query = { media_source_id: "2", scan_job_id: "20" };
+    await nextTick(); await nextTick();
+    expect(mocks.page).toHaveBeenLastCalledWith(expect.objectContaining({ media_source_id: 2, scan_job_id: 20 }));
+    reactive(mocks.route).query = {};
+    await nextTick();
+    expect(mocks.store.mediaFiles).toEqual([]);
+    expect(state.selectedScanJobId).toBeUndefined();
   });
 });

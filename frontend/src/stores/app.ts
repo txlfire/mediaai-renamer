@@ -6,8 +6,10 @@ import { zhCnMessages as messages } from "../locales/zh-CN";
 type ConnectionState = "idle" | "loading" | "online" | "offline";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
+export type ThemePalette = "default" | "candy";
 
 const THEME_STORAGE_KEY = "mediaai-theme-mode";
+const PALETTE_STORAGE_KEY = "mediaai-theme-palette";
 const SIDEBAR_STORAGE_KEY = "mediaai-sidebar-collapsed";
 
 function isThemeMode(value: string | null): value is ThemeMode {
@@ -37,6 +39,7 @@ export const useAppStore = defineStore("app", {
     sidebarCollapsed: false,
     themeMode: "system" as ThemeMode,
     resolvedTheme: "light" as ResolvedTheme,
+    themePalette: "default" as ThemePalette,
   }),
   actions: {
     loadSidebarCollapsed() {
@@ -51,6 +54,7 @@ export const useAppStore = defineStore("app", {
     loadThemeMode() {
       const storedMode = localStorage.getItem(THEME_STORAGE_KEY);
       this.themeMode = isThemeMode(storedMode) ? storedMode : "system";
+      this.themePalette = localStorage.getItem(PALETTE_STORAGE_KEY) === "candy" ? "candy" : "default";
       this.applyThemeMode();
     },
 
@@ -67,7 +71,14 @@ export const useAppStore = defineStore("app", {
         // 两轴正交：styles.css 的 :root 与 :root[data-scheme="dark"] 承担中性色，
         // :root[data-palette="…"] 承担点缀色。详见 design.md「主题架构」。
         document.documentElement.dataset.scheme = this.resolvedTheme;
+        document.documentElement.dataset.palette = this.themePalette;
       }
+    },
+
+    setThemePalette(palette: ThemePalette) {
+      this.themePalette = palette;
+      localStorage.setItem(PALETTE_STORAGE_KEY, palette);
+      this.applyThemeMode();
     },
 
     toggleSidebar() {

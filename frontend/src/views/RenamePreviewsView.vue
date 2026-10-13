@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDown, CloseBold, Connection, Delete, Document, Edit, MagicStick, Refresh, Search, Select, View } from "@element-plus/icons-vue";
+import { ArrowDown, CloseBold, Connection, Delete, Document, Edit, MagicStick, Refresh, Search, Select, TrendCharts, View } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -1649,13 +1649,22 @@ async function saveEdit() {
   await loadPreviewPage(false);
 }
 
-onMounted(async () => {
-  try {
-    aiReadiness.value = await fetchAiReadiness();
-  } catch {
-    aiReadiness.value = null;
-  }
+async function applyRouteContext() {
   if (!viewActive) return;
+  const routeVersion = ++routeContextVersion;
+  let readiness: AiReadiness | null = null;
+  try {
+    readiness = await fetchAiReadiness();
+  } catch {
+    readiness = null;
+  }
+  if (!viewActive || routeVersion !== routeContextVersion) return;
+  aiReadiness.value = readiness;
+  previewStore.filters = {};
+  clearPreviewPage();
+  renameOperationStore.stopExecutionPolling();
+  pendingFileStore.stopMovePolling();
+  operationDialogVisible.value = false;
   const routeSourceId = Number(route.query.media_source_id);
   const routeScanJobId = Number(route.query.scan_job_id);
   if (Number.isFinite(routeSourceId) && routeSourceId > 0) {
@@ -1669,7 +1678,7 @@ onMounted(async () => {
     previewStore.previews = [];
     clearPreviewPage();
   }
-  if (!viewActive) return;
+  if (!viewActive || routeVersion !== routeContextVersion) return;
   const operationId = Number(route.query.operation_id);
   const moveId = Number(route.query.pending_move_task_id);
   const moveRequest = typeof route.query.pending_move_request_id === "string" ? route.query.pending_move_request_id : undefined;
@@ -1694,6 +1703,13 @@ onMounted(async () => {
     operationDialogVisible.value = true;
     void renameOperationStore.refreshRollbackPlan();
   }
+}
+
+let routeContextVersion = 0;
+onMounted(applyRouteContext);
+watch(() => [route.query.media_source_id, route.query.scan_job_id, route.query.operation_id,
+  route.query.rollback_plan_id, route.query.pending_move_task_id, route.query.pending_move_request_id], () => {
+  void applyRouteContext();
 });
 
 onBeforeUnmount(() => {
@@ -2169,7 +2185,7 @@ onBeforeUnmount(() => {
               <el-popover placement="top-start" :trigger="['hover', 'click']" width="220" popper-class="rename-stats-popover">
                 <template #reference>
                   <el-button class="rename-stats-button" size="small">
-                    <span class="rename-stats-icon" aria-hidden="true">📊</span>
+                    <el-icon class="rename-stats-icon" aria-hidden="true"><TrendCharts /></el-icon>
                     <span>{{ messages.common.statistics }}</span>
                   </el-button>
                 </template>

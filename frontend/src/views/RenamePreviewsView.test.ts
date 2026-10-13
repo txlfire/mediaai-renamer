@@ -16,7 +16,10 @@ vi.mock("../api/client", () => ({ fetchRenamePreviewsPage: mocks.page, fetchRena
   fetchMediaFilesPage: mocks.files, fetchPendingFilesPage: mocks.pending, fetchAiReadiness: mocks.history }));
 vi.mock("element-plus", () => ({ ElMessage: { error: mocks.error, warning: mocks.warning, success: mocks.success },
   ElMessageBox: { confirm: mocks.confirm } }));
-vi.mock("vue-router", () => ({ useRoute: () => mocks.route, useRouter: () => ({ replace: mocks.replace }) }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await import("vue");
+  return { useRoute: () => reactive(mocks.route), useRouter: () => ({ replace: mocks.replace }) };
+});
 vi.mock("../components/ListPageLayout.vue", () => ({ default: { render: () => null } }));
 vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: () => true }) }));
 vi.mock("../stores/media", () => ({ useMediaStore: () => ({ mediaFiles: [] }) }));
@@ -62,6 +65,15 @@ function page(id: number, pageNumber = 1): RenamePreviewPage {
 }
 let app: ReturnType<typeof renderer.createApp>, state: State;
 describe("preview server paging and frozen batch scope", () => {
+  it("updates mounted preview scope when source and task query change", async () => {
+    reactive(mocks.route).query = { media_source_id: "2", scan_job_id: "20" };
+    await nextTick(); await nextTick(); await nextTick();
+    expect(preview.filters).toEqual({ media_source_id: 2, scan_job_id: 20 });
+    reactive(mocks.route).query = {};
+    await nextTick(); await nextTick();
+    expect(preview.filters).toEqual({});
+    expect(preview.previews).toEqual([]);
+  });
   beforeEach(async () => {
     vi.resetAllMocks();
     mocks.route.query = {};

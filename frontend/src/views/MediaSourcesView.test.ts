@@ -2,14 +2,14 @@ import { createRenderer, nextTick, ssrContextKey } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ page: vi.fn(), error: vi.fn(), create: vi.fn(), success: vi.fn() }));
+const mocks = vi.hoisted(() => ({ page: vi.fn(), error: vi.fn(), create: vi.fn(), success: vi.fn(), remove: vi.fn(), toggle: vi.fn() }));
 vi.mock("../api/client", () => ({ fetchMediaSourcesPage: mocks.page, bulkDeleteMediaSources: vi.fn(),
-  createMediaSource: mocks.create, deleteMediaSource: vi.fn(), setMediaSourceEnabled: vi.fn(), updateMediaSource: vi.fn(),
+  createMediaSource: mocks.create, deleteMediaSource: mocks.remove, setMediaSourceEnabled: mocks.toggle, updateMediaSource: vi.fn(),
   fetchLocalDirectories: vi.fn(), testMediaSourceConnection: vi.fn(), testMediaSourceConnectionPayload: vi.fn(),
   verifyWebDavConditionalMove: vi.fn() }));
 vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: () => true }) }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("element-plus", () => ({ ElMessage: { error: mocks.error, success: mocks.success }, ElMessageBox: {} }));
+vi.mock("element-plus", () => ({ ElMessage: { error: mocks.error, success: mocks.success }, ElMessageBox: { confirm: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("../components/ListPageLayout.vue", () => ({ default: { render: () => null } }));
 vi.mock("../components/TablePagination.vue", () => ({ default: { render: () => null } }));
 vi.mock("../components/TextCell.vue", () => ({ default: { render: () => null } }));
@@ -24,7 +24,8 @@ const renderer = createRenderer<Node, Node>({ createElement: () => ({ children: 
 type Result = { items: { id: number }[]; total: number; page: number; page_size: number };
 type State = { pagedMediaSources: Result["items"]; mediaSourceTotal: number; sourcesLoading: boolean;
   selectedRows: { id: number }[]; loadSources: () => Promise<void>;
-  form: { name: string; path: string }; submitSource: () => Promise<void> };
+  form: { name: string; path: string }; submitSource: () => Promise<void>;
+  cleanupDialog: { visible: boolean }; removeSource: (row: never) => Promise<void>; toggleSource: (row: never) => Promise<void> };
 let app: ReturnType<typeof renderer.createApp>, state: State;
 function deferred() {
   let resolve!: (result: Result) => void;
@@ -80,5 +81,16 @@ describe("media-source server pages", () => {
     mocks.create.mockRejectedValue(new Error("failed"));
     await state.submitSource();
     expect(state.form.name).toBe("keep draft"); expect(mocks.error).toHaveBeenCalled();
+  });
+  it("reports failed writes and closes cleanup progress", async () => {
+    vi.stubGlobal("window", { setTimeout: globalThis.setTimeout });
+    mocks.remove.mockRejectedValue(new Error("delete failed"));
+    await state.removeSource({ id: 1, enabled: true } as never);
+    expect(state.cleanupDialog.visible).toBe(false);
+    expect(mocks.error).toHaveBeenCalledWith("delete failed");
+    mocks.toggle.mockRejectedValue(new Error("toggle failed"));
+    await state.toggleSource({ id: 1, enabled: true } as never);
+    expect(mocks.error).toHaveBeenCalledWith("toggle failed");
+    vi.unstubAllGlobals();
   });
 });

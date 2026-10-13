@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getSessionGeneration, invalidateSessionRequests, SessionChangedError } from "../utils/sessionGeneration";
 
 export type HealthStatus = {
   app: string;
@@ -1027,6 +1028,7 @@ export function setAuthToken(token: string, persistent = false) {
 }
 
 export function clearAuthToken() {
+  invalidateSessionRequests();
   if (canUseStorage(globalThis.localStorage)) {
     globalThis.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
   }
@@ -1035,7 +1037,10 @@ export function clearAuthToken() {
   }
 }
 
+const requestSessions = new WeakMap<object, number>();
+
 apiClient.interceptors.request.use((config) => {
+  requestSessions.set(config, getSessionGeneration());
   const token = getAuthToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -1045,18 +1050,25 @@ apiClient.interceptors.request.use((config) => {
 
 apiClient.interceptors.response.use(
   (response) => {
+    if (requestSessions.get(response.config) !== getSessionGeneration()) {
+      return Promise.reject(new SessionChangedError());
+    }
     if (response.headers["x-mediaai-audit-state"] === "pending" && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("mediaai:audit-pending"));
     }
     return response;
   },
   (error) => {
+    if (error?.config && requestSessions.get(error.config) !== getSessionGeneration()) {
+      return Promise.reject(new SessionChangedError());
+    }
     if (error?.response?.status === 401) {
       clearAuthToken();
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("mediaai:auth-expired"));
       }
     }
+    if (error instanceof Error) error.message = apiErrorMessage(error);
     return Promise.reject(error);
   },
 );
@@ -1123,13 +1135,14 @@ export async function resetAdminPassword(httpClient: ApiHttpClient = apiClient):
 }
 
 export async function logout(httpClient: ApiHttpClient = apiClient): Promise<void> {
+  const generation = getSessionGeneration();
   const post = requirePost(httpClient);
   try {
     await post("/auth/logout", {});
   } catch (error) {
     throw new Error(apiErrorMessage(error));
   } finally {
-    clearAuthToken();
+    if (generation === getSessionGeneration()) clearAuthToken();
   }
 }
 

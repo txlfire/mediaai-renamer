@@ -42,6 +42,20 @@ describe("theme state", () => {
     expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 
+  it("persists palette independently and preserves it across scheme changes", () => {
+    const store = useAppStore();
+    store.setThemePalette("candy");
+    store.setThemeMode("dark");
+    expect(document.documentElement.dataset).toMatchObject({ scheme: "dark", palette: "candy" });
+    store.$reset();
+    store.loadThemeMode();
+    expect(store.themePalette).toBe("candy");
+    expect(store.themeMode).toBe("dark");
+    localStorage.setItem("mediaai-theme-palette", "__invalid__");
+    store.loadThemeMode();
+    expect(store.themePalette).toBe("default");
+  });
+
   it("resolves system theme through media query", () => {
     const matchMedia = vi.fn().mockReturnValue({ matches: true });
 

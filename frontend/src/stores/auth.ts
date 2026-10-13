@@ -14,6 +14,7 @@ import {
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { resetWorkspaceState } from "./workspace";
+import { getSessionGeneration } from "../utils/sessionGeneration";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -46,10 +47,12 @@ export const useAuthStore = defineStore("auth", {
       }
       clearAuthToken();
       this.currentUser = null;
+      this.loading = false;
       this.errorMessage = message;
     },
 
     async loadStoredSession() {
+      const generation = getSessionGeneration();
       if (!getAuthToken()) {
         this.clearSession();
         return;
@@ -57,25 +60,31 @@ export const useAuthStore = defineStore("auth", {
       this.loading = true;
       this.errorMessage = "";
       try {
-        this.currentUser = await fetchCurrentUser();
+        const user = await fetchCurrentUser();
+        if (generation !== getSessionGeneration()) return;
+        this.currentUser = user;
       } catch (error) {
+        if (generation !== getSessionGeneration()) return;
         this.clearSession(error instanceof Error ? error.message : messages.auth.sessionExpired);
       } finally {
-        this.loading = false;
+        if (generation === getSessionGeneration()) this.loading = false;
       }
     },
 
     async login(username: string, password: string, rememberLogin = false) {
+      let generation = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
         const result = await loginApi({ username, password, rememberLogin });
+        generation = getSessionGeneration();
         this.currentUser = result.user;
       } catch (error) {
+        if (generation !== getSessionGeneration()) throw error;
         this.clearSession(error instanceof Error ? error.message : messages.auth.loginFailed);
         throw error;
       } finally {
-        this.loading = false;
+        if (generation === getSessionGeneration()) this.loading = false;
       }
     },
 
@@ -123,14 +132,15 @@ export const useAuthStore = defineStore("auth", {
     },
 
     async logout() {
+      const generation = getSessionGeneration();
       this.loading = true;
       try {
         await logoutApi();
       } catch (error) {
+        if (generation !== getSessionGeneration()) return;
         this.errorMessage = error instanceof Error ? error.message : "";
       } finally {
-        this.clearSession();
-        this.loading = false;
+        if (generation === getSessionGeneration() || !getAuthToken()) this.clearSession();
       }
     },
   },

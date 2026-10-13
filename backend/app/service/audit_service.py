@@ -210,14 +210,16 @@ def list_audit_events(
         where_parts.append("created_at <= ?")
         params.append(end_at)
     where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    offset = (normalized_page - 1) * normalized_page_size
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN")
         total = int(
             connection.execute(
                 f"SELECT COUNT(*) AS total FROM audit_events {where_sql}",
                 tuple(params),
             ).fetchone()["total"]
         )
+        normalized_page = min(normalized_page, max(1, (total + normalized_page_size - 1) // normalized_page_size))
+        offset = (normalized_page - 1) * normalized_page_size
         rows = connection.execute(
             "SELECT * FROM audit_events "
             f"{where_sql} "

@@ -1,8 +1,9 @@
-import { createRenderer, nextTick, ssrContextKey } from "vue";
+import { createRenderer, nextTick, reactive, ssrContextKey } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ page: vi.fn(), error: vi.fn(), observe: vi.fn(),
+  route: { query: {} as Record<string, string> },
   store: { mediaSources: [{ id: 1, name: "synthetic", enabled: true }], loadMediaSources: vi.fn(),
     scanModeSuggestion: null, scanRefreshFailed: false } }));
 vi.mock("../api/client", () => ({ fetchScanJobsPage: mocks.page, fetchScanJob: vi.fn(),
@@ -12,7 +13,10 @@ vi.mock("../utils/scanTaskObserver", () => ({ isScanActive: (status: string) => 
   createScanTaskObserver: () => ({ start: mocks.observe, stop: vi.fn() }) }));
 vi.mock("../stores/media", () => ({ useMediaStore: () => mocks.store }));
 vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: () => true }) }));
-vi.mock("vue-router", () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await import("vue");
+  return { useRoute: () => reactive(mocks.route), useRouter: () => ({ push: vi.fn() }) };
+});
 vi.mock("element-plus", () => ({ ElMessage: { error: mocks.error }, ElMessageBox: { confirm: vi.fn() } }));
 vi.mock("../components/ListPageLayout.vue", () => ({ default: { render: () => null } }));
 vi.mock("../components/OperationProgressLog.vue", () => ({ default: { render: () => null } }));
@@ -34,6 +38,7 @@ let app: ReturnType<typeof renderer.createApp>, state: State;
 describe("scan-job paging and independent activity", () => {
   beforeEach(async () => {
     setActivePinia(createPinia());
+    mocks.route.query = {};
     vi.clearAllMocks();
     mocks.page.mockReset().mockResolvedValue(empty);
     mocks.store.loadMediaSources.mockResolvedValue(undefined);
@@ -85,5 +90,11 @@ describe("scan-job paging and independent activity", () => {
     resolve({ ...empty, total: 100, items: [{ id: 100, media_source_id: 1, status: "completed" }] });
     await request;
     expect(state.pagedScanJobs).toEqual([]);
+  });
+  it("requeries when the same mounted route changes its source", async () => {
+    reactive(mocks.route).query = { media_source_id: "2" };
+    await nextTick(); await nextTick(); await nextTick();
+    expect(state.selectedSourceId).toBe(2);
+    expect(mocks.page).toHaveBeenCalledWith(expect.objectContaining({ media_source_id: 2 }));
   });
 });

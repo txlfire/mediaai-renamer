@@ -50,6 +50,26 @@ class RenamePreviewTestCase(unittest.TestCase):
         shutdown_logging()
         self.temp_dir.cleanup()
 
+    def test_edit_reads_one_record_even_when_excluded_after_commit(self):
+        from app.service import preview_service as service
+        previews = generate_rename_previews(self.settings, scan_job_id=1)
+        previewId = list_rename_previews(self.settings)[0].id
+        originalRead = service._preview_by_id
+
+        def concurrentRead(settings, recordId):
+            with closing(sqlite3.connect(settings.database_path)) as connection:
+                connection.execute("UPDATE rename_previews SET status='excluded' WHERE id=?", (recordId,))
+                connection.commit()
+            return originalRead(settings, recordId)
+
+        with patch.object(service, "list_rename_previews", side_effect=AssertionError("不得重读全表")), patch.object(
+            service, "_preview_by_id", side_effect=concurrentRead
+        ) as read:
+            updated = update_rename_preview(self.settings, previewId, "Edited.mkv")
+            self.assertEqual("Edited.mkv", updated.edited_name)
+            self.assertEqual("excluded", updated.status)
+            read.assert_called_once_with(self.settings, previewId)
+
     def _insert_media_files(self):
         with closing(sqlite3.connect(self.settings.database_path)) as connection:
             connection.execute(

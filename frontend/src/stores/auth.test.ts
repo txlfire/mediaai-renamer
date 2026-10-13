@@ -8,6 +8,7 @@ import { usePendingFileStore } from "./pendingFiles";
 import { usePreviewStore } from "./preview";
 import { useRenameOperationStore } from "./renameOperation";
 import { useTableSortStore } from "./tableSort";
+import { invalidateSessionRequests } from "../utils/sessionGeneration";
 
 const api = vi.hoisted(() => ({
   bootstrapAdmin: vi.fn(),
@@ -52,6 +53,42 @@ describe("auth store", () => {
     localStorage.clear();
     setActivePinia(createPinia());
     vi.clearAllMocks();
+  });
+
+  it("clears loading immediately when the session is cleared", () => {
+    const store = useAuthStore();
+    store.loading = true;
+    store.currentUser = user;
+    store.clearSession();
+    expect(store.loading).toBe(false);
+    expect(store.currentUser).toBeNull();
+  });
+
+  it("does not clear a newer session when an earlier login fails", async () => {
+    let rejectRequest!: (error: Error) => void;
+    api.login.mockReturnValueOnce(new Promise((_, reject) => { rejectRequest = reject; }));
+    const store = useAuthStore();
+    const request = store.login("previous-user", "SyntheticPassword!").catch(error => error);
+    invalidateSessionRequests();
+    store.currentUser = user;
+    rejectRequest(new Error("旧登录请求失败"));
+    await request;
+    expect(store.currentUser).toEqual(user);
+    expect(api.clearAuthToken).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a newer session after an earlier logout completes", async () => {
+    api.getAuthToken.mockReturnValue("new-session");
+    let resolveRequest!: () => void;
+    api.logout.mockReturnValueOnce(new Promise<void>(resolve => { resolveRequest = resolve; }));
+    const store = useAuthStore();
+    const request = store.logout();
+    invalidateSessionRequests();
+    store.currentUser = user;
+    resolveRequest();
+    await request;
+    expect(store.currentUser).toEqual(user);
+    expect(api.clearAuthToken).not.toHaveBeenCalled();
   });
 
   it("logs in and exposes user permissions", async () => {

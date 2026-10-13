@@ -24,7 +24,7 @@
   --sidebar-text: #1f2937;
   --sidebar-muted: #64748b;
   --text-main: #1f2937;
-  --text-muted: #64748b;
+  --text-muted: #5b6b80;
   --border-color: #d8e1ec;
   --table-header-bg: #f8fafc;
   --table-row-bg: #ffffff;
@@ -55,24 +55,33 @@
   --brand-accent-light: #2563eb;
   --brand-accent-light-ink: #ffffff;
   --brand-accent-dark: #3b82f6;
-  --brand-accent-dark-ink: #ffffff;
+  --brand-accent-dark-ink: #071a31;
   --brand-accent: var(--brand-accent-light);
   --brand-accent-ink: var(--brand-accent-light-ink);
-  --semantic-success: #16a34a;
-  --semantic-warning: #d97706;
-  --semantic-danger: #dc2626;
-  --semantic-info: #2563eb;
+  --brand-accent-hover: color-mix(in srgb, var(--brand-accent-light) 90%, black);
+  --semantic-success-light: #15803d;
+  --semantic-warning-light: #b45309;
+  --semantic-danger-light: #dc2626;
+  --semantic-info-light: #2563eb;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --semantic-success: var(--semantic-success-light);
+  --semantic-warning: var(--semantic-warning-light);
+  --semantic-danger: var(--semantic-danger-light);
+  --semantic-info: var(--semantic-info-light);
   --action-edit: #2563eb;
   --action-edit-hover: #1d4ed8;
-  --action-view: #0891b2;
+  --action-view: #0e7490;
   --action-view-hover: #0e7490;
   --action-magic: #7c3aed;
   --action-magic-hover: #6d28d9;
-  --action-run: #16a34a;
+  --action-run: #15803d;
   --action-run-hover: #15803d;
-  --action-toggle: #16a34a;
+  --action-toggle: #15803d;
   --action-toggle-hover: #15803d;
-  --action-sync: #16a34a;
+  --action-sync: #15803d;
   --action-sync-hover: #15803d;
   --action-ai: #2563eb;
   --action-ai-hover: #1d4ed8;
@@ -147,6 +156,105 @@
   /* 品牌强调的方案别名：暗色指向 -dark 真值（配色块无需重复） */
   --brand-accent: var(--brand-accent-dark);
   --brand-accent-ink: var(--brand-accent-dark-ink);
+  --brand-accent-hover: color-mix(in srgb, var(--brand-accent-dark) 90%, white);
+  --semantic-success: var(--semantic-success-dark);
+  --semantic-warning: var(--semantic-warning-dark);
+  --semantic-danger: var(--semantic-danger-dark);
+  --semantic-info: var(--semantic-info-dark);
+}
+
+:root[data-palette="candy"] {
+  --brand-accent-light: #db2777;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #f472b6;
+  --brand-accent-dark-ink: #500724;
+  --semantic-success-light: #15803d;
+  --semantic-warning-light: #b45309;
+  --semantic-danger-light: #dc2626;
+  --semantic-info-light: #1d4ed8;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --action-edit: #be185d;
+  --action-edit-hover: #9d174d;
+  --action-edit-dark: #f472b6;
+  --action-edit-dark-hover: #f9a8d4;
+  --action-view: #0e7490;
+  --action-view-hover: #155e75;
+  --action-view-dark: #22d3ee;
+  --action-view-dark-hover: #67e8f9;
+  --action-magic: #7e22ce;
+  --action-magic-hover: #6b21a8;
+  --action-magic-dark: #c4b5fd;
+  --action-magic-dark-hover: #ddd6fe;
+  --action-run: #047857;
+  --action-run-hover: #065f46;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle: #047857;
+  --action-toggle-hover: #065f46;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync: #0e7490;
+  --action-sync-hover: #155e75;
+  --action-sync-dark: #22d3ee;
+  --action-sync-dark-hover: #67e8f9;
+  --action-ai: #6d28d9;
+  --action-ai-hover: #5b21b6;
+  --action-ai-dark: #c4b5fd;
+  --action-ai-dark-hover: #ddd6fe;
+  --action-delete: #dc2626;
+  --action-delete-hover: #b91c1c;
+  --action-delete-dark: #f87171;
+  --action-delete-dark-hover: #fca5a5;
+}
+
+/* Element Plus 与应用共用强调色，不为配色新增组件选择器。 */
+:root {
+  --el-color-primary: var(--brand-accent);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--brand-accent) 80%, black);
+  --el-color-primary-light-3: color-mix(in srgb, var(--brand-accent) 70%, var(--panel-bg));
+  --el-color-primary-light-5: color-mix(in srgb, var(--brand-accent) 50%, var(--panel-bg));
+  --el-color-primary-light-7: color-mix(in srgb, var(--brand-accent) 30%, var(--panel-bg));
+  --el-color-primary-light-8: color-mix(in srgb, var(--brand-accent) 20%, var(--panel-bg));
+  --el-color-primary-light-9: color-mix(in srgb, var(--brand-accent) 10%, var(--panel-bg));
+  --el-color-success: var(--semantic-success);
+  --el-color-warning: var(--semantic-warning);
+  --el-color-danger: var(--semantic-danger);
+  --el-color-info: var(--semantic-info);
+  --login-panel-shadow: 0 18px 48px rgb(15 23 42 / 12%);
+}
+
+.el-button--primary {
+  --el-button-text-color: var(--brand-accent-ink);
+  --el-button-hover-bg-color: var(--brand-accent-hover);
+  --el-button-hover-border-color: var(--brand-accent-hover);
+  --el-button-active-bg-color: var(--brand-accent-hover);
+  --el-button-active-border-color: var(--brand-accent-hover);
+  --el-button-hover-text-color: var(--brand-accent-ink);
+  --el-button-active-text-color: var(--brand-accent-ink);
+}
+
+.theme-preferences { display: grid; gap: 16px; }
+.el-radio-button { --el-radio-button-checked-text-color: var(--brand-accent-ink); }
+.theme-preferences fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.theme-preferences legend { margin-bottom: 8px; color: var(--text-muted); font-size: 13px; }
+.theme-preferences .el-radio-button__inner { padding: 8px 10px; }
+.palette-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: baseline; }
+.palette-swatch-default { background: #2563eb; }
+.palette-swatch-candy { background: #db2777; }
+
+.scan-jobs-table .cell,
+.task-governance-table .cell { font-variant-numeric: tabular-nums; }
+
+.brand-block:focus-visible,
+.settings-test-status-bar:focus-visible,
+.media-source-path-type-help:focus-visible,
+.table-action-button:focus-visible,
+.naming-builder-token-input:focus-visible {
+  outline: 2px solid var(--el-color-primary) !important;
+  outline-offset: 2px;
 }
 
 * {
@@ -707,48 +815,48 @@ body.el-popup-parent--hidden {
 }
 
 .query-action-button {
-  --el-button-bg-color: #2766e8;
-  --el-button-border-color: #2766e8;
-  --el-button-text-color: #ffffff;
-  --el-button-hover-bg-color: #1f58d2;
-  --el-button-hover-border-color: #1f58d2;
-  --el-button-hover-text-color: #ffffff;
-  --el-button-active-bg-color: #1748b8;
-  --el-button-active-border-color: #1748b8;
-  --el-button-active-text-color: #ffffff;
-  --el-button-disabled-bg-color: #b3d4fc;
-  --el-button-disabled-border-color: #b3d4fc;
-  --el-button-disabled-text-color: #ffffff;
+  --el-button-bg-color: var(--brand-accent);
+  --el-button-border-color: var(--brand-accent);
+  --el-button-text-color: var(--brand-accent-ink);
+  --el-button-hover-bg-color: var(--brand-accent-hover);
+  --el-button-hover-border-color: var(--brand-accent-hover);
+  --el-button-hover-text-color: var(--brand-accent-ink);
+  --el-button-active-bg-color: var(--brand-accent-hover);
+  --el-button-active-border-color: var(--brand-accent-hover);
+  --el-button-active-text-color: var(--brand-accent-ink);
+  --el-button-disabled-bg-color: var(--button-default-disabled-bg);
+  --el-button-disabled-border-color: var(--button-default-disabled-border);
+  --el-button-disabled-text-color: var(--button-default-disabled-text);
   min-width: 5.75rem;
   font-weight: 600;
-  background-color: #2766e8 !important;
-  border-color: #2766e8 !important;
-  color: #ffffff !important;
+  background-color: var(--brand-accent) !important;
+  border-color: var(--brand-accent) !important;
+  color: var(--brand-accent-ink) !important;
 }
 
 .query-action-button:hover,
 .query-action-button:focus {
-  background-color: #1f58d2 !important;
-  border-color: #1f58d2 !important;
-  color: #ffffff !important;
+  background-color: var(--brand-accent-hover) !important;
+  border-color: var(--brand-accent-hover) !important;
+  color: var(--brand-accent-ink) !important;
 }
 
 .query-action-button:active {
-  background-color: #1748b8 !important;
-  border-color: #1748b8 !important;
-  color: #ffffff !important;
+  background-color: var(--brand-accent-hover) !important;
+  border-color: var(--brand-accent-hover) !important;
+  color: var(--brand-accent-ink) !important;
 }
 
 .query-action-button.is-disabled,
 .query-action-button:disabled {
-  background-color: #b3d4fc !important;
-  border-color: #b3d4fc !important;
-  color: #ffffff !important;
+  background-color: var(--button-default-disabled-bg) !important;
+  border-color: var(--button-default-disabled-border) !important;
+  color: var(--button-default-disabled-text) !important;
 }
 
 .query-action-button .el-icon,
 .query-action-button svg {
-  color: #ffffff !important;
+  color: currentColor !important;
 }
 
 .list-filter-primary {
@@ -1220,15 +1328,15 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 }
 
 .settings-category-button.is-active {
-  color: var(--el-color-white);
+  color: var(--brand-accent-ink);
   border-color: var(--el-color-primary);
   background: var(--el-color-primary);
   box-shadow: 0 0.25rem 0.75rem rgb(64 128 255 / 18%);
 }
 
 .settings-category-button.is-active:hover {
-  color: var(--el-color-white);
-  background: var(--el-color-primary-light-3);
+  color: var(--brand-accent-ink);
+  background: var(--brand-accent-hover);
 }
 
 .settings-panel {
@@ -3157,10 +3265,14 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   .app-layout,
   .app-layout.is-collapsed {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .app-sidebar {
     min-height: auto;
+    position: relative;
   }
 
   .source-form,

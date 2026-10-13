@@ -152,9 +152,15 @@ def _request(
         headers["Depth"] = "1"
         headers["Content-Type"] = "application/xml; charset=utf-8"
     if extra_headers:
-        headers.update(extra_headers)
-        if "Destination" in headers:
-            headers["Destination"] = _confined_url(headers["Destination"], _move_root(normalized, context))
+        destinations = [value for key, value in extra_headers.items() if key.lower() == "destination"]
+        normalizedDestinations = {
+            _confined_url(value, _move_root(normalized, context)) for value in destinations
+        }
+        if len(normalizedDestinations) > 1:
+            raise ValueError("WebDAV Destination 重复且目标不一致")
+        headers.update({key: value for key, value in extra_headers.items() if key.lower() != "destination"})
+        if normalizedDestinations:
+            headers["Destination"] = normalizedDestinations.pop()
     request = Request(normalized, data=body, headers=headers, method=method)
     timeout = context.connection_timeout_seconds if context else 5
     return urlopen(request, timeout=timeout)

@@ -332,6 +332,14 @@ watch(selectedSourceId, async (value) => {
   }
   await loadScanModeSuggestion(value);
 });
+
+watch(() => route.query.media_source_id, async (value) => {
+  if (!viewActive) return;
+  const sourceId = Number(value);
+  selectedSourceId.value = Number.isSafeInteger(sourceId) && sourceId > 0 ? sourceId : undefined;
+  await nextTick();
+  await queryScanJobs();
+});
 </script>
 
 <template>
@@ -469,7 +477,7 @@ watch(selectedSourceId, async (value) => {
             {{ formatDateTime(row.ended_at) }}
           </template>
         </el-table-column>
-        <el-table-column :label="messages.common.actions" min-width="96" align="center" header-align="center" fixed="right">
+        <el-table-column :label="messages.common.actions" width="112" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :content="messages.scanJobs.viewResults" placement="top">

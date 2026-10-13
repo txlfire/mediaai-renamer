@@ -51,6 +51,27 @@ class PreviewPaginationTest(unittest.TestCase):
         self.assertEqual(1, result["stats"]["renamed"])
         self.assertEqual(999, sum(result["stats"].values()))
 
+    def test_legacy_all_matching_rejects_over_limit_before_external_calls(self):
+        client = authenticatedClient(create_app(self.settings))
+        with patch.object(service, "match_rename_previews_metadata") as metadata, patch.object(
+            service, "match_rename_previews_metadata_with_ai_fallback"
+        ) as fallback:
+            for endpoint in ("metadata-match/all", "metadata-match/all/ai-fallback"):
+                response = client.post(f"/api/rename-previews/{endpoint}", json={"scan_job_id": 1})
+                self.assertEqual(409, response.status_code)
+                self.assertIn("未发送外部请求", response.json()["detail"])
+            metadata.assert_not_called()
+            fallback.assert_not_called()
+
+    def test_legacy_all_matching_preserves_complete_bounded_scope(self):
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute("DELETE FROM rename_previews WHERE id > 2")
+            connection.commit()
+        with patch.object(service, "match_rename_previews_metadata", return_value={"total_count": 2}) as match:
+            result = service.match_all_unmatched_metadata(self.settings, scan_job_id=1)
+            self.assertEqual(2, result["total_count"])
+            self.assertEqual([1, 2], match.call_args.args[1])
+
     def test_global_sort_filters_and_clamped_pages(self):
         result = service.listRenamePreviewsPage(self.settings, sort_by="current_target_name", sort_order="desc", page_size=10)
         self.assertEqual(1000, result["items"][0].id)

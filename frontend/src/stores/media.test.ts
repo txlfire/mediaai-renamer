@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScanJob } from "../api/client";
 import { useAuthStore } from "./auth";
 import { useMediaStore } from "./media";
+import { invalidateSessionRequests } from "../utils/sessionGeneration";
 
 const api = vi.hoisted(() => ({ acceptScanJob: vi.fn(), fetchScanJobs: vi.fn(), fetchLogs: vi.fn(), fetchScanModeSuggestion: vi.fn() }));
 vi.mock("../api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("../api/client")>(), ...api }));
@@ -74,5 +75,19 @@ describe("scan result and auxiliary refresh", () => {
     expect(await store.startScan(1)).toBeUndefined();
     expect(store.errorMessage).toBe("synthetic scan failure");
     expect(api.fetchScanJobs).not.toHaveBeenCalled();
+  });
+
+  it("does not refill cleared workspace from a previous session", async () => {
+    let resolve!: (jobs: ScanJob[]) => void;
+    api.fetchScanJobs.mockReturnValueOnce(new Promise<ScanJob[]>((done) => { resolve = done; }));
+    const store = useMediaStore();
+    const request = store.loadScanJobs();
+    const rejected = expect(request).rejects.toThrow("登录状态已失效");
+    invalidateSessionRequests();
+    store.$reset();
+    resolve([job]);
+    await rejected;
+    expect(store.scanJobs).toEqual([]);
+    expect(store.loading).toBe(false);
   });
 });

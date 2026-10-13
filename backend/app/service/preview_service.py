@@ -1367,6 +1367,28 @@ def match_rename_previews_metadata_with_ai_fallback(
     }
 
 
+class MetadataBatchLimitError(ValueError):
+    """全部匹配超限时必须拒绝，不能截断或发出部分请求。"""
+
+
+def _unmatchedMetadataIds(settings: AppSettings, mediaSourceId: int | None, scanJobId: int | None) -> list[int]:
+    conditions = ["(rp.metadata_match_status IS NULL OR rp.metadata_match_status = '')"]
+    params: list[object] = []
+    for column, value in (("mf.media_source_id", mediaSourceId), ("mf.scan_job_id", scanJobId)):
+        if value is not None:
+            conditions.append(f"{column} = ?")
+            params.append(value)
+    limit = max(1, min(10000, int(get_effective_settings(settings).get("operations.batch_limit") or 200)))
+    with closing(sqlite3.connect(settings.database_path)) as connection:
+        rows = connection.execute(
+            "SELECT rp.id FROM rename_previews rp JOIN media_files mf ON mf.id = rp.media_file_id "
+            f"WHERE {' AND '.join(conditions)} ORDER BY rp.id LIMIT ?", [*params, limit + 1],
+        ).fetchall()
+    if len(rows) > limit:
+        raise MetadataBatchLimitError(f"全部匹配超过批量上限 {limit}，请缩小筛选范围；未发送外部请求")
+    return [int(row[0]) for row in rows]
+
+
 def match_all_unmatched_metadata(
     settings: AppSettings,
     media_source_id: int | None = None,
@@ -1376,25 +1398,10 @@ def match_all_unmatched_metadata(
 ) -> dict[str, object]:
     """Batch match all previews that have no metadata match result."""
 
-    conditions = ["(rp.metadata_match_status IS NULL OR rp.metadata_match_status = '')"]
-    params: list[object] = []
-    if media_source_id is not None:
-        conditions.append("mf.media_source_id = ?")
-        params.append(media_source_id)
-    if scan_job_id is not None:
-        conditions.append("mf.scan_job_id = ?")
-        params.append(scan_job_id)
-
-    with closing(sqlite3.connect(settings.database_path)) as connection:
-        rows = connection.execute(
-            "SELECT rp.id FROM rename_previews rp "
-            "JOIN media_files mf ON mf.id = rp.media_file_id "
-            f"WHERE {' AND '.join(conditions)} ORDER BY rp.id",
-            params,
-        ).fetchall()
+    previewIds = _unmatchedMetadataIds(settings, media_source_id, scan_job_id)
     return match_rename_previews_metadata(
         settings,
-        [int(row[0]) for row in rows],
+        previewIds,
         provider=provider,
         metadata_match_source=metadata_match_source,
     )
@@ -1409,25 +1416,10 @@ def match_all_unmatched_metadata_with_ai_fallback(
 ) -> dict[str, object]:
     """对当前范围未匹配条目执行 TMDB，并对未匹配或低置信条目追加 AI 后备解析。"""
 
-    conditions = ["(rp.metadata_match_status IS NULL OR rp.metadata_match_status = '')"]
-    params: list[object] = []
-    if media_source_id is not None:
-        conditions.append("mf.media_source_id = ?")
-        params.append(media_source_id)
-    if scan_job_id is not None:
-        conditions.append("mf.scan_job_id = ?")
-        params.append(scan_job_id)
-
-    with closing(sqlite3.connect(settings.database_path)) as connection:
-        rows = connection.execute(
-            "SELECT rp.id FROM rename_previews rp "
-            "JOIN media_files mf ON mf.id = rp.media_file_id "
-            f"WHERE {' AND '.join(conditions)} ORDER BY rp.id",
-            params,
-        ).fetchall()
+    previewIds = _unmatchedMetadataIds(settings, media_source_id, scan_job_id)
     return match_rename_previews_metadata_with_ai_fallback(
         settings,
-        [int(row[0]) for row in rows],
+        previewIds,
         provider=provider,
         metadata_match_source=metadata_match_source,
     )

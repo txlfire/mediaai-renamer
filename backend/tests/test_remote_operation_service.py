@@ -224,6 +224,24 @@ class RemoteOperationServiceTest(unittest.TestCase):
             self.assertEqual("pending", second.status)
             self.assertEqual({"step": "prepared"}, second.recovery)
 
+    def test_remote_and_audit_pages_clamp_after_total_shrinks(self):
+        from app.service.audit_service import list_audit_events, record_audit_event
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = self.build_settings(Path(temp_dir))
+            ensure_database(settings)
+            sourceId = self.create_source(settings)
+            create_remote_operation_item(settings, media_source_id=sourceId, operation_type="rename",
+                idempotency_key="paging", source_path="/a", target_path="/b", source_version="etag")
+            record_audit_event(settings, event_type="synthetic", action="paging", result="success", summary="分页测试")
+            page = list_remote_operation_items(settings, page=99, page_size=10)
+            self.assertEqual(1, page.page)
+            self.assertEqual(1, len(page.items))
+            audit = list_audit_events(settings, page=99, page_size=10, event_type="synthetic")
+            self.assertEqual(1, audit.page)
+            self.assertEqual(1, len(audit.items))
+            empty = list_remote_operation_items(settings, page=99, status="failed")
+            self.assertEqual((1, 0, []), (empty.page, empty.total, empty.items))
+
     def test_concurrent_remote_operation_item_creation_returns_one_record(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = self.build_settings(Path(temp_dir))

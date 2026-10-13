@@ -547,14 +547,16 @@ def list_remote_operation_items(
         parameters.append(status)
 
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    offset = (safe_page - 1) * safe_page_size
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN")
         total = int(
             connection.execute(
                 f"SELECT COUNT(*) FROM remote_operation_items r{where_clause}",
                 parameters,
             ).fetchone()[0]
         )
+        safe_page = min(safe_page, max(1, (total + safe_page_size - 1) // safe_page_size))
+        offset = (safe_page - 1) * safe_page_size
         rows = connection.execute(
             "SELECT r.*, m.name AS media_source_name "
             "FROM remote_operation_items r "

@@ -1,3 +1,4 @@
+import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 import { defineStore } from "pinia";
 
 import {
@@ -59,48 +60,59 @@ export const usePreviewStore = defineStore("preview", {
   },
   actions: {
     async loadPreviews(filters?: RenamePreviewFilters) {
+      const sessionGeneration = getSessionGeneration();
       this.filters = { ...(filters ?? this.filters) };
-      this.previews = await fetchRenamePreviews(this.filters);
+      this.previews = await sessionRequest(fetchRenamePreviews(this.filters), sessionGeneration);
     },
 
     async generatePreviews(payload: GenerateRenamePreviewsPayload = {}, refreshHistory = true) {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       this.generationSummary = null;
       try {
-        this.generationSummary = await generateRenamePreviews(payload);
-        if (refreshHistory) await this.loadPreviews();
+        this.generationSummary = await sessionRequest(generateRenamePreviews(payload), sessionGeneration);
+        if (refreshHistory) await sessionRequest(this.loadPreviews(), sessionGeneration);
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.previewGenerationFailed;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
     async updatePreview(previewId: number, targetName: string) {
-      const updated = await updateRenamePreview(previewId, targetName);
+      const sessionGeneration = getSessionGeneration();
+      const updated = await sessionRequest(updateRenamePreview(previewId, targetName), sessionGeneration);
       this.replacePreview(updated);
       return updated;
     },
 
     async excludePreview(previewId: number, reason = "manual_excluded") {
-      const updated = await excludeRenamePreview(previewId, reason);
+      const sessionGeneration = getSessionGeneration();
+      const updated = await sessionRequest(excludeRenamePreview(previewId, reason), sessionGeneration);
       this.replacePreview(updated);
       return updated;
     },
 
     async excludePreviews(previewIds: number[], reason = "manual_excluded"): Promise<BatchRenamePreviewExcludeResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await excludeRenamePreviews(previewIds, reason);
+        const result = await sessionRequest(excludeRenamePreviews(previewIds, reason), sessionGeneration);
         result.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -112,17 +124,21 @@ export const usePreviewStore = defineStore("preview", {
     },
 
     async matchMetadata(previewId: number, metadataMatchSource: MetadataMatchSource = "parsed_title") {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const updated = await matchRenamePreviewMetadata(previewId, metadataMatchSource);
+        const updated = await sessionRequest(matchRenamePreviewMetadata(previewId, metadataMatchSource), sessionGeneration);
         this.replacePreview(updated);
         return updated;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -130,40 +146,48 @@ export const usePreviewStore = defineStore("preview", {
       previewIds: number[],
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<BatchMetadataMatchResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchRenamePreviewsMetadata(previewIds, metadataMatchSource);
+        const result = await sessionRequest(matchRenamePreviewsMetadata(previewIds, metadataMatchSource), sessionGeneration);
         result.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
     async matchAllUnmatched(
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<BatchMetadataMatchResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchAllUnmatchedMetadata(
+        const result = await sessionRequest(matchAllUnmatchedMetadata(
           {
             media_source_id: this.filters.media_source_id,
             scan_job_id: this.filters.scan_job_id,
           },
           metadataMatchSource,
-        );
+        ), sessionGeneration);
         result.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -172,17 +196,21 @@ export const usePreviewStore = defineStore("preview", {
       metadataMatchSource: MetadataMatchSource = "parsed_title",
       mode: MultiSourceMatchMode = "fallback",
     ): Promise<MultiSourceMatchResponse> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchRenamePreviewMultiSource(previewId, metadataMatchSource, mode);
+        const result = await sessionRequest(matchRenamePreviewMultiSource(previewId, metadataMatchSource, mode), sessionGeneration);
         this.replacePreview(result.preview);
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -191,17 +219,21 @@ export const usePreviewStore = defineStore("preview", {
       metadataMatchSource: MetadataMatchSource = "parsed_title",
       mode: MultiSourceMatchMode = "fallback",
     ): Promise<BatchMultiSourceMatchResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchRenamePreviewsMultiSource(previewIds, metadataMatchSource, mode);
+        const result = await sessionRequest(matchRenamePreviewsMultiSource(previewIds, metadataMatchSource, mode), sessionGeneration);
         result.items.forEach((item) => this.replacePreview(item.preview));
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -209,40 +241,48 @@ export const usePreviewStore = defineStore("preview", {
       previewIds: number[],
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<MetadataAiFallbackResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchRenamePreviewsMetadataWithAiFallback(previewIds, metadataMatchSource);
+        const result = await sessionRequest(matchRenamePreviewsMetadataWithAiFallback(previewIds, metadataMatchSource), sessionGeneration);
         result.metadata.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
     async matchAllUnmatchedWithAiFallback(
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<MetadataAiFallbackResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await matchAllUnmatchedMetadataWithAiFallback(
+        const result = await sessionRequest(matchAllUnmatchedMetadataWithAiFallback(
           {
             media_source_id: this.filters.media_source_id,
             scan_job_id: this.filters.scan_job_id,
           },
           metadataMatchSource,
-        );
+        ), sessionGeneration);
         result.metadata.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -250,11 +290,13 @@ export const usePreviewStore = defineStore("preview", {
       previewId: number,
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<MetadataMatchResult[]> {
+      const sessionGeneration = getSessionGeneration();
       return fetchRenamePreviewMetadataCandidates(previewId, metadataMatchSource);
     },
 
     async applyMetadataCandidate(previewId: number, match: MetadataMatchResult, selectedFields: string[] = []) {
-      const updated = await applyRenamePreviewMetadataCandidate(previewId, match, selectedFields);
+      const sessionGeneration = getSessionGeneration();
+      const updated = await sessionRequest(applyRenamePreviewMetadataCandidate(previewId, match, selectedFields), sessionGeneration);
       this.replacePreview(updated);
       return updated;
     },
@@ -263,15 +305,19 @@ export const usePreviewStore = defineStore("preview", {
       previewId: number,
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<AiParseResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        return await parseRenamePreviewWithAi(previewId, metadataMatchSource);
+        return await sessionRequest(parseRenamePreviewWithAi(previewId, metadataMatchSource), sessionGeneration);
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
@@ -279,20 +325,25 @@ export const usePreviewStore = defineStore("preview", {
       previewIds: number[],
       metadataMatchSource: MetadataMatchSource = "parsed_title",
     ): Promise<BatchAiParseResult> {
+      const sessionGeneration = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        return await parseRenamePreviewsWithAi(previewIds, metadataMatchSource);
+        return await sessionRequest(parseRenamePreviewsWithAi(previewIds, metadataMatchSource), sessionGeneration);
       } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
         throw error;
       } finally {
-        this.loading = false;
+if (sessionGeneration === getSessionGeneration()) {
+          this.loading = false;
+        }
       }
     },
 
     async applyAiCandidate(previewId: number, candidate: AiParseCandidate) {
-      const updated = await applyAiParseCandidate(previewId, candidate);
+      const sessionGeneration = getSessionGeneration();
+      const updated = await sessionRequest(applyAiParseCandidate(previewId, candidate), sessionGeneration);
       this.replacePreview(updated);
       return updated;
     },

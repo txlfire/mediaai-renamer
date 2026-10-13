@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Refresh, Search } from "@element-plus/icons-vue";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useRoute } from "vue-router";
 
@@ -123,19 +123,21 @@ async function resetScanResults() {
   clearMediaFiles();
 }
 
-onMounted(async () => {
+watch(() => [route.query.media_source_id, route.query.scan_job_id], async () => {
   if (!viewActive) return;
+  clearMediaFiles();
+  selectedSourceId.value = undefined;
+  selectedScanJobId.value = undefined;
   const routeSourceId = Number(route.query.media_source_id);
   const routeScanJobId = Number(route.query.scan_job_id);
   if (Number.isFinite(routeSourceId) && routeSourceId > 0) {
     selectedSourceId.value = routeSourceId;
-    await queryScanJobsForSource();
   }
   if (Number.isFinite(routeScanJobId) && routeScanJobId > 0) {
     selectedScanJobId.value = routeScanJobId;
     await queryMediaFiles();
   }
-});
+}, { immediate: true });
 
 onBeforeUnmount(() => {
   viewActive = false;

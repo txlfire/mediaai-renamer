@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Delete, Edit, InfoFilled, Key, Plus, Refresh } from "@element-plus/icons-vue";
+import { Check, CircleCloseFilled, Delete, Edit, InfoFilled, Key, Loading, Plus, Refresh, SuccessFilled } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { isAxiosError } from "axios";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
@@ -1578,7 +1578,6 @@ function resetAiTestState() {
 const imdbStatusBar = computed(() => {
   if (testingImdb.value) {
     return {
-      icon: "⏳",
       text: `IMDb ${pageText.imdb.testing} ${pageText.imdb.waited} ${imdbTestingElapsedSeconds.value} ${pageText.imdb.seconds}`,
       time: "",
       tone: "testing",
@@ -1587,7 +1586,6 @@ const imdbStatusBar = computed(() => {
 
   if (!imdbTestResult.value) {
     return {
-      icon: "⚪",
       text: pageText.imdb.testStatusUntested,
       time: "",
       tone: "unknown",
@@ -1596,7 +1594,6 @@ const imdbStatusBar = computed(() => {
 
   const success = imdbTestResult.value.connection_status === "success";
   return {
-    icon: success ? "🟢" : "🔴",
     text: success ? pageText.imdb.testSuccess : pageText.imdb.testFailed,
     time: imdbLastTestTime.value || pageText.imdb.noTestRecord,
     tone: success ? "success" : "danger",
@@ -1613,7 +1610,6 @@ function imdbResponseTimeText(result: ImdbStoredConnectionTestResult | null) {
 const aiStatusBar = computed(() => {
   if (testingAi.value) {
     return {
-      icon: "⏳",
       text: `AI ${pageText.ai.testing} ${pageText.ai.waited} ${aiTestingElapsedSeconds.value} ${pageText.ai.seconds}`,
       time: "",
       tone: "testing",
@@ -1622,7 +1618,6 @@ const aiStatusBar = computed(() => {
 
   if (!aiTestResult.value) {
     return {
-      icon: "⚪",
       text: pageText.ai.testStatusUntested,
       time: pageText.ai.noTestRecord,
       tone: "unknown",
@@ -1631,7 +1626,6 @@ const aiStatusBar = computed(() => {
 
   const success = aiTestResult.value.status === "success";
   return {
-    icon: success ? "🟢" : "🔴",
     text: success ? pageText.ai.testSuccess : pageText.ai.testFailed,
     time: aiLastTestTime.value || pageText.ai.noTestRecord,
     tone: success ? "success" : "danger",
@@ -1648,7 +1642,6 @@ function aiResponseTimeText(result: AiConnectionTestResult | null) {
 const testStatusBar = computed(() => {
   if (testingChannel.value) {
     return {
-      icon: "○",
       text: `${testingChannel.value.toUpperCase()} ${pageText.tmdb.testing} ${pageText.tmdb.waited} ${testingElapsedSeconds.value} ${pageText.tmdb.seconds}`,
       channel: "",
       time: "",
@@ -1658,7 +1651,6 @@ const testStatusBar = computed(() => {
 
   if (!testResult.value) {
     return {
-      icon: "○",
       text: pageText.tmdb.testStatusUntested,
       channel: pageText.tmdb.noTestChannel,
       time: pageText.tmdb.noTestRecord,
@@ -1670,7 +1662,6 @@ const testStatusBar = computed(() => {
   const failureMessage = tmdbFailureStatusMessage(testResult.value);
   if (!healthy && failureMessage) {
     return {
-      icon: "●",
       text: failureMessage,
       channel: "",
       time: "",
@@ -1678,7 +1669,6 @@ const testStatusBar = computed(() => {
     };
   }
   return {
-    icon: healthy ? "●" : "●",
     text: healthy ? pageText.tmdb.testStatusNormal : pageText.tmdb.testStatusAbnormal,
     channel: effectiveChannelLabel(testResult.value.effective),
     time: lastTestTime.value || pageText.tmdb.noTestRecord,
@@ -2341,17 +2331,18 @@ onBeforeUnmount(() => {
             </el-button>
             </div>
 
-            <div
-              role="button"
+            <button
+              type="button"
               class="settings-test-status-bar"
               :class="[`is-${testStatusBar.tone}`, { 'is-disabled': testingChannel || testResultModalAutoOpen }]"
               :aria-disabled="Boolean(testingChannel || testResultModalAutoOpen)"
+              :disabled="Boolean(testingChannel || testResultModalAutoOpen)"
               @pointerdown.prevent="rememberTmdbStatusPanelScroll"
               @mousedown.prevent="rememberTmdbStatusPanelScroll"
               @click="handleTmdbStatusClick"
             >
             <span class="settings-test-status-state">
-              <span class="settings-test-status-icon">{{ testStatusBar.icon }}</span>
+              <el-icon class="settings-test-status-icon"><component :is="testStatusBar.tone === 'testing' ? Loading : testStatusBar.tone === 'success' ? SuccessFilled : testStatusBar.tone === 'danger' ? CircleCloseFilled : InfoFilled" /></el-icon>
               <span class="settings-test-status-text">{{ testStatusBar.text }}</span>
             </span>
             <template v-if="testStatusBar.channel || testStatusBar.time">
@@ -2360,7 +2351,7 @@ onBeforeUnmount(() => {
               <span class="settings-test-separator">|</span>
               <span class="settings-test-status-meta">{{ testResult ? pageText.tmdb.updatedAt + testStatusBar.time : testStatusBar.time }}</span>
             </template>
-            </div>
+            </button>
 
             <el-dialog
             v-model="testResultDialogVisible"
@@ -2954,24 +2945,25 @@ onBeforeUnmount(() => {
                 {{ messages.common.save }}
               </el-button>
             </div>
-            <div
-              role="button"
+            <button
+              type="button"
               class="settings-test-status-bar"
               :class="[`is-${aiStatusBar.tone}`, { 'is-disabled': testingAi || aiTestResultModalAutoOpen }]"
               :aria-disabled="Boolean(testingAi || aiTestResultModalAutoOpen)"
+              :disabled="Boolean(testingAi || aiTestResultModalAutoOpen)"
               @pointerdown.prevent="rememberAiStatusPanelScroll"
               @mousedown.prevent="rememberAiStatusPanelScroll"
               @click="handleAiStatusClick"
             >
               <span class="settings-test-status-state">
-                <span class="settings-test-status-icon">{{ aiStatusBar.icon }}</span>
+                <el-icon class="settings-test-status-icon"><component :is="aiStatusBar.tone === 'testing' ? Loading : aiStatusBar.tone === 'success' ? SuccessFilled : aiStatusBar.tone === 'danger' ? CircleCloseFilled : InfoFilled" /></el-icon>
                 <span class="settings-test-status-text">{{ aiStatusBar.text }}</span>
               </span>
               <template v-if="aiStatusBar.time">
                 <span class="settings-test-separator">·</span>
                 <span class="settings-test-status-meta">{{ aiTestResult ? pageText.ai.updatedAt + aiStatusBar.time : aiStatusBar.time }}</span>
               </template>
-            </div>
+            </button>
 
             <el-dialog
               v-model="aiTestResultDialogVisible"

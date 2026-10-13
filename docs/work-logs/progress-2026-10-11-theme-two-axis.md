@@ -10,7 +10,7 @@
 
 **本阶段目标**：把两轴解耦，使"新增一套配色 = 一个变量块"，且**零观感变化**。
 
-依据：[design.md](../../../design.md)「主题架构」与「新增一套配色（palette）的契约」；执行计划 [design-plans/phase1-theme-token-layer.md](../../../design-plans/phase1-theme-token-layer.md)。
+依据：[design.md](../../design.md)「主题架构」与「新增一套配色（palette）的契约」；执行计划 [design-plans/phase1-theme-token-layer.md](../../design-plans/phase1-theme-token-layer.md)。
 
 ## 2. 已实施内容
 
@@ -125,13 +125,13 @@
 
 - 停止一切手工启动；服务改由项目脚本管理，本方不再自行启停。
 - 已释放 `8970` 并清理本人遗留进程；确认无同端口 `127.0.0.1` 与 `0.0.0.0` 双进程占用。
-- 启动规约已接入 [`.codex/skills/mediaai-frontend-ui/SKILL.md`](../../../.codex/skills/mediaai-frontend-ui/SKILL.md) 的主题验证步骤。
+- 启动规约已接入 [`.codex/skills/mediaai-frontend-ui/SKILL.md`](../../.codex/skills/mediaai-frontend-ui/SKILL.md) 的主题验证步骤。
 - 后续统一：标准实例 `npm.cmd run dev:windows -- start`；隔离实例独立端口（如 5183/8981）+ `.codex/test-artifacts/<任务名>/` 配置，结束即 stop。
 - **已清理（2026-10-11）**：隔离实例目录 `.codex/test-artifacts/review-fixes/theme-dev/`（配置、384KB 隔离库、日志）以及本方在 `.codex/run-logs/` 留下的 8 个 `theme-dev-*` 非标准产物均已删除。删除前已确认无进程占用、pid 失效、`8970` 已释放，标准实例未受影响。
 
 ## 6. 风险与回退
 
-- **回退方式**：本阶段仅改 `frontend/src/styles.css` 与 `frontend/src/stores/app.ts` 两个文件；`git checkout` 该两文件即可完全回退。
+- **回退方式（2026-10-13 复核修正）**：主题源码和测试涉及 `frontend/src/styles.css`、`frontend/src/stores/app.ts`、`frontend/src/stores/app.test.ts`。按主题补丁同步回退并验证测试；相关文件混有其他业务改动，不使用整文件恢复命令，以免覆盖无关工作。
 - **兼容性**：`localStorage["mediaai-theme-mode"]` 语义未变，旧用户偏好保留；无数据库或接口变更；后端未改。
 - **已知边界**：`--text-strong` 与 `--text-main` 在亮暗下取值均相同（亮 `#1f2937`、暗 `#e5edf5`），按计划 Stop conditions 本应合并；暂保留两者以便后续配色可分别调整，**需在复评时确认是否合并**。
 - **本机环境**：`npm` 相关命令必须用 Node **24.15.0**；`PATH` 默认的 v16.20.2 会使 Vite 8 / Vitest 4 失败。后端服务用 venv311 的 Python 3.11.15。
@@ -181,3 +181,15 @@
 
 - 实机核对只覆盖了**中性色与激活导航**，**未逐项核对 8 组操作图标的 computed 颜色**——这正是颜色漂移得以漏过的原因。后续应按 `design.md` 的门禁清单逐项取值比对。
 - 未在实现后立即补运行时主题测试，由复核方补上（`app.test.ts` 断言 `dataset.scheme === "dark"`）。
+
+## 10. 2026-10-13 接续复核
+
+当前源码基线为 `a40762c`，较上轮没有前端源码变化，未重复运行相同测试。已将 Harness 审计结论、操作列计划及本记录的回退清单复核归档到本地交流文件 `docs/development/reviews/discussions/assessment-harness-frontend.md`。
+
+接续重点：两处测试结果栏缺少键盘可操作性；96px 操作列计划遗漏左右各 12px 的单元格内边距，必须重写；原报告存在重复计数和仅凭 scoped CSS 判断组件状态的证据不足；4K 组合缩放仍未验收。主题阶段 1 可保留，前端整体验收保持未完成。交流文件按约定本地保留，不提交 Git。
+
+## 11. 2026-10-13 阶段 2/3 交付接续
+
+默认/candy 配色 token、dataset.palette、独立存储键和侧栏外观选择已实现，包含亮暗两套取值。说明文字、默认亮色状态/操作色和默认暗色品牌 ink 按对比度契约调整，因此本轮不是“零视觉变化”的阶段 1。设置测试结果栏改原生按钮、补焦点环、扫描操作列改 112px、替换功能 emoji、数字列等宽及登录背景 token 同步实施。
+
+最新验证和 Harness 交接以 [10 月 13 日收尾记录](progress-2026-10-13-review-closeout.md) 为准。72 场景 CSS 视口矩阵不能证明实际 Windows 200% + 浏览器 125% 已验收；不把这一限制隐藏在旧阶段完成声明中。

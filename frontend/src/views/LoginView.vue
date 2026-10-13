@@ -223,10 +223,7 @@ onMounted(async () => {
   display: grid;
   place-items: center;
   padding: 32px;
-  background:
-    linear-gradient(135deg, rgba(66, 118, 255, 0.10), transparent 32%),
-    linear-gradient(315deg, rgba(35, 168, 133, 0.12), transparent 36%),
-    var(--app-bg);
+  background: var(--app-bg);
 }
 
 .login-panel {
@@ -235,7 +232,7 @@ onMounted(async () => {
   border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   background: var(--panel-bg);
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--login-panel-shadow);
 }
 
 .login-brand {

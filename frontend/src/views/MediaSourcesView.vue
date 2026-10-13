@@ -523,19 +523,19 @@ async function submitEditSource() {
   }
 
   const pathChanged = editForm.path !== editForm.originalPath;
-  if (pathChanged) {
-    await ElMessageBox.confirm(
-      pageText.cleanupConfirm,
-      pageText.cleanupConfirmTitle,
-      {
-        type: "warning",
-        confirmButtonText: messages.common.save,
-        cancelButtonText: messages.common.cancel,
-      },
-    );
-  }
-
   try {
+    if (pathChanged) {
+      await ElMessageBox.confirm(
+        pageText.cleanupConfirm,
+        pageText.cleanupConfirmTitle,
+        {
+          type: "warning",
+          confirmButtonText: messages.common.save,
+          cancelButtonText: messages.common.cancel,
+        },
+      );
+    }
+
     const result = pathChanged
       ? await showCleanupProgress(() =>
           updateMediaSource(editForm.id, {
@@ -562,6 +562,10 @@ async function submitEditSource() {
     editDialogVisible.value = false;
     ElMessage.success(pageText.saved);
     await loadSources();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+    cleanupDialog.visible = false;
   } finally {
     window.setTimeout(() => {
       cleanupDialog.visible = false;
@@ -570,24 +574,35 @@ async function submitEditSource() {
 }
 
 async function toggleSource(row: MediaSource) {
-  await setMediaSourceEnabled(row.id, !row.enabled);
-  ElMessage.success(pageText.statusUpdated);
-  await loadSources();
+  try {
+    await setMediaSourceEnabled(row.id, !row.enabled);
+    ElMessage.success(pageText.statusUpdated);
+    await loadSources();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+  }
 }
 
 async function removeSource(row: MediaSource) {
-  await ElMessageBox.confirm(pageText.deleteConfirm, pageText.deleteConfirmTitle, {
-    type: "warning",
-    confirmButtonText: pageText.remove,
-    cancelButtonText: messages.common.cancel,
-  });
-  const result = await showCleanupProgress(() => deleteMediaSource(row.id));
-  setCleanupSummary(result.cleanup_summary);
-  ElMessage.success(pageText.deleted);
-  await loadSources();
-  window.setTimeout(() => {
+  try {
+    await ElMessageBox.confirm(pageText.deleteConfirm, pageText.deleteConfirmTitle, {
+      type: "warning",
+      confirmButtonText: pageText.remove,
+      cancelButtonText: messages.common.cancel,
+    });
+    const result = await showCleanupProgress(() => deleteMediaSource(row.id));
+    setCleanupSummary(result.cleanup_summary);
+    ElMessage.success(pageText.deleted);
+    await loadSources();
+    window.setTimeout(() => {
+      cleanupDialog.visible = false;
+    }, 400);
+  } catch (error) {
     cleanupDialog.visible = false;
-  }, 400);
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+    }
+  }
 }
 
 async function removeSelectedSources() {
@@ -596,19 +611,26 @@ async function removeSelectedSources() {
     return;
   }
 
-  await ElMessageBox.confirm(pageText.batchDeleteConfirm, pageText.deleteConfirmTitle, {
-    type: "warning",
-    confirmButtonText: pageText.batchRemove,
-    cancelButtonText: messages.common.cancel,
-  });
-  const result = await showCleanupProgress(() => bulkDeleteMediaSources(selectedIds.value));
-  setCleanupSummary(result.cleanup_summary);
-  selectedRows.value = [];
-  ElMessage.success(pageText.deleted);
-  await loadSources();
-  window.setTimeout(() => {
+  try {
+    await ElMessageBox.confirm(pageText.batchDeleteConfirm, pageText.deleteConfirmTitle, {
+      type: "warning",
+      confirmButtonText: pageText.batchRemove,
+      cancelButtonText: messages.common.cancel,
+    });
+    const result = await showCleanupProgress(() => bulkDeleteMediaSources(selectedIds.value));
+    setCleanupSummary(result.cleanup_summary);
+    selectedRows.value = [];
+    ElMessage.success(pageText.deleted);
+    await loadSources();
+    window.setTimeout(() => {
+      cleanupDialog.visible = false;
+    }, 400);
+  } catch (error) {
     cleanupDialog.visible = false;
-  }, 400);
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+    }
+  }
 }
 
 function handleSelectionChange(rows: MediaSource[]) {

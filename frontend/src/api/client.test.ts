@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invalidateSessionRequests } from "../utils/sessionGeneration";
 
 import {
   apiClient,
@@ -266,6 +267,17 @@ describe("auth API client", () => {
     installSessionStorageMock();
     localStorage.clear();
     sessionStorage.clear();
+  });
+
+  it("preserves the new token when an old logout finishes", async () => {
+    let resolveRequest!: (value: { data: object }) => void;
+    const post = vi.fn().mockReturnValue(new Promise(resolve => { resolveRequest = resolve; }));
+    setAuthToken("old-session");
+    const request = logout({ post, get: vi.fn() });
+    setAuthToken("new-session");
+    resolveRequest({ data: {} });
+    await request;
+    expect(getAuthToken()).toBe("new-session");
   });
 
   it("downloads runtime logs through the authenticated client", async () => {
@@ -880,6 +892,39 @@ describe("settings API client", () => {
     await expect(testTmdbSettings(httpClient)).rejects.toThrow(
       "TMDB 连接失败：未配置 API Key。请先填写并保存 TMDB API Key。",
     );
+  });
+});
+
+describe("session response isolation", () => {
+  it("rejects an old successful response after switching sessions", async () => {
+    let finish!: (value: unknown) => void;
+    let dispatched!: () => void;
+    const started = new Promise<void>((resolve) => { dispatched = resolve; });
+    const request = apiClient.get("/synthetic-old", { adapter: (config) => {
+      dispatched();
+      return new Promise((resolve) => { finish = () => resolve({ config, status: 200, statusText: "OK", headers: {}, data: [1] }); });
+    } });
+    const rejected = expect(request).rejects.toThrow("登录状态已失效");
+    await started;
+    invalidateSessionRequests();
+    finish(undefined);
+    await rejected;
+  });
+
+  it("keeps the new token when an old request returns 401", async () => {
+    let fail!: () => void;
+    let dispatched!: () => void;
+    const started = new Promise<void>((resolve) => { dispatched = resolve; });
+    const request = apiClient.get("/synthetic-old", { adapter: (config) => {
+      dispatched();
+      return new Promise((_resolve, reject) => { fail = () => reject({ config, response: { status: 401 } }); });
+    } });
+    const rejected = expect(request).rejects.toThrow("登录状态已失效");
+    await started;
+    setAuthToken("synthetic-new", true);
+    fail();
+    await rejected;
+    expect(getAuthToken()).toBe("synthetic-new");
   });
 });
 
