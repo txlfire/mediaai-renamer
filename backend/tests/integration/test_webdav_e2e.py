@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import closing
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -77,8 +78,11 @@ class WebDavEndToEndTest(unittest.TestCase):
             username=self.username,
             secret=self.password,
             has_secret=True,
-            conditional_move_status="verified",
         )
+        verification = self.protocol.verify_conditional_move(self.root_url, self.context)
+        self.assertEqual("verified", verification.status, verification.message)
+        self.assertTrue(verification.cleanup_succeeded)
+        self.context = replace(self.context, conditional_move_status=verification.status)
 
     def _cleanupRemote(self):
         if not self.remoteCreated:
@@ -155,11 +159,11 @@ class WebDavEndToEndTest(unittest.TestCase):
         target_url = self._url("Movie.Safe.mkv")
         self._request("PUT", source_url, body=b"source")
 
-        move_result = self.protocol.move_file(source_url, target_url, self.context)
+        move_result = self._moveWithCurrentVersion(source_url, target_url)
         self._request("PUT", source_url, body=b"second-source")
-        overwrite_result = self.protocol.move_file(source_url, target_url, self.context)
+        overwrite_result = self._moveWithCurrentVersion(source_url, target_url)
 
-        self.assertTrue(move_result.success)
+        self.assertTrue(move_result.success, move_result.message)
         self.assertFalse(overwrite_result.success)
         self.assertIn("HTTP 412", overwrite_result.message)
 
@@ -168,8 +172,10 @@ class WebDavEndToEndTest(unittest.TestCase):
         target_url = self._url("Movie.Safe.mkv")
         self._request("PUT", source_url, body=b"source")
 
-        self.assertTrue(self.protocol.move_file(source_url, target_url, self.context).success)
-        self.assertTrue(self.protocol.move_file(target_url, source_url, self.context).success)
+        moved = self._moveWithCurrentVersion(source_url, target_url)
+        self.assertTrue(moved.success, moved.message)
+        restored = self._moveWithCurrentVersion(target_url, source_url)
+        self.assertTrue(restored.success, restored.message)
         readiness = self.protocol.check_rename_ready(source_url, target_url, self.context)
 
         self.assertTrue(readiness.success)
@@ -179,7 +185,8 @@ class WebDavEndToEndTest(unittest.TestCase):
         target_url = self._url("Movie.Safe.mkv")
         self._request("PUT", source_url, body=b"source")
         sourceVersion = self.protocol.get_file_info(source_url, self.context).version
-        self.assertTrue(self.protocol.move_file(source_url, target_url, self.context).success)
+        moved = self._moveWithCurrentVersion(source_url, target_url)
+        self.assertTrue(moved.success, moved.message)
         targetVersion = self.protocol.get_file_info(target_url, self.context).version
         settings, item_id = self._build_failed_recovery(source_url, target_url, sourceVersion, targetVersion)
 
@@ -228,6 +235,35 @@ class WebDavEndToEndTest(unittest.TestCase):
 
     def _url(self, relative_path: str) -> str:
         return f"{self.root_url}{quote(relative_path, safe='/')}"
+
+    def _moveWithCurrentVersion(self, sourceUrl, targetUrl):
+        version = self.protocol.get_file_info(sourceUrl, self.context).version
+        return self.protocol.move_file(sourceUrl, targetUrl, replace(self.context, expected_source_version=version))
+
+    def test_missing_source_version_refuses_move_without_changing_file(self):
+        sourceUrl, targetUrl = self._url("Original.mkv"), self._url("Target.mkv")
+        self._request("PUT", sourceUrl, body=b"synthetic-source")
+        before = self.protocol.get_file_info(sourceUrl, self.context).version
+        result = self.protocol.move_file(sourceUrl, targetUrl, self.context)
+        self.assertFalse(result.success)
+        self.assertEqual(before, self.protocol.get_file_info(sourceUrl, self.context).version)
+        with self.assertRaises(HTTPError) as error:
+            self._request("PROPFIND", targetUrl, headers={"Depth": "0"})
+        self.assertEqual(404, error.exception.code)
+        error.exception.close()
+
+    def test_stale_source_version_is_rejected_by_server(self):
+        sourceUrl, targetUrl = self._url("Original.mkv"), self._url("Target.mkv")
+        self._request("PUT", sourceUrl, body=b"synthetic-source")
+        before = self.protocol.get_file_info(sourceUrl, self.context).version
+        result = self.protocol.move_file(sourceUrl, targetUrl, replace(self.context, expected_source_version='"synthetic-wrong-etag"'))
+        self.assertFalse(result.success)
+        self.assertIn("HTTP 412", result.message)
+        self.assertEqual(before, self.protocol.get_file_info(sourceUrl, self.context).version)
+        with self.assertRaises(HTTPError) as error:
+            self._request("PROPFIND", targetUrl, headers={"Depth": "0"})
+        self.assertEqual(404, error.exception.code)
+        error.exception.close()
 
     def _request(
         self,
