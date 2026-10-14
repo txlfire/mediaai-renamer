@@ -201,6 +201,8 @@ class ExternalRequestBudget:
 
     @contextmanager
     def open(self, request, timeout):
+        from app.service.execution_guard_service import checkExecutionGuard
+        checkExecutionGuard()
         deadline = time.monotonic() + timeout
         if _deadline.get() is not None:
             deadline = min(deadline, _deadline.get())
@@ -211,6 +213,7 @@ class ExternalRequestBudget:
             if remaining <= 0:
                 raise ExternalBudgetWaitError("外部请求等待预算已耗尽，本次未发送请求")
             try:
+                checkExecutionGuard(phase="send")
                 context = urlopen(request, timeout=remaining)
             except HTTPError as exc:
                 try:

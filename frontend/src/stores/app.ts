@@ -6,7 +6,7 @@ import { zhCnMessages as messages } from "../locales/zh-CN";
 type ConnectionState = "idle" | "loading" | "online" | "offline";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
-export type ThemePalette = "default" | "candy";
+export type ThemePalette = "default" | "candy" | "contrast";
 
 const THEME_STORAGE_KEY = "mediaai-theme-mode";
 const PALETTE_STORAGE_KEY = "mediaai-theme-palette";
@@ -14,6 +14,10 @@ const SIDEBAR_STORAGE_KEY = "mediaai-sidebar-collapsed";
 
 function isThemeMode(value: string | null): value is ThemeMode {
   return value === "system" || value === "light" || value === "dark";
+}
+
+function isThemePalette(value: string | null): value is ThemePalette {
+  return value === "default" || value === "candy" || value === "contrast";
 }
 
 export function resolveTheme(
@@ -54,7 +58,8 @@ export const useAppStore = defineStore("app", {
     loadThemeMode() {
       const storedMode = localStorage.getItem(THEME_STORAGE_KEY);
       this.themeMode = isThemeMode(storedMode) ? storedMode : "system";
-      this.themePalette = localStorage.getItem(PALETTE_STORAGE_KEY) === "candy" ? "candy" : "default";
+      const storedPalette = localStorage.getItem(PALETTE_STORAGE_KEY);
+      this.themePalette = isThemePalette(storedPalette) ? storedPalette : "default";
       this.applyThemeMode();
     },
 
@@ -67,11 +72,10 @@ export const useAppStore = defineStore("app", {
     applyThemeMode() {
       this.resolvedTheme = resolveTheme(this.themeMode);
       if (typeof document !== "undefined") {
-        // 方案轴（亮/暗）写入 data-scheme。配色轴（palette）为独立属性 data-palette，
-        // 两轴正交：styles.css 的 :root 与 :root[data-scheme="dark"] 承担中性色，
-        // :root[data-palette="…"] 承担点缀色。详见 design.md「主题架构」。
+        // 完整主题声明成对基础值，显示模式只解析语义别名，不重置主题或工作区。
         document.documentElement.dataset.scheme = this.resolvedTheme;
         document.documentElement.dataset.palette = this.themePalette;
+        if (document.documentElement.style) document.documentElement.style.colorScheme = this.resolvedTheme;
       }
     },
 

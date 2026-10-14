@@ -4,6 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRenameOperationStore } from "./renameOperation";
 import { acceptRenameOperation, fetchRenameOperation, acceptRenameRollbackPlan, fetchRenameRollbackPlan, type RenameOperation, type RenameRollbackPlan } from "../api/client";
 
+vi.mock("../api/backgroundJobs", async () => {
+  const client = await import("../api/client");
+  return {
+    createRenameDryRunBackground: client.createRenameDryRun,
+    dryRunRenameRollbackPlanBackground: client.dryRunRenameRollbackPlan,
+  };
+});
+
 vi.mock("../api/client", () => ({
   createRenameRollbackPlan: vi.fn(async () => ({
     id: 20,

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScanJob } from "../api/client";
 import { useAuthStore } from "./auth";
 import { useMediaStore } from "./media";
-import { invalidateSessionRequests } from "../utils/sessionGeneration";
+import { invalidateSessionRequests, SessionChangedError } from "../utils/sessionGeneration";
 
 const api = vi.hoisted(() => ({ acceptScanJob: vi.fn(), fetchScanJobs: vi.fn(), fetchLogs: vi.fn(), fetchScanModeSuggestion: vi.fn() }));
 vi.mock("../api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("../api/client")>(), ...api }));
@@ -82,7 +82,7 @@ describe("scan result and auxiliary refresh", () => {
     api.fetchScanJobs.mockReturnValueOnce(new Promise<ScanJob[]>((done) => { resolve = done; }));
     const store = useMediaStore();
     const request = store.loadScanJobs();
-    const rejected = expect(request).rejects.toThrow("登录状态已失效");
+    const rejected = expect(request).rejects.toBeInstanceOf(SessionChangedError);
     invalidateSessionRequests();
     store.$reset();
     resolve([job]);

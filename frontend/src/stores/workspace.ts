@@ -18,6 +18,7 @@ const WORKSPACE_STORE_IDS = [
   "pagination",
   "tableSort",
   "settings",
+  "backgroundJobs",
 ];
 
 export function resetWorkspaceState(pinia: Pinia): void {

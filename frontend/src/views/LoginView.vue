@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import { Lock, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { onMounted, reactive, ref } from "vue";
@@ -42,6 +43,7 @@ async function submitLogin() {
     saveLoginPreferences(form.username, form.rememberPassword);
     await handlePostLogin(form.password);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : messages.auth.loginFailed);
   }
 }
@@ -51,6 +53,7 @@ async function submitBootstrap() {
     await authStore.bootstrapAndLogin(form.username, form.displayName, form.password);
     await handlePostLogin(form.password);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     await authStore.loadBootstrapStatus();
     if (!authStore.bootstrapAvailable) {
       activeTab.value = "login";
@@ -83,6 +86,7 @@ async function submitChangePassword() {
     passwordForm.confirmPassword = "";
     await router.replace("/login");
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : messages.auth.changePasswordFailed);
   }
 }

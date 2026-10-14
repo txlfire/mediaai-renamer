@@ -301,6 +301,8 @@ def _validate_rollback_item(
     item: RenameRollbackItem,
     duplicate_rollback_paths: Counter[str],
 ) -> tuple[str, str | None]:
+    from app.service.execution_guard_service import checkExecutionGuard
+    checkExecutionGuard(phase=f"rollback-probe:{item.id}")
     if duplicate_rollback_paths[item.rollback_path] > 1:
         return ITEM_STATUS_CONFLICT, "批次内回滚目标重复"
     context_row = _rollback_item_context(connection, item.operation_item_id)
@@ -385,6 +387,8 @@ def dry_run_rename_rollback_plan(settings: AppSettings, plan_id: int, *,
 
         # 不允许慢探测覆写另一干跑或已受理执行；此处只读取数据库快照。
         connection.execute("BEGIN IMMEDIATE")
+        from app.service.execution_guard_service import checkExecutionGuard
+        checkExecutionGuard(connection)
         if databaseSnapshot != _rollbackDryRunDatabaseState(connection, plan_id):
             raise ValueError("干跑探测期间回滚计划、来源或关联记录已变化，请重新核对")
         if context.actor is not None:

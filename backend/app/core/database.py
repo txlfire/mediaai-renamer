@@ -19,7 +19,7 @@ from app.service.media_source_secret import (
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 38
+CURRENT_SCHEMA_VERSION = 39
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -846,6 +846,33 @@ def _run_migrations(settings: AppSettings, connection: sqlite3.Connection) -> No
         _ensure_column(connection, table, "execution_instance_id", "TEXT")
         _ensure_column(connection, table, "execution_started_at", "TEXT")
     if version < 36:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+
+    connection.execute("CREATE TABLE IF NOT EXISTS background_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "request_id TEXT NOT NULL UNIQUE, request_hash TEXT NOT NULL, kind TEXT NOT NULL, actor_id INTEGER NOT NULL, "
+        "actor_name TEXT NOT NULL, input_json TEXT, config_hash TEXT NOT NULL, snapshot_json TEXT, "
+        "audit_context_json TEXT, status TEXT NOT NULL DEFAULT 'queued', total_count INTEGER NOT NULL, "
+        "completed_count INTEGER NOT NULL DEFAULT 0, result_json TEXT, result_bytes INTEGER NOT NULL DEFAULT 0, "
+        "unknown_count INTEGER NOT NULL DEFAULT 0, "
+        "result_cleared_at TEXT, error_message TEXT, execution_token TEXT, execution_expires_at TEXT, execution_pid INTEGER, "
+        "execution_instance_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    connection.execute("CREATE TABLE IF NOT EXISTS background_job_items (job_id INTEGER NOT NULL REFERENCES background_jobs(id), "
+        "item_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued', outcome_json TEXT, "
+        "PRIMARY KEY(job_id,item_id))")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_queue ON background_jobs(status,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_owner ON background_jobs(actor_id,id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_retention ON background_jobs(updated_at,id) "
+        "WHERE result_cleared_at IS NULL AND execution_token IS NULL")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_lease ON background_jobs(execution_token) "
+        "WHERE execution_token IS NOT NULL")
+    _ensure_column(connection, "background_jobs", "unknown_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "background_jobs", "success_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "background_jobs", "failed_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "background_jobs", "execution_owner_pid", "INTEGER")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_bytes ON background_jobs(result_bytes) "
+        "WHERE result_cleared_at IS NULL AND result_bytes>0")
+    if version < 39:
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 

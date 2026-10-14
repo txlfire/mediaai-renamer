@@ -3,59 +3,48 @@
  *
  * M1 提供应用级布局、主题变量和通用操作台样式。
  *
- * 主题为两个正交轴（详见 design.md「主题架构」）：
- *   - scheme（方案）：亮/暗，只承担中性色；选择器 :root 与 :root[data-scheme="dark"]
- *   - palette（配色）：点缀色，亮暗各一套值；选择器 :root[data-palette="…"]
- * 新增一套配色只需追加一个 palette 块，不得新增任何组件级 CSS。
+ * 完整主题声明亮暗基础值，scheme只选择对应语义别名。
+ * default/candy/contrast共享组件规则；所有运行时颜色在此集中维护。
  */
 
 :root {
   color-scheme: light;
   --sidebar-width: var(--sidebar-expanded-min-width);
-  --sidebar-expanded-min-width: 240px;
+  --sidebar-expanded-min-width: 216px;
   --sidebar-collapsed-width: 64px;
   --sidebar-transition: 300ms ease-in-out;
 
-  /* ── scheme: light —— 中性色（随亮暗变化，不随配色变化） ── */
-  --app-bg: #f4f7fb;
-  --panel-bg: #ffffff;
-  --panel-soft-bg: #f8fafc;
-  --sidebar-bg: #ffffff;
-  --sidebar-text: #1f2937;
-  --sidebar-muted: #64748b;
-  --text-main: #1f2937;
-  --text-muted: #5b6b80;
-  --border-color: #d8e1ec;
-  --table-header-bg: #f8fafc;
-  --table-row-bg: #ffffff;
-  --input-bg: #ffffff;
-  --tooltip-bg: #f8fafc;
-  --tooltip-text: #1f2937;
-  --tooltip-border: #cbd5e1;
-  --button-default-bg: #e8f1ff;
-  --button-default-border: #9fc5ff;
-  --button-default-text: #1e4f99;
-  --button-default-hover-bg: #d7e8ff;
-  --button-default-disabled-bg: #d9e8fb;
-  --button-default-disabled-border: #bfd5f2;
-  --button-default-disabled-text: #5f7fa8;
-  --button-quiet-bg: #eef4fb;
-  --button-quiet-hover-bg: #e1ebf6;
-  /* scheme 扩展 token（由原 dark 组件覆盖块中的硬编码色提升而来） */
-  --text-strong: #1f2937;
-  --table-text: #1f2937;
-  --text-weak: #64748b;
-  --text-subtle: #94a3b8;
-  --input-placeholder: #94a3b8;
-  --table-row-hover-bg: #f1f5f9;
-
-  /* ── palette: default —— 点缀色（亮暗各一值，配色间可替换） ── */
+  /* 清爽专业：成对基础值是主题取值源，后续规则仅使用语义别名。 */
+  --app-bg-light: #f3f5f7; --app-bg-dark: #151719;
+  --panel-bg-light: #ffffff; --panel-bg-dark: #202326;
+  --panel-soft-bg-light: #f5f7f9; --panel-soft-bg-dark: #292d31;
+  --sidebar-bg-light: #edf1f4; --sidebar-bg-dark: #191c1f;
+  --text-main-light: #25313b; --text-main-dark: #edf0f2;
+  --text-muted-light: #536273; --text-muted-dark: #b2bbc4;
+  --border-color-light: #d4dbe1; --border-color-dark: #454e56;
+  --input-border-light: #7c8995; --input-border-dark: #7d8b98;
+  --table-header-bg-light: #edf1f5; --table-header-bg-dark: #30353b;
+  --table-row-hover-bg-light: #eaf0f7; --table-row-hover-bg-dark: #303a44;
+  --input-bg-light: #ffffff; --input-bg-dark: #272c31;
+  --selection-bg-light: #e5edfb; --selection-bg-dark: #2c3d53;
+  --selection-ink-light: #1d4ed8; --selection-ink-dark: #93c5fd;
+  --panel-shadow-light: none; --panel-shadow-dark: none;
+  --login-shadow-light: 0 18px 48px rgb(15 23 42 / 10%);
+  --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
+  --app-bg: var(--app-bg-light); --panel-bg: var(--panel-bg-light);
+  --panel-soft-bg: var(--panel-soft-bg-light); --sidebar-bg: var(--sidebar-bg-light);
+  --text-main: var(--text-main-light); --text-muted: var(--text-muted-light);
+  --border-color: var(--border-color-light); --input-border: var(--input-border-light);
+  --table-header-bg: var(--table-header-bg-light); --table-row-hover-bg: var(--table-row-hover-bg-light);
+  --input-bg: var(--input-bg-light); --selection-bg: var(--selection-bg-light); --selection-ink: var(--selection-ink-light);
+  --panel-shadow: var(--panel-shadow-light); --login-panel-shadow: var(--login-shadow-light);
+  --status-button-ink: #ffffff;
   /* 品牌强调：值按方案分两套，--brand-accent 与 --brand-accent-ink 为方案别名。 */
-  /* 亮色由 :root 指向 -light，暗色由 :root[data-scheme="dark"] 指向 -dark；配色块只覆盖 4 个真值。 */
+  /* 显示模式独立选择品牌与状态的亮暗基础值。 */
   --brand-accent-light: #2563eb;
   --brand-accent-light-ink: #ffffff;
-  --brand-accent-dark: #3b82f6;
-  --brand-accent-dark-ink: #071a31;
+  --brand-accent-dark: #93b7f8;
+  --brand-accent-dark-ink: #172333;
   --brand-accent: var(--brand-accent-light);
   --brand-accent-ink: var(--brand-accent-light-ink);
   --brand-accent-hover: color-mix(in srgb, var(--brand-accent-light) 90%, black);
@@ -71,24 +60,24 @@
   --semantic-warning: var(--semantic-warning-light);
   --semantic-danger: var(--semantic-danger-light);
   --semantic-info: var(--semantic-info-light);
-  --action-edit: #2563eb;
-  --action-edit-hover: #1d4ed8;
-  --action-view: #0e7490;
-  --action-view-hover: #0e7490;
+  --action-edit: #1d4ed8;
+  --action-edit-hover: #1e40af;
+  --action-view: #155e75;
+  --action-view-hover: #164e63;
   --action-magic: #7c3aed;
   --action-magic-hover: #6d28d9;
-  --action-run: #15803d;
-  --action-run-hover: #15803d;
-  --action-toggle: #15803d;
-  --action-toggle-hover: #15803d;
-  --action-sync: #15803d;
-  --action-sync-hover: #15803d;
-  --action-ai: #2563eb;
-  --action-ai-hover: #1d4ed8;
-  --action-delete: #dc2626;
-  --action-delete-hover: #b91c1c;
-  --action-edit-dark: #60a5fa;
-  --action-edit-dark-hover: #93c5fd;
+  --action-run: #166534;
+  --action-run-hover: #14532d;
+  --action-toggle: #166534;
+  --action-toggle-hover: #14532d;
+  --action-sync: #166534;
+  --action-sync-hover: #14532d;
+  --action-ai: #1d4ed8;
+  --action-ai-hover: #1e40af;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-edit-dark: #93c5fd;
+  --action-edit-dark-hover: #bfdbfe;
   --action-view-dark: #22d3ee;
   --action-view-dark-hover: #67e8f9;
   --action-magic-dark: #c4b5fd;
@@ -99,60 +88,23 @@
   --action-toggle-dark-hover: #86efac;
   --action-sync-dark: #4ade80;
   --action-sync-dark-hover: #86efac;
-  --action-ai-dark: #60a5fa;
-  --action-ai-dark-hover: #93c5fd;
-  --action-delete-dark: #f87171;
-  --action-delete-dark-hover: #fca5a5;
+  --action-ai-dark: #93c5fd;
+  --action-ai-dark-hover: #bfdbfe;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
 }
 
 :root[data-scheme="dark"] {
   color-scheme: dark;
-  --app-bg: #101418;
-  --panel-bg: #171e26;
-  --panel-soft-bg: #1f2933;
-  --sidebar-bg: #0d1117;
-  --sidebar-text: #e5edf5;
-  --sidebar-muted: #8b9aaa;
-  --text-main: #e5edf5;
-  --text-muted: #9aa8b6;
-  --border-color: #2a3642;
-  --table-header-bg: #202a35;
-  --table-row-bg: #171e26;
-  --input-bg: #202a35;
-  --tooltip-bg: #202a35;
-  --tooltip-text: #e5edf5;
-  --tooltip-border: #3a4a5c;
-  --el-bg-color: var(--panel-bg);
-  --el-bg-color-overlay: #1b242e;
-  --el-fill-color: #1f2933;
-  --el-fill-color-light: #243140;
-  --el-fill-color-lighter: #202a35;
-  --el-fill-color-blank: var(--panel-bg);
-  --el-border-color: var(--border-color);
-  --el-border-color-light: #344252;
-  --el-border-color-lighter: #2a3642;
-  --el-text-color-primary: var(--text-main);
-  --el-text-color-regular: #d8e3ed;
-  --el-text-color-secondary: var(--text-muted);
-  --el-disabled-bg-color: #1b242e;
-  --el-disabled-text-color: #738294;
-  --el-mask-color: rgba(0, 0, 0, 0.58);
-  --button-default-bg: #243140;
-  --button-default-border: #3f5268;
-  --button-default-text: #dce8f5;
-  --button-default-hover-bg: #2c3b4d;
-  --button-default-disabled-bg: #1d2732;
-  --button-default-disabled-border: #354456;
-  --button-default-disabled-text: #94a6bb;
-  --button-quiet-bg: #1f2933;
-  --button-quiet-hover-bg: #273443;
-  /* scheme 扩展 token：暗色取值 */
-  --text-strong: #e5edf5;
-  --table-text: #d8e3ed;
-  --text-weak: #8b9aaa;
-  --text-subtle: #b0b8c4;
-  --input-placeholder: #7f8da0;
-  --table-row-hover-bg: #243140;
+  --app-bg: var(--app-bg-dark); --panel-bg: var(--panel-bg-dark);
+  --panel-soft-bg: var(--panel-soft-bg-dark); --sidebar-bg: var(--sidebar-bg-dark);
+  --text-main: var(--text-main-dark); --text-muted: var(--text-muted-dark);
+  --border-color: var(--border-color-dark); --input-border: var(--input-border-dark);
+  --table-header-bg: var(--table-header-bg-dark); --table-row-hover-bg: var(--table-row-hover-bg-dark);
+  --input-bg: var(--input-bg-dark); --selection-bg: var(--selection-bg-dark); --selection-ink: var(--selection-ink-dark);
+  --panel-shadow: var(--panel-shadow-dark); --login-panel-shadow: var(--login-shadow-dark);
+  --status-button-ink: #18201b;
+  --el-mask-color: rgb(0 0 0 / 58%);
   /* 品牌强调的方案别名：暗色指向 -dark 真值（配色块无需重复） */
   --brand-accent: var(--brand-accent-dark);
   --brand-accent-ink: var(--brand-accent-dark-ink);
@@ -164,10 +116,25 @@
 }
 
 :root[data-palette="candy"] {
-  --brand-accent-light: #db2777;
+  --app-bg-light: #fcf1f5; --app-bg-dark: #221c21;
+  --panel-bg-light: #fffdfd; --panel-bg-dark: #2d252b;
+  --panel-soft-bg-light: #f7edf2; --panel-soft-bg-dark: #382e36;
+  --sidebar-bg-light: #eaf5ef; --sidebar-bg-dark: #1d2b26;
+  --text-main-light: #362a35; --text-main-dark: #f3eaf0;
+  --text-muted-light: #705363; --text-muted-dark: #c6afbf;
+  --border-color-light: #dfcbd7; --border-color-dark: #64515d;
+  --input-border-light: #89707f; --input-border-dark: #ac8b9e;
+  --table-header-bg-light: #f3e6ee; --table-header-bg-dark: #463440;
+  --table-row-hover-bg-light: #f9eaf3; --table-row-hover-bg-dark: #48353f;
+  --input-bg-light: #fffbfd; --input-bg-dark: #352c32;
+  --selection-bg-light: #f7dce9; --selection-bg-dark: #573344;
+  --selection-ink-light: #9d174d; --selection-ink-dark: #f9a8d4;
+  --panel-shadow-light: 0 2px 10px rgb(93 28 63 / 5%); --panel-shadow-dark: 0 2px 10px rgb(0 0 0 / 10%);
+  --login-shadow-light: 0 18px 48px rgb(93 28 63 / 10%); --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
+  --brand-accent-light: #be185d;
   --brand-accent-light-ink: #ffffff;
-  --brand-accent-dark: #f472b6;
-  --brand-accent-dark-ink: #500724;
+  --brand-accent-dark: #f9a8d4;
+  --brand-accent-dark-ink: #4a102b;
   --semantic-success-light: #15803d;
   --semantic-warning-light: #b45309;
   --semantic-danger-light: #dc2626;
@@ -178,40 +145,74 @@
   --semantic-info-dark: #60a5fa;
   --action-edit: #be185d;
   --action-edit-hover: #9d174d;
-  --action-edit-dark: #f472b6;
-  --action-edit-dark-hover: #f9a8d4;
-  --action-view: #0e7490;
-  --action-view-hover: #155e75;
+  --action-edit-dark: #f9a8d4;
+  --action-edit-dark-hover: #fbcfe8;
+  --action-view: #155e75;
+  --action-view-hover: #164e63;
   --action-view-dark: #22d3ee;
   --action-view-dark-hover: #67e8f9;
   --action-magic: #7e22ce;
   --action-magic-hover: #6b21a8;
   --action-magic-dark: #c4b5fd;
   --action-magic-dark-hover: #ddd6fe;
-  --action-run: #047857;
-  --action-run-hover: #065f46;
+  --action-run: #065f46;
+  --action-run-hover: #064e3b;
   --action-run-dark: #4ade80;
   --action-run-dark-hover: #86efac;
-  --action-toggle: #047857;
-  --action-toggle-hover: #065f46;
+  --action-toggle: #065f46;
+  --action-toggle-hover: #064e3b;
   --action-toggle-dark: #4ade80;
   --action-toggle-dark-hover: #86efac;
-  --action-sync: #0e7490;
-  --action-sync-hover: #155e75;
+  --action-sync: #155e75;
+  --action-sync-hover: #164e63;
   --action-sync-dark: #22d3ee;
   --action-sync-dark-hover: #67e8f9;
   --action-ai: #6d28d9;
   --action-ai-hover: #5b21b6;
   --action-ai-dark: #c4b5fd;
   --action-ai-dark-hover: #ddd6fe;
-  --action-delete: #dc2626;
-  --action-delete-hover: #b91c1c;
-  --action-delete-dark: #f87171;
-  --action-delete-dark-hover: #fca5a5;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
 }
 
-/* Element Plus 与应用共用强调色，不为配色新增组件选择器。 */
+/* 精密高对比沿用公共语义/动作基线，不依赖上一主题的属性残留。 */
+:root[data-palette="contrast"] {
+  --app-bg-light: #ffffff; --app-bg-dark: #101111;
+  --panel-bg-light: #ffffff; --panel-bg-dark: #181a1a;
+  --panel-soft-bg-light: #eef2f2; --panel-soft-bg-dark: #262a2a;
+  --sidebar-bg-light: #eef2f2; --sidebar-bg-dark: #141818;
+  --text-main-light: #111c20; --text-main-dark: #f6faf8;
+  --text-muted-light: #414f55; --text-muted-dark: #bcc9c5;
+  --border-color-light: #829499; --border-color-dark: #7b918a;
+  --input-border-light: #627a82; --input-border-dark: #9aaca6;
+  --table-header-bg-light: #dde7e9; --table-header-bg-dark: #31413a;
+  --table-row-hover-bg-light: #e5efec; --table-row-hover-bg-dark: #293a32;
+  --input-bg-light: #ffffff; --input-bg-dark: #191f1c;
+  --selection-bg-light: #d9eeeb; --selection-bg-dark: #364826;
+  --selection-ink-light: #005e5b; --selection-ink-dark: #d2f4a0;
+  --panel-shadow-light: none; --panel-shadow-dark: none;
+  --login-shadow-light: 0 18px 48px rgb(0 0 0 / 10%); --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
+  --brand-accent-light: #006b68; --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #c8ef83; --brand-accent-dark-ink: #182009;
+}
+
+/* 别名和Element Plus映射同源，输入、固定列和浮层都继承完整主题。 */
 :root {
+  --table-row-bg: var(--panel-bg); --table-text: var(--text-main); --text-strong: var(--text-main);
+  --sidebar-text: var(--text-main); --sidebar-muted: var(--text-muted); --text-weak: var(--text-muted);
+  --text-subtle: var(--text-muted); --input-placeholder: var(--text-muted);
+  --tooltip-bg: var(--panel-soft-bg); --tooltip-text: var(--text-main); --tooltip-border: var(--border-color);
+  --button-default-bg: var(--panel-bg); --button-default-text: var(--text-main); --button-default-border: var(--input-border);
+  --button-default-hover-bg: var(--panel-soft-bg); --button-quiet-bg: var(--panel-soft-bg); --button-quiet-hover-bg: var(--selection-bg);
+  --button-default-disabled-bg: var(--panel-soft-bg); --button-default-disabled-border: var(--border-color); --button-default-disabled-text: var(--text-muted);
+  --el-bg-color: var(--panel-bg); --el-bg-color-overlay: var(--panel-bg); --el-bg-color-page: var(--app-bg);
+  --el-fill-color: var(--panel-soft-bg); --el-fill-color-light: var(--panel-soft-bg); --el-fill-color-lighter: var(--panel-soft-bg);
+  --el-fill-color-blank: var(--panel-bg); --el-text-color-primary: var(--text-main); --el-text-color-regular: var(--text-main);
+  --el-text-color-secondary: var(--text-muted); --el-text-color-placeholder: var(--input-placeholder); --el-text-color-disabled: var(--text-muted);
+  --el-border-color: var(--input-border); --el-border-color-light: var(--border-color); --el-border-color-lighter: var(--border-color);
+  --el-disabled-bg-color: var(--panel-soft-bg); --el-disabled-text-color: var(--text-muted); --el-disabled-border-color: var(--border-color);
   --el-color-primary: var(--brand-accent);
   --el-color-primary-dark-2: color-mix(in srgb, var(--brand-accent) 80%, black);
   --el-color-primary-light-3: color-mix(in srgb, var(--brand-accent) 70%, var(--panel-bg));
@@ -223,7 +224,17 @@
   --el-color-warning: var(--semantic-warning);
   --el-color-danger: var(--semantic-danger);
   --el-color-info: var(--semantic-info);
-  --login-panel-shadow: 0 18px 48px rgb(15 23 42 / 12%);
+  --el-color-success-light-9: color-mix(in srgb, var(--semantic-success) 10%, var(--panel-bg));
+  --el-color-warning-light-9: color-mix(in srgb, var(--semantic-warning) 10%, var(--panel-bg));
+  --el-color-danger-light-9: color-mix(in srgb, var(--semantic-danger) 10%, var(--panel-bg));
+  --el-color-info-light-9: color-mix(in srgb, var(--semantic-info) 10%, var(--panel-bg));
+  --el-color-success-dark-2: var(--semantic-success);
+  --el-color-warning-dark-2: var(--semantic-warning);
+  --el-color-danger-dark-2: var(--semantic-danger);
+  --el-color-info-dark-2: var(--semantic-info);
+  --el-fill-color-dark: var(--panel-soft-bg);
+  --el-fill-color-darker: var(--panel-soft-bg);
+  --el-fill-color-extra-light: var(--panel-soft-bg);
 }
 
 .el-button--primary {
@@ -243,7 +254,8 @@
 .theme-preferences .el-radio-button__inner { padding: 8px 10px; }
 .palette-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: baseline; }
 .palette-swatch-default { background: #2563eb; }
-.palette-swatch-candy { background: #db2777; }
+.palette-swatch-candy { background: #be185d; }
+.palette-swatch-contrast { background: #006b68; }
 
 .scan-jobs-table .cell,
 .task-governance-table .cell { font-variant-numeric: tabular-nums; }
@@ -275,6 +287,7 @@ body {
   min-height: 0;
   color: var(--text-main);
   background: var(--app-bg);
+  font-size: 14px;
   font-family:
     Inter,
     "Segoe UI",
@@ -337,7 +350,7 @@ body.el-popup-parent--hidden {
   min-height: 48px;
   padding: 6px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -361,8 +374,8 @@ body.el-popup-parent--hidden {
   height: 34px;
   place-items: center;
   border-radius: 7px;
-  background: #2563eb;
-  color: #ffffff;
+  background: var(--brand-accent);
+  color: var(--brand-accent-ink);
   font-weight: 800;
 }
 
@@ -413,8 +426,9 @@ body.el-popup-parent--hidden {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 48px;
+  min-height: 40px;
   padding: 0 10px;
+  border-left: 3px solid transparent;
   border-radius: 7px;
   color: var(--sidebar-muted);
   text-decoration: none;
@@ -439,9 +453,17 @@ body.el-popup-parent--hidden {
 
 .side-menu a.active,
 .side-menu a:hover {
-  /* 文本色用 palette 的 ink（压强调色之上），满足对比度门禁 */
-  color: var(--brand-accent-ink);
-  background: var(--brand-accent);
+  color: var(--selection-ink);
+  background: var(--selection-bg);
+}
+
+.side-menu a.active {
+  border-left-color: var(--brand-accent);
+}
+
+.side-menu a:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
 }
 
 .is-collapsed .app-sidebar {
@@ -708,13 +730,14 @@ body.el-popup-parent--hidden {
   min-height: 0;
   min-width: 0;
   grid-template-rows: auto minmax(0, 1fr);
-  padding: 28px;
+  padding: 16px 20px;
 }
 
 .workbench-topbar {
   display: flex;
+  gap: 12px;
   justify-content: flex-end;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .global-search {
@@ -733,7 +756,7 @@ body.el-popup-parent--hidden {
   overflow: hidden;
   height: 100%;
   min-height: 0;
-  gap: clamp(0.5rem, 1vw, 0.75rem);
+  gap: 12px;
 }
 
 .list-title-card,
@@ -748,26 +771,34 @@ body.el-popup-parent--hidden {
   flex-shrink: 0;
 }
 
-.list-title-card .el-card__body,
+.list-title-card .list-title-card-body,
 .list-table-card .el-card__body {
-  padding: clamp(0.55rem, 1.1vw, 0.85rem);
+  padding: 0;
 }
 
-.list-title-card .el-card__body {
-  padding-block: clamp(0.45rem, 0.9vw, 0.7rem);
+.list-title-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.list-title-card .list-title-card-body {
+  padding-bottom: 4px;
 }
 
 .list-title-card-line {
   display: flex;
   align-items: baseline;
-  gap: clamp(0.5rem, 1vw, 0.75rem);
+  gap: 16px;
+  flex-wrap: wrap;
   min-width: 0;
   white-space: normal;
 }
 
 .list-title-card h1 {
   margin: 0;
-  font-size: clamp(1.25rem, 2vw, 1.5rem);
+  font-size: 20px;
+  line-height: 28px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -776,12 +807,12 @@ body.el-popup-parent--hidden {
   overflow: hidden;
   margin: 0;
   color: var(--el-text-color-secondary);
-  font-size: 0.875rem;
+  font-size: 13px;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
-.list-title-card.is-merged .el-card__body {
+.list-title-card.is-merged .list-title-card-body {
   display: grid;
   gap: clamp(0.75rem, 1.5vw, 1rem);
 }
@@ -797,10 +828,11 @@ body.el-popup-parent--hidden {
 
 .list-page > .list-filter-row {
   flex: 0 0 auto;
-  padding: clamp(0.5rem, 0.9vw, 0.7rem);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--panel-bg);
+  padding: 0 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
+  background: transparent;
 }
 
 .list-filter-row > .el-button {
@@ -1002,6 +1034,8 @@ body.el-popup-parent--hidden {
 }
 
 .list-table-card {
+  box-shadow: var(--panel-shadow);
+  border-radius: 6px;
   flex: 1 1 auto;
   overflow: hidden;
   height: 100%;
@@ -1073,6 +1107,27 @@ body.el-popup-parent--hidden {
   border-radius: 6px;
 }
 
+.el-button--success:not(.is-text):not(.is-link),
+.el-button--warning:not(.is-text):not(.is-link),
+.el-button--danger:not(.is-text):not(.is-link) {
+  --el-button-text-color: var(--status-button-ink);
+  --el-button-hover-text-color: var(--status-button-ink);
+  --el-button-active-text-color: var(--status-button-ink);
+}
+
+.el-button--success:not(.is-text):not(.is-link) {
+  --el-button-bg-color: var(--semantic-success);
+  --el-button-border-color: var(--semantic-success);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--semantic-success) 90%, var(--text-main));
+  --el-button-active-bg-color: var(--el-button-hover-bg-color);
+}
+
+.el-button.is-disabled {
+  --el-button-disabled-bg-color: var(--panel-soft-bg);
+  --el-button-disabled-border-color: var(--border-color);
+  --el-button-disabled-text-color: var(--text-muted);
+}
+
 .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger):not(.is-text):not(.is-link) {
   --el-button-bg-color: var(--button-default-bg);
   --el-button-border-color: var(--button-default-border);
@@ -1109,7 +1164,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   background: var(--panel-bg);
 }
 
-:root[data-scheme="dark"] .el-table {
+.el-table {
   --el-table-bg-color: var(--table-row-bg);
   --el-table-tr-bg-color: var(--table-row-bg);
   --el-table-header-bg-color: var(--table-header-bg);
@@ -1165,11 +1220,67 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   color: var(--text-strong);
 }
 
-:root[data-scheme="dark"] .el-input__wrapper,
-:root[data-scheme="dark"] .el-select__wrapper,
-:root[data-scheme="dark"] .el-textarea__inner {
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  --el-input-bg-color: var(--input-bg);
   background-color: var(--input-bg);
-  box-shadow: 0 0 0 1px var(--border-color) inset;
+  box-shadow: 0 0 0 1px var(--input-border) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--brand-accent) inset;
+}
+
+.el-checkbox__inner {
+  border-color: var(--input-border);
+  background-color: var(--input-bg);
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner::after {
+  border-color: var(--brand-accent-ink);
+}
+
+.el-checkbox__input.is-indeterminate .el-checkbox__inner::before {
+  background-color: var(--brand-accent-ink);
+}
+
+.el-dialog,
+.el-message-box {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.el-dialog {
+  --el-dialog-margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 64px);
+}
+
+.el-dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.el-dialog__header,
+.el-dialog__footer {
+  flex-shrink: 0;
+}
+
+.el-table .cell,
+.el-pagination {
+  font-variant-numeric: tabular-nums;
+}
+
+.el-table .el-table__row:has(.el-checkbox.is-checked) > td.el-table__cell {
+  background-color: var(--selection-bg);
+}
+
+.el-table .el-table__body tr.hover-row > td.el-table__cell {
+  background-color: var(--table-row-hover-bg);
 }
 
 :root[data-scheme="dark"] .el-input__inner,
@@ -1297,6 +1408,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 .settings-categories {
   display: grid;
   align-content: start;
+  min-height: 0;
+  overflow-y: auto;
   gap: clamp(0.5rem, 1vw, 0.75rem);
   padding: clamp(0.5rem, 1vw, 0.75rem);
 }
@@ -1331,7 +1444,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   color: var(--brand-accent-ink);
   border-color: var(--el-color-primary);
   background: var(--el-color-primary);
-  box-shadow: 0 0.25rem 0.75rem rgb(64 128 255 / 18%);
+  box-shadow: none;
 }
 
 .settings-category-button.is-active:hover {
@@ -1355,10 +1468,10 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   display: grid;
   gap: clamp(0.75rem, 1.5vw, 1rem);
   min-width: 0;
-  padding: clamp(0.75rem, 1.6vw, 1rem);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--panel-bg);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .settings-config-card-title {
@@ -1413,7 +1526,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   background: var(--el-fill-color-light);
-  color: #8c95a8;
+  color: var(--text-muted);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -1455,8 +1568,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
 .settings-nested-card:not(.is-collapsed) {
   padding: 0.75rem;
-  border-color: var(--border-color);
-  background: rgba(64, 128, 255, 0.03);
+  border-color: transparent;
+  background: transparent;
 }
 
 .settings-nested-card .settings-config-card-toggle {
@@ -1489,7 +1602,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 }
 
 .settings-sensitive-textarea .el-textarea__inner {
-  color: #333;
+  color: var(--text-main);
   font-size: 14px;
   line-height: 1.6;
 }
@@ -1714,7 +1827,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
 .rename-preview-page .preview-title-card h1 {
   margin: 0;
-  font-size: clamp(1.25rem, 2vw, 1.5rem);
+  font-size: 20px;
 }
 
 .rename-preview-page .preview-title-card p {
@@ -1885,23 +1998,23 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 }
 
 .preview-stats .stat-generated strong {
-  color: #16a34a;
+  color: var(--semantic-success);
 }
 
 .preview-stats .stat-review strong {
-  color: #ca8a04;
+  color: var(--semantic-warning);
 }
 
 .preview-stats .stat-edited strong {
-  color: #ea580c;
+  color: var(--semantic-info);
 }
 
 .preview-stats .stat-renamed strong {
-  color: #0ea5e9;
+  color: var(--semantic-info);
 }
 
 .preview-stats .stat-failed strong {
-  color: #dc2626;
+  color: var(--semantic-danger);
 }
 
 .rename-preview-page .preview-stats .stat-generated strong,
@@ -2037,7 +2150,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   background-color: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
-  opacity: 0.78;
+  opacity: 1;
 }
 
 .table-action-button.is-disabled,
@@ -2100,8 +2213,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   gap: clamp(0.5rem, 1vw, 0.75rem);
 }
 
-.scan-results-page .list-title-card .el-card__body {
-  padding-block: clamp(0.35rem, 0.7vw, 0.55rem);
+.scan-results-page .list-title-card .list-title-card-body {
+  padding-bottom: 4px;
 }
 
 .scan-results-page.list-page > .list-filter-row {
@@ -2162,7 +2275,10 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 }
 
 .rename-preview-page .list-actions {
-  flex-wrap: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 
 .rename-preview-tabs {
@@ -2628,7 +2744,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   border: 0;
   box-shadow: none;
   background: transparent;
-  color: var(--primary-color);
+  color: var(--brand-accent);
 }
 
 .fullscreen-table-panel.is-table-fullscreen {
@@ -2768,12 +2884,16 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 .rename-action-groups,
 .rename-action-group {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
 }
 
 .rename-action-stack {
   display: flex;
+  width: 100%;
   flex-direction: column;
   align-items: stretch;
   gap: 0.45rem;
@@ -3039,15 +3159,15 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   flex: 0 0 auto;
   border-color: var(--border-color);
   background: var(--panel-bg);
-  color: var(--primary-color);
+  color: var(--brand-accent);
   font-weight: 600;
 }
 
 .rename-stats-button:hover,
 .rename-stats-button:focus {
-  border-color: var(--primary-color);
+  border-color: var(--brand-accent);
   background: var(--panel-soft-bg);
-  color: var(--primary-color);
+  color: var(--brand-accent);
 }
 
 .rename-stats-icon {
@@ -3162,21 +3282,21 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   border: 1px solid var(--border-color);
   font-size: 12px;
   line-height: 1;
-  color: var(--text-secondary);
-  background: var(--button-quiet-bg);
+  color: var(--text-muted);
+  background: var(--panel-bg);
 }
 
 .directory-permission.is-allowed {
-  color: var(--success-color);
+  color: var(--semantic-success);
 }
 
 .directory-permission.is-denied {
-  color: var(--danger-color);
+  color: var(--semantic-danger);
 }
 
 .directory-item .el-icon {
   flex: 0 0 auto;
-  color: #2563eb;
+  color: var(--brand-accent);
 }
 
 .directory-item:hover {
@@ -3185,7 +3305,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
 .directory-item.is-disabled {
   cursor: not-allowed;
-  opacity: 0.62;
+  /* 弱化名称而非整行透明度，保留拒绝徽标的语义色对比度。 */
+  color: var(--text-muted);
 }
 
 .directory-item.is-disabled:hover {
@@ -3261,7 +3382,89 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   margin-top: 1rem;
 }
 
+/* 低高度桌面收紧留白，不缩字或缩小按钮；表格继续在内部滚动。 */
+@media (min-width: 901px) and (max-height: 760px) {
+  .app-workbench {
+    padding: 12px 16px;
+  }
+
+  .workbench-topbar {
+    margin-bottom: 8px;
+  }
+
+  .list-page {
+    gap: 8px;
+  }
+
+  .list-page > .list-filter-row {
+    padding-bottom: 8px;
+  }
+
+  .app-sidebar {
+    padding-block: 12px;
+  }
+
+  .side-menu {
+    margin-top: 14px;
+  }
+
+  .sidebar-footer {
+    gap: 8px;
+  }
+
+  .settings-categories {
+    gap: 8px;
+    padding: 8px;
+  }
+}
+
 @media (max-width: 900px) {
+  html,
+  body {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  #app {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .app-workbench {
+    height: auto;
+    min-height: 60vh;
+    overflow: visible;
+    padding: 12px;
+  }
+
+  .list-page {
+    height: auto;
+    overflow: visible;
+  }
+
+  .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    overflow: visible;
+  }
+
+  .settings-categories {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .settings-category-button {
+    flex: 1 1 140px;
+    min-height: 40px;
+  }
+
+  .settings-panel {
+    overflow: visible;
+  }
+
   .app-layout,
   .app-layout.is-collapsed {
     grid-template-columns: 1fr;
@@ -3272,6 +3475,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
   .app-sidebar {
     min-height: auto;
+    height: auto;
     position: relative;
   }
 
@@ -3697,10 +3901,10 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   display: grid;
   gap: 0.25rem;
   padding: 0.625rem 0.75rem;
-  border: 1px solid #f4c35a;
+  border: 1px solid color-mix(in srgb, var(--semantic-warning) 40%, var(--panel-bg));
   border-radius: 6px;
-  background: #fff7db;
-  color: #7a4f00;
+  background: var(--el-color-warning-light-9);
+  color: var(--semantic-warning);
   font-size: 0.875rem;
 }
 

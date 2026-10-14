@@ -147,6 +147,8 @@ def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -
         table = "rename_rollback_plans"
     elif task_type == TASK_TYPE_PENDING_MOVE:
         table = "pending_move_tasks"
+    elif task_type == "background_job":
+        table = "background_jobs"
     else:
         return False
     row = connection.execute(f"SELECT 1 FROM {table} WHERE id = ?", (task_id,)).fetchone()
@@ -158,6 +160,7 @@ def _task_running(connection: sqlite3.Connection, task_type: str, task_id: int) 
         TASK_TYPE_SCAN_JOB: "scan_jobs", TASK_TYPE_RENAME_OPERATION: "rename_operations",
         TASK_TYPE_ROLLBACK_PLAN: "rename_rollback_plans",
         TASK_TYPE_PENDING_MOVE: "pending_move_tasks",
+        "background_job": "background_jobs",
     }.get(task_type)
     if table is None:
         return False

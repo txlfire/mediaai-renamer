@@ -832,8 +832,11 @@ def _update_preview_metadata(
     now = _utc_now()
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
+        from app.service.execution_guard_service import checkExecutionGuard
+        connection.execute("BEGIN")
         _assertPreviewEditable(connection, preview_id)
         row = _get_preview_row(connection, preview_id)
+        connection.commit()
         suggested_name = row["suggested_name"]
         edited_name = row["edited_name"]
         media_type = row["media_type"]
@@ -865,6 +868,12 @@ def _update_preview_metadata(
         final_message = _metadata_message(match_status, score, message)
         serialized_matches = _serialize_metadata_matches(candidate_matches or ([] if candidate is None else [MetadataMatchResult(candidate, score, match_status)]))
 
+        # 名称构造和文件存在性检查不持写锁；发布前复核刚才读取的输入。
+        connection.execute("BEGIN IMMEDIATE")
+        checkExecutionGuard(connection)
+        _assertPreviewEditable(connection, preview_id)
+        if dict(row) != dict(_get_preview_row(connection, preview_id)):
+            raise ValueError("匹配期间预览已变化，拒绝覆盖新内容")
         connection.execute(
             "UPDATE rename_previews SET "
             "media_type = ?, "

@@ -15,6 +15,7 @@ vi.mock("../components/TablePagination.vue", () => ({ default: { render: () => n
 vi.mock("../components/TextCell.vue", () => ({ default: { render: () => null } }));
 import MediaSourcesView from "./MediaSourcesView.vue";
 import { usePaginationStore } from "../stores/pagination";
+import { getSessionGeneration, invalidateSessionRequests, sessionRequest, SessionChangedError } from "../utils/sessionGeneration";
 
 type Node = { children: Node[] };
 const renderer = createRenderer<Node, Node>({ createElement: () => ({ children: [] }),
@@ -92,5 +93,27 @@ describe("media-source server pages", () => {
     await state.toggleSource({ id: 1, enabled: true } as never);
     expect(mocks.error).toHaveBeenCalledWith("toggle failed");
     vi.unstubAllGlobals();
+  });
+  it("silently discards a write finishing after a session switch", async () => {
+    let resolve!: () => void;
+    const generation = getSessionGeneration();
+    mocks.toggle.mockImplementationOnce(() => sessionRequest(new Promise<void>(done => { resolve = done; }), generation));
+    mocks.error.mockClear(); mocks.success.mockClear(); mocks.page.mockClear();
+    const request = state.toggleSource({ id: 1, enabled: true } as never);
+    invalidateSessionRequests();
+    resolve();
+    await request;
+    expect(mocks.error).not.toHaveBeenCalled();
+    expect(mocks.success).not.toHaveBeenCalled();
+    expect(mocks.page).not.toHaveBeenCalled();
+  });
+  it("ignores cancellation but still reports genuine session failures", async () => {
+    mocks.error.mockClear();
+    mocks.toggle.mockRejectedValueOnce(new SessionChangedError());
+    await state.toggleSource({ id: 1, enabled: true } as never);
+    expect(mocks.error).not.toHaveBeenCalled();
+    mocks.toggle.mockRejectedValueOnce(new Error("登录状态已失效，请重新登录"));
+    await state.toggleSource({ id: 1, enabled: true } as never);
+    expect(mocks.error).toHaveBeenCalledWith("登录状态已失效，请重新登录");
   });
 });

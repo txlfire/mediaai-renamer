@@ -1,10 +1,9 @@
 import { getSessionGeneration, sessionRequest, SessionChangedError } from "../utils/sessionGeneration";
 import { defineStore } from "pinia";
+import { createRenameDryRunBackground as createRenameDryRun, dryRunRenameRollbackPlanBackground as dryRunRenameRollbackPlan } from "../api/backgroundJobs";
 
 import {
-  createRenameDryRun,
   createRenameRollbackPlan,
-  dryRunRenameRollbackPlan,
   acceptRenameOperation,
   fetchRenameOperation,
   acceptRenameRollbackPlan,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import { CopyDocument, Download, Refresh } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
@@ -132,7 +133,8 @@ async function loadLogs({ reset = false, silent = false } = {}) {
     if (page.cleared) {
       autoRefresh.value = false;
     }
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (requestGate.isCurrent(token)) {
       statusMessage.value = pageText.loadFailed;
       consecutiveFailures.value += 1;
@@ -234,7 +236,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <el-drawer v-model="drawerVisible" :title="drawerTitle" size="52%" class="operation-log-drawer">
+  <el-drawer v-model="drawerVisible" :title="drawerTitle" size="min(880px, calc(100vw - 24px))" class="operation-log-drawer">
     <div class="operation-log-toolbar">
       <div class="operation-log-summary">
         <el-tag type="info" effect="light">

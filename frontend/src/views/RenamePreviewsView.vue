@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import { ArrowDown, CloseBold, Connection, Delete, Document, Edit, MagicStick, Refresh, Search, Select, TrendCharts, View } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -31,6 +32,7 @@ import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
+import { useBackgroundJobsStore } from "../stores/backgroundJobs";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { usePendingFileStore } from "../stores/pendingFiles";
@@ -56,6 +58,7 @@ import {
 
 const mediaStore = useMediaStore();
 const authStore = useAuthStore();
+const backgroundJobs = useBackgroundJobsStore();
 const previewStore = usePreviewStore();
 const pendingFileStore = usePendingFileStore();
 const renameOperationStore = useRenameOperationStore();
@@ -107,6 +110,12 @@ const operationProgressVisible = ref(false);
 const operationProgressText = ref("");
 const operationProgressPercent = ref(0);
 const operationProgressLogs = ref<string[]>([]);
+watch(() => backgroundJobs.activeJob, job => {
+  if (!job || !["queued", "running"].includes(job.status) || !operationProgressVisible.value
+    || !(previewStore.loading || renameOperationStore.loading)) return;
+  operationProgressPercent.value = Math.min(95, Math.round(100 * job.completed_count / Math.max(1, job.total_count)));
+  operationProgressText.value = formatMessage(messages.renamePreviews.processing, { current: job.completed_count, total: job.total_count });
+}, { deep: true });
 const activeOperationName = ref("");
 const operationResultVisible = ref(false);
 const operationResultExpanded = ref(false);
@@ -562,7 +571,8 @@ async function loadPreviewPage(resetPage = true) {
     previewTotal.value = result.total;
     previewStats.value = result.stats;
     paginationStore.setPage("rename-previews", result.page);
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (version === previewRequestVersion && JSON.stringify(filters) === JSON.stringify(previewStore.filters)) {
       previewStore.previews = []; previewTotal.value = 0; previewStats.value = {};
       ElMessage.error(messages.previewPaging.loadFailed);
@@ -586,7 +596,8 @@ async function readAllTargets(action: PreviewSelectionAction): Promise<RenameSel
       return null;
     }
     return result.items;
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return null;
     if (viewActive) ElMessage.error(messages.previewPaging.loadFailed);
     return null;
   }
@@ -599,6 +610,7 @@ async function runBatchCommand(operation: () => Promise<void>) {
     await operation();
     if (viewActive) await loadPreviewPage(false);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (error !== "cancel" && error !== "close") throw error;
   } finally {
     batchScopeLoading.value = false;
@@ -622,7 +634,8 @@ async function refreshPreviews() {
     if (!current()) return;
     mediaFileCount.value = files.total;
     await loadPendingPage();
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (current()) {
       mediaFileCount.value = 0;
       pendingFileStore.pendingFiles = [];
@@ -651,7 +664,8 @@ async function loadPendingPage(resetPage = true) {
     pendingTotal.value = result.total;
     pendingStats.value = result.stats;
     paginationStore.setPage("pending-files", result.page);
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (viewActive && version === pendingRequestVersion) {
       pendingFileStore.pendingFiles = []; pendingTotal.value = 0; pendingStats.value = {};
       pendingFileStore.refreshFailed = true;
@@ -1431,6 +1445,7 @@ async function moveSelectedPendingFiles() {
   try {
     await confirmResourceOperation(messages.renamePreviews.pendingFiles.move, ids.length);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (error !== "cancel" && error !== "close") ElMessage.error(messages.errors.unknown);
     return;
   }
@@ -1610,6 +1625,7 @@ async function executeRollbackPlan() {
       },
     );
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (error === "cancel" || error === "close") return;
     throw error;
   }
@@ -1655,7 +1671,8 @@ async function applyRouteContext() {
   let readiness: AiReadiness | null = null;
   try {
     readiness = await fetchAiReadiness();
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     readiness = null;
   }
   if (!viewActive || routeVersion !== routeContextVersion) return;
@@ -1807,7 +1824,7 @@ onBeforeUnmount(() => {
                 :disabled="operationBusy || !canSubmitMetadata"
                 @command="handleTmdbDropdownCommand"
               >
-                <el-button class="action-split-caret">
+                <el-button class="action-split-caret" :aria-label="messages.renamePreviews.tmdbMenu" :title="messages.renamePreviews.tmdbMenu">
                   <el-icon><ArrowDown /></el-icon>
                 </el-button>
                 <template #dropdown>
@@ -1835,7 +1852,7 @@ onBeforeUnmount(() => {
                 :disabled="operationBusy || !canSubmitMetadata"
                 @command="handleMultiSourceDropdownCommand"
               >
-                <el-button class="action-split-caret">
+                <el-button class="action-split-caret" :aria-label="messages.renamePreviews.multiSourceMenu" :title="messages.renamePreviews.multiSourceMenu">
                   <el-icon><ArrowDown /></el-icon>
                 </el-button>
                 <template #dropdown>
@@ -1863,7 +1880,7 @@ onBeforeUnmount(() => {
                 :disabled="operationBusy || !canSubmitMetadata"
                 @command="handleAiDropdownCommand"
               >
-                <el-button class="action-split-caret">
+                <el-button class="action-split-caret" :aria-label="messages.renamePreviews.aiMenu" :title="messages.renamePreviews.aiMenu">
                   <el-icon><ArrowDown /></el-icon>
                 </el-button>
                 <template #dropdown>
@@ -1892,7 +1909,7 @@ onBeforeUnmount(() => {
                 :disabled="previewTotal === 0 || operationBusy || !canExecuteRename"
                 @command="handleRenameDropdownCommand"
               >
-                <el-button class="action-split-caret">
+                <el-button class="action-split-caret" :aria-label="messages.renamePreviews.renameMenu" :title="messages.renamePreviews.renameMenu">
                   <el-icon><ArrowDown /></el-icon>
                 </el-button>
                 <template #dropdown>
@@ -2112,7 +2129,7 @@ onBeforeUnmount(() => {
           <template #default="{ row }">
           <div class="table-actions">
           <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
-          <el-button
+          <el-button :aria-label="messages.renamePreviews.actions.tmdbMatch"
           class="table-action-button action-sync"
           :icon="Connection"
           text
@@ -2122,7 +2139,7 @@ onBeforeUnmount(() => {
           />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.multiSourceMatch" placement="top">
-          <el-button
+          <el-button :aria-label="messages.renamePreviews.actions.multiSourceMatch"
           class="table-action-button action-sync"
           :icon="Connection"
           text
@@ -2132,7 +2149,7 @@ onBeforeUnmount(() => {
           />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.aiParse" placement="top">
-          <el-button
+          <el-button :aria-label="messages.renamePreviews.actions.aiParse"
           class="table-action-button action-ai"
           :icon="MagicStick"
           text
@@ -2143,7 +2160,7 @@ onBeforeUnmount(() => {
           />
           </el-tooltip>
           <el-tooltip v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataResult" placement="top">
-          <el-button
+          <el-button :aria-label="messages.renamePreviews.actions.metadataResult"
           class="table-action-button action-sync"
           :icon="View"
           text
@@ -2153,10 +2170,10 @@ onBeforeUnmount(() => {
           />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
-          <el-button class="table-action-button action-edit" :icon="Edit" :disabled="!canExecuteRename" :title="canExecuteRename ? '' : messages.auth.permissionDenied" text circle @click.stop="openEditDialog(row)" />
+          <el-button :aria-label="messages.renamePreviews.actions.edit" class="table-action-button action-edit" :icon="Edit" :disabled="!canExecuteRename" :title="canExecuteRename ? '' : messages.auth.permissionDenied" text circle @click.stop="openEditDialog(row)" />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.exclude" placement="top">
-          <el-button
+          <el-button :aria-label="messages.renamePreviews.actions.exclude"
           class="table-action-button action-delete"
           :icon="CloseBold"
           text
@@ -2167,7 +2184,7 @@ onBeforeUnmount(() => {
           />
           </el-tooltip>
           <el-tooltip :content="messages.renamePreviews.actions.execute" placement="top">
-          <el-button
+          <el-button :aria-label="messages.renamePreviews.actions.execute"
           class="table-action-button action-run"
           :icon="Select"
           text
@@ -2266,7 +2283,7 @@ onBeforeUnmount(() => {
           <el-table-column :label="messages.common.actions" width="144" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
           <el-tooltip :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.actions.aiParse" placement="top">
-          <el-button
+          <el-button :aria-label="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.actions.aiParse"
           class="table-action-button action-ai"
           :icon="MagicStick"
           text
@@ -2278,7 +2295,7 @@ onBeforeUnmount(() => {
           />
           </el-tooltip>
           <el-tooltip :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.pendingFiles.remove" placement="top">
-          <el-button
+          <el-button :aria-label="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.pendingFiles.remove"
           class="table-action-button action-delete"
           :icon="Delete"
           text

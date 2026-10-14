@@ -1,5 +1,6 @@
 import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 import { defineStore } from "pinia";
+import { matchRenamePreviewsMultiSourceBackground as matchRenamePreviewsMultiSource, parseRenamePreviewsWithAiBackground as parseRenamePreviewsWithAi } from "../api/backgroundJobs";
 
 import {
   applyRenamePreviewMetadataCandidate,
@@ -13,11 +14,9 @@ import {
   matchAllUnmatchedMetadata,
   matchRenamePreviewMultiSource,
   matchRenamePreviewMetadata,
-  matchRenamePreviewsMultiSource,
   matchRenamePreviewsMetadataWithAiFallback,
   matchRenamePreviewsMetadata,
   parseRenamePreviewWithAi,
-  parseRenamePreviewsWithAi,
   updateRenamePreview,
   type AiParseCandidate,
   type AiParseResult,

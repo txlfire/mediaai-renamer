@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>MediaAI Renamer</title>
+    <script>
+      // 首次绘制前恢复外观，避免已保存暗色主题短暂显示亮色背景。
+      try {
+        const mode = localStorage.getItem("mediaai-theme-mode");
+        const palette = localStorage.getItem("mediaai-theme-palette");
+        document.documentElement.dataset.scheme = mode === "light" || mode === "dark"
+          ? mode : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.dataset.palette = ["default", "candy", "contrast"].includes(palette) ? palette : "default";
+        document.documentElement.style.colorScheme = document.documentElement.dataset.scheme;
+      } catch {
+        // 此恢复脚本失败时保留CSS默认主题；应用存储逻辑仍按原契约处理。
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

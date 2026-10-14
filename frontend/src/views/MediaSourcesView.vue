@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import {
   Delete,
   Edit,
@@ -118,6 +119,7 @@ async function loadSources() {
     mediaSourceTotal.value = result.total;
     paginationStore.setPage("media-sources", result.page);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (version !== sourcesRequestVersion) return;
     pagedMediaSources.value = [];
     mediaSourceTotal.value = 0;
@@ -251,6 +253,7 @@ async function submitSource() {
     resetFormOnly();
     await loadSources();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.saveFailed);
   }
 }
@@ -307,6 +310,7 @@ async function loadDirectories(path = "") {
     directoryPicker.listing = await fetchLocalDirectories(path);
     directoryPicker.selectedPath = directoryPicker.listing.current_path ?? "";
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     directoryPicker.errorMessage = error instanceof Error ? error.message : messages.mediaSources.loadDirectoryFailed;
   } finally {
     directoryPicker.loading = false;
@@ -352,6 +356,7 @@ async function testConnection(row: MediaSource) {
     }
     ElMessage.error(connectionErrorMessage(result.message, result.suggestion));
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.connectionFailed);
   } finally {
     const next = new Set(testingSourceIds.value);
@@ -411,6 +416,7 @@ async function verifyConditionalMove(row: MediaSource) {
     else ElMessage.error(message);
     await loadSources();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.verifyConditionalMoveFailed);
   } finally {
     const next = new Set(verifyingSourceIds.value);
@@ -451,6 +457,7 @@ async function testEditConnection() {
     }
     ElMessage.error(connectionErrorMessage(result.message, result.suggestion));
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.connectionFailed);
   } finally {
     testingEditSource.value = false;
@@ -563,6 +570,7 @@ async function submitEditSource() {
     ElMessage.success(pageText.saved);
     await loadSources();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (error === "cancel" || error === "close") return;
     ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
     cleanupDialog.visible = false;
@@ -579,6 +587,7 @@ async function toggleSource(row: MediaSource) {
     ElMessage.success(pageText.statusUpdated);
     await loadSources();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
   }
 }
@@ -598,6 +607,7 @@ async function removeSource(row: MediaSource) {
       cleanupDialog.visible = false;
     }, 400);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     cleanupDialog.visible = false;
     if (error !== "cancel" && error !== "close") {
       ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
@@ -626,6 +636,7 @@ async function removeSelectedSources() {
       cleanupDialog.visible = false;
     }, 400);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     cleanupDialog.visible = false;
     if (error !== "cancel" && error !== "close") {
       ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
@@ -833,7 +844,7 @@ onBeforeUnmount(() => {
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :content="pageText.testConnection" placement="top">
-                <el-button
+                <el-button :aria-label="pageText.testConnection"
                   class="table-action-button action-view"
                   :icon="Link"
                   :loading="testingSourceIds.has(row.id)"
@@ -843,7 +854,7 @@ onBeforeUnmount(() => {
                 />
               </el-tooltip>
               <el-tooltip :content="pageText.verifyConditionalMove" placement="top">
-                <el-button
+                <el-button :aria-label="pageText.verifyConditionalMove"
                   class="table-action-button action-magic"
                   :icon="Lock"
                   :disabled="row.path_type !== 'webdav' || !canWriteSources"
@@ -854,7 +865,7 @@ onBeforeUnmount(() => {
                 />
               </el-tooltip>
               <el-tooltip :content="messages.mediaSources.viewTasks" placement="top">
-                <el-button
+                <el-button :aria-label="messages.mediaSources.viewTasks"
                   class="table-action-button action-view"
                   :disabled="!row.enabled"
                   :icon="List"
@@ -864,7 +875,7 @@ onBeforeUnmount(() => {
                 />
               </el-tooltip>
               <el-tooltip :content="pageText.edit" placement="top">
-                <el-button
+                <el-button :aria-label="pageText.edit"
                   class="table-action-button action-edit"
                   :icon="Edit"
                   :disabled="!canWriteSources"
@@ -874,7 +885,7 @@ onBeforeUnmount(() => {
                 />
               </el-tooltip>
               <el-tooltip :content="row.enabled ? pageText.disable : pageText.enable" placement="top">
-                <el-button
+                <el-button :aria-label="row.enabled ? pageText.disable : pageText.enable"
                   class="table-action-button action-toggle"
                   :icon="SwitchButton"
                   :disabled="!canWriteSources"
@@ -884,7 +895,7 @@ onBeforeUnmount(() => {
                 />
               </el-tooltip>
               <el-tooltip :content="pageText.remove" placement="top">
-                <el-button
+                <el-button :aria-label="pageText.remove"
                   class="table-action-button action-delete"
                   :icon="Delete"
                   :disabled="!canWriteSources"

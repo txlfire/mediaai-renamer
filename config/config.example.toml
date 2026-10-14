@@ -1,4 +1,4 @@
-# MediaAI Renamer v1.1.0 配置示例
+# MediaAI Renamer v1.2.0 配置示例
 
 [server]
 host = "0.0.0.0"
@@ -31,6 +31,14 @@ default_admin_username = "admin"
 default_admin_display_name = "系统管理员"
 default_admin_password = "123456"
 admin_password_reset_enabled = false
+
+# 后台探测/匹配任务；修改后重启。结果清理不删除审计或幂等请求ID，也不自动重放请求。
+[background_jobs]
+timeout_seconds = 3600
+max_queued = 100
+result_max_size_mb = 4
+result_total_size_mb = 64
+retention_days = 7
 
 # 修改后需重启；同一数据库、同一宿主的工作进程共用，不控制本地API或文件操作。
 [external_requests]

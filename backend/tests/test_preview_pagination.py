@@ -72,6 +72,29 @@ class PreviewPaginationTest(unittest.TestCase):
             self.assertEqual(2, result["total_count"])
             self.assertEqual([1, 2], match.call_args.args[1])
 
+    def test_over_limit_never_reaches_http_transport_with_real_matching_chain(self):
+        update_setting_values(self.settings, {"tmdb.enabled": True, "tmdb.api_key": "synthetic-test-key"})
+        client = authenticatedClient(create_app(self.settings))
+        # 不替换匹配服务；同时拦住共享预算和独立客户端出口，禁止测试联网。
+        with patch("app.service.external_request_budget_service.urlopen") as budgetTransport, patch(
+            "app.service.tmdb_client.urlopen"
+        ) as tmdbTransport, patch("urllib.request.urlopen") as otherTransport:
+            for endpoint in ("metadata-match/all", "metadata-match/all/ai-fallback"):
+                response = client.post(f"/api/rename-previews/{endpoint}", json={"scan_job_id": 1})
+                self.assertEqual(409, response.status_code)
+            for transport in (budgetTransport, tmdbTransport, otherTransport):
+                transport.assert_not_called()
+            # 正向对照证明配置确实可进入HTTP出口，而非因未配置服务偶然零请求。
+            with closing(sqlite3.connect(self.settings.database_path)) as connection:
+                connection.execute("DELETE FROM rename_previews WHERE id > 1")
+                connection.commit()
+            budgetTransport.return_value.__enter__.return_value.read.return_value = b'{"results": []}'
+            response = client.post("/api/rename-previews/metadata-match/all", json={"scan_job_id": 1})
+            self.assertEqual(200, response.status_code)
+            self.assertGreaterEqual(budgetTransport.call_count, 1)
+            tmdbTransport.assert_not_called()
+            otherTransport.assert_not_called()
+
     def test_global_sort_filters_and_clamped_pages(self):
         result = service.listRenamePreviewsPage(self.settings, sort_by="current_target_name", sort_order="desc", page_size=10)
         self.assertEqual(1000, result["items"][0].id)

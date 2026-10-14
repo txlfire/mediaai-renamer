@@ -12,6 +12,7 @@ from app.service.operation_log_service import cleanup_operation_logs
 from app.service.settings_service import get_effective_settings, resolveRuntimeLogging
 from app.service.audit_intent_retention_service import cleanupAuditIntentRecords
 from app.service.auth_service import cleanupExpiredSessions
+from app.service.background_job_service import cleanupBackgroundResults
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,7 @@ def runMaintenanceCycle(settings: AppSettings, state: MaintenanceState) -> dict:
     auditStart = 0 if state.auditCycles % 5 == 0 else state.auditCursor
     externalAuditStart = "" if state.externalAuditCycles % 5 == 0 else state.externalAuditCursor
     for name, job in (("expired_sessions", lambda: cleanupExpiredSessions(settings, limit=200)),
+                      ("background_results", lambda: cleanupBackgroundResults(settings)),
                       ("intent_retention", lambda: cleanupAuditIntentRecords(settings)),
                       ("files", lambda: cleanup_logs(settings)),
                       ("operations", lambda: cleanup_operation_logs(settings)),

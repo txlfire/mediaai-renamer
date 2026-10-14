@@ -25,6 +25,17 @@
 
 ## 2. 本地启动
 
+Windows日常开发优先使用后台管理脚本，避免另起Python窗口或占用现有服务：
+
+```powershell
+npm.cmd run dev:windows -- status
+npm.cmd run dev:windows -- start
+```
+
+先看status；运行中不再start（start会停止并重新启动脚本管理的旧实例）。只有用户明确要求时才执行stop/restart。日志在.codex/run-logs，默认前端5173、后端8970；服务停止后须重新核对健康，不沿用旧PID。前端直接由Node/Vite后台运行，不使用Python静态HTTP替代Vite。
+
+首次安装使用npm ci和后端requirements.lock哈希锁。推荐Node24.15.0、Python3.11；本机PATH只在当前PowerShell进程调整，不写系统PATH。以下单独前后端命令用于交互调试，不与上述后台实例重复启动。
+
 后端启动：
 
 ```powershell

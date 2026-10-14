@@ -15,7 +15,7 @@ TASK_TYPE_SCAN_JOB = "scan_job"
 TASK_TYPE_RENAME_OPERATION = "rename_operation"
 TASK_TYPE_ROLLBACK_PLAN = "rollback_plan"
 TASK_TYPE_PENDING_MOVE = "pending_move"
-TASK_TYPES = {TASK_TYPE_SCAN_JOB, TASK_TYPE_RENAME_OPERATION, TASK_TYPE_ROLLBACK_PLAN, TASK_TYPE_PENDING_MOVE}
+TASK_TYPES = {TASK_TYPE_SCAN_JOB, TASK_TYPE_RENAME_OPERATION, TASK_TYPE_ROLLBACK_PLAN, TASK_TYPE_PENDING_MOVE, "background_job"}
 
 
 @dataclass(frozen=True)
@@ -96,6 +96,8 @@ def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -
         table = "rename_rollback_plans"
     elif task_type == TASK_TYPE_PENDING_MOVE:
         table = "pending_move_tasks"
+    elif task_type == "background_job":
+        table = "background_jobs"
     else:
         return False
     row = connection.execute(f"SELECT 1 FROM {table} WHERE id = ?", (task_id,)).fetchone()
@@ -362,6 +364,24 @@ def _pending_move_items(connection, ids):
         archived=False, archived_at=None, archived_by=None, archive_reason=None) for row in rows]
 
 
+def _background_job_items(connection, ids):
+    if not ids:
+        return []
+    rows = connection.execute("SELECT id,request_id,kind,status,total_count,completed_count,success_count,failed_count,"
+        "unknown_count,created_at,updated_at,result_cleared_at FROM background_jobs "
+        f"WHERE id IN ({','.join('?' for _ in ids)})", ids).fetchall()
+    return [TaskGovernanceItem(id=f"background_job:{row['id']}", task_type="background_job", task_id=row["id"],
+        status=row["status"], title=f"后台探测/匹配 #{row['id']}",
+        summary=f"已处理 {row['completed_count']}/{row['total_count']} 项，需核查 {row['unknown_count']} 项"
+            + ("；结果已清理" if row["result_cleared_at"] else ""),
+        media_source_id=None, media_source_name=None, related_id=None, related_type=None,
+        total_count=row["total_count"], success_count=row["success_count"], failed_count=row["failed_count"],
+        warning_count=row["unknown_count"], created_at=row["created_at"], updated_at=row["updated_at"],
+        log_task_type="background_job", log_task_id=row["id"], target_route="rename-previews",
+        target_query={"background_request_id": row["request_id"]},
+        archived=False, archived_at=None, archived_by=None, archive_reason=None) for row in rows]
+
+
 _TASK_QUERY = """
 WITH operation_sources AS (
     SELECT roi.operation_id, MIN(ms.id) AS media_source_id
@@ -388,6 +408,9 @@ WITH operation_sources AS (
     SELECT 'pending_move', t.id,t.status,NULL,t.total_count,t.moved_count,t.failed_count,
         CASE WHEN t.status NOT IN ('queued','running') THEN MAX(0,t.total_count-t.moved_count-t.failed_count) ELSE 0 END,
         t.created_at,t.updated_at FROM pending_move_tasks t
+    UNION ALL
+    SELECT 'background_job',id,status,NULL,total_count,success_count,failed_count,unknown_count,created_at,updated_at
+    FROM background_jobs
 )
 """
 _TASK_SORTS = {"task_id", "status", "total_count", "success_count", "failed_count",
@@ -401,6 +424,7 @@ def _hydrate_tasks(connection: sqlite3.Connection, selected: list[tuple[str, int
              *_rename_operation_items(connection, groups[TASK_TYPE_RENAME_OPERATION]),
              *_rollback_plan_items(connection, groups[TASK_TYPE_ROLLBACK_PLAN])]
     items.extend(_pending_move_items(connection, groups[TASK_TYPE_PENDING_MOVE]))
+    items.extend(_background_job_items(connection, groups["background_job"]))
     indexed = {(item.task_type, item.task_id): item for item in items}
     return [_with_archive_state(indexed[key], archives.get(key)) for key in selected]
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invalidateSessionRequests } from "../utils/sessionGeneration";
+import { invalidateSessionRequests, SessionChangedError } from "../utils/sessionGeneration";
 
 import {
   apiClient,
@@ -99,6 +99,16 @@ import {
 } from "./client";
 
 describe("one-time external submission", () => {
+  it("preserves session cancellation through write, auth and settings wrappers", async () => {
+    const error = new SessionChangedError();
+    const httpClient: ApiHttpClient = { get: vi.fn().mockRejectedValue(error),
+      post: vi.fn().mockRejectedValue(error), put: vi.fn().mockRejectedValue(error) };
+    await expect(createMediaSource({ name: "synthetic", path: "/synthetic", enabled: true }, httpClient)).rejects.toBe(error);
+    await expect(fetchCurrentUser(httpClient)).rejects.toBe(error);
+    await expect(updateSettings({}, httpClient)).rejects.toBe(error);
+    await expect(testTmdbSettings(httpClient)).rejects.toBe(error);
+  });
+
   it("accepts rollback through the async endpoint and reads the same plan", async () => {
     const post = vi.fn().mockResolvedValue({ data: { id: 17, status: "queued" } });
     const get = vi.fn().mockResolvedValue({ data: { id: 17, status: "executed", rolled_back_count: 2 } });
@@ -904,7 +914,7 @@ describe("session response isolation", () => {
       dispatched();
       return new Promise((resolve) => { finish = () => resolve({ config, status: 200, statusText: "OK", headers: {}, data: [1] }); });
     } });
-    const rejected = expect(request).rejects.toThrow("登录状态已失效");
+    const rejected = expect(request).rejects.toBeInstanceOf(SessionChangedError);
     await started;
     invalidateSessionRequests();
     finish(undefined);
@@ -919,7 +929,7 @@ describe("session response isolation", () => {
       dispatched();
       return new Promise((_resolve, reject) => { fail = () => reject({ config, response: { status: 401 } }); });
     } });
-    const rejected = expect(request).rejects.toThrow("登录状态已失效");
+    const rejected = expect(request).rejects.toBeInstanceOf(SessionChangedError);
     await started;
     setAuthToken("synthetic-new", true);
     fail();

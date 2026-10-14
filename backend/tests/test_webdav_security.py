@@ -69,6 +69,17 @@ class WebDavSecurityTest(unittest.TestCase):
         self.assertEqual(value, _normalize_webdav_url(value))
         self.assertFalse(WebDavProtocol().validate_config("http://nas.invalid/dav/").success)
 
+    def test_mixed_destination_values_fail_before_request_construction(self):
+        headers = {"Destination": self.rootUrl + "safe", "destination": "https://other.invalid/unsafe"}
+        for entries in (headers, dict(reversed(list(headers.items())))):
+            with self.subTest(headers=list(entries)), patch(
+                "app.service.shared_protocols.webdav.Request"
+            ) as construct, patch("app.service.shared_protocols.webdav.urlopen") as send:
+                with self.assertRaises(ValueError):
+                    _request(self.rootUrl + "source", "MOVE", self.context, extra_headers=entries)
+                construct.assert_not_called()
+                send.assert_not_called()
+
     def _runCapabilityVerification(self, *, ignoreWrongEtag=False, cleanupStatus=204):
         protocol = WebDavProtocol()
         files: dict[str, RemoteFileEntry] = {}

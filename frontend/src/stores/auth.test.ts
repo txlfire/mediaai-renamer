@@ -8,7 +8,7 @@ import { usePendingFileStore } from "./pendingFiles";
 import { usePreviewStore } from "./preview";
 import { useRenameOperationStore } from "./renameOperation";
 import { useTableSortStore } from "./tableSort";
-import { invalidateSessionRequests } from "../utils/sessionGeneration";
+import { invalidateSessionRequests, SessionChangedError } from "../utils/sessionGeneration";
 
 const api = vi.hoisted(() => ({
   bootstrapAdmin: vi.fn(),
@@ -62,6 +62,29 @@ describe("auth store", () => {
     store.clearSession();
     expect(store.loading).toBe(false);
     expect(store.currentUser).toBeNull();
+  });
+
+  it.each(["bootstrap", "change", "reset"])("ignores a late %s failure without changing the newer session", async action => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => { reject = fail; });
+    const store = useAuthStore();
+    const requests = {
+      bootstrap: () => { api.bootstrapAdmin.mockReturnValueOnce(pending); return store.bootstrapAndLogin("synthetic", "synthetic", "SyntheticPassword!"); },
+      change: () => { api.changePassword.mockReturnValueOnce(pending); return store.changePassword("SyntheticPassword!", "SyntheticNewPassword!"); },
+      reset: () => { api.resetAdminPassword.mockReturnValueOnce(pending); return store.resetAdminPassword(); },
+    };
+    const request = requests[action as keyof typeof requests]();
+    const rejected = expect(request).rejects.toBeInstanceOf(SessionChangedError);
+    invalidateSessionRequests();
+    store.currentUser = user;
+    store.loading = true;
+    store.errorMessage = "新会话状态";
+    reject(new Error("旧请求失败"));
+    await rejected;
+    expect(store.currentUser).toEqual(user);
+    expect(store.errorMessage).toBe("新会话状态");
+    expect(store.loading).toBe(true);
+    expect(api.clearAuthToken).not.toHaveBeenCalled();
   });
 
   it("does not clear a newer session when an earlier login fails", async () => {

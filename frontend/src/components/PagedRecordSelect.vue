@@ -2,6 +2,7 @@
 import { ArrowLeft, ArrowRight, Refresh } from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, shallowRef, ref, watch } from "vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { isSessionChangedError } from "../utils/sessionGeneration";
 
 const props = defineProps<{
   modelValue?: number;
@@ -44,7 +45,8 @@ async function loadPage(targetPage = 1) {
     rows.value = result.items;
     total.value = result.total;
     page.value = result.page;
-  } catch {
+  } catch (requestError) {
+    if (isSessionChangedError(requestError)) return;
     if (request !== version) return;
     rows.value = [];
     total.value = 0;
@@ -66,7 +68,8 @@ async function resolveSelection() {
     if (request !== selectionVersion || id !== props.modelValue) return;
     selected.value = result;
     emit("selected", result);
-  } catch {
+  } catch (requestError) {
+    if (isSessionChangedError(requestError)) return;
     if (request === selectionVersion) selectedError.value = true;
   }
 }

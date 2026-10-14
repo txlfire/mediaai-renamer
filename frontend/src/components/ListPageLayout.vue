@@ -34,32 +34,34 @@ function toggleFilters() {
 
 <template>
   <section class="workspace-page list-page">
-    <el-card class="list-title-card" :class="{ 'is-merged': titleCardMode === 'merged' }" shadow="never">
-      <div class="list-title-card-line">
-        <h1>{{ title }}</h1>
-        <p>{{ description }}</p>
-      </div>
+    <header class="list-title-card" :class="{ 'is-merged': titleCardMode === 'merged' }">
+      <div class="list-title-card-body">
+        <div class="list-title-card-line">
+          <h1>{{ title }}</h1>
+          <p>{{ description }}</p>
+        </div>
 
-      <div v-if="titleCardMode === 'merged' && hasFilters" class="list-filter-row">
-        <div class="list-filter-primary">
-          <slot name="filters" />
-        </div>
-        <el-button
-          v-if="collapsibleFilters"
-          class="list-filter-toggle"
-          :icon="filtersExpanded ? ArrowUp : ArrowDown"
-          @click="toggleFilters"
-        >
-          {{ filtersExpanded ? messages.common.collapse : messages.common.expand }}
-        </el-button>
-        <div class="list-query-actions">
-          <slot name="queryAction" />
-        </div>
-        <div class="list-filter-actions">
-          <slot name="filterActions" />
+        <div v-if="titleCardMode === 'merged' && hasFilters" class="list-filter-row">
+          <div class="list-filter-primary">
+            <slot name="filters" />
+          </div>
+          <el-button
+            v-if="collapsibleFilters"
+            class="list-filter-toggle"
+            :icon="filtersExpanded ? ArrowUp : ArrowDown"
+            @click="toggleFilters"
+          >
+            {{ filtersExpanded ? messages.common.collapse : messages.common.expand }}
+          </el-button>
+          <div class="list-query-actions">
+            <slot name="queryAction" />
+          </div>
+          <div class="list-filter-actions">
+            <slot name="filterActions" />
+          </div>
         </div>
       </div>
-    </el-card>
+    </header>
 
     <div v-if="titleCardMode !== 'merged' && hasFilters" class="list-filter-row">
       <div class="list-filter-primary">

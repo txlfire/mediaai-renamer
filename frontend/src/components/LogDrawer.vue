@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import { Download, Refresh } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { ref } from "vue";
@@ -21,7 +22,8 @@ async function exportLogs() {
     link.download = "mediaai-runtime-logs.txt";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(messages.logs.exportFailed);
   } finally {
     exporting.value = false;
@@ -30,7 +32,7 @@ async function exportLogs() {
 </script>
 
 <template>
-  <el-drawer v-model="mediaStore.logDrawerVisible" :title="messages.logs.title" size="46%">
+  <el-drawer v-model="mediaStore.logDrawerVisible" :title="messages.logs.title" size="min(720px, calc(100vw - 24px))">
     <div class="drawer-toolbar">
       <el-button :icon="Refresh" @click="mediaStore.loadLogs">{{ messages.common.refresh }}</el-button>
       <el-button type="primary" :icon="Download" :loading="exporting" @click="exportLogs">{{ messages.logs.exportTxt }}</el-button>

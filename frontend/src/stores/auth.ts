@@ -14,7 +14,7 @@ import {
 } from "../api/client";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 import { resetWorkspaceState } from "./workspace";
-import { getSessionGeneration } from "../utils/sessionGeneration";
+import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -89,45 +89,52 @@ export const useAuthStore = defineStore("auth", {
     },
 
     async bootstrapAndLogin(username: string, displayName: string, password: string) {
+      let generation = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        await bootstrapAdmin({ username, displayName, password });
+        await sessionRequest(bootstrapAdmin({ username, displayName, password }), generation);
         this.bootstrapAvailable = false;
         const result = await loginApi({ username, password });
+        generation = getSessionGeneration();
         this.currentUser = result.user;
       } catch (error) {
+        if (generation !== getSessionGeneration()) throw error;
         this.clearSession(error instanceof Error ? error.message : messages.auth.bootstrapFailed);
         throw error;
       } finally {
-        this.loading = false;
+        if (generation === getSessionGeneration()) this.loading = false;
       }
     },
 
     async changePassword(currentPassword: string, newPassword: string) {
+      const generation = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        await changePasswordApi({ currentPassword, newPassword });
+        await sessionRequest(changePasswordApi({ currentPassword, newPassword }), generation);
         this.clearSession();
       } catch (error) {
+        if (generation !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.auth.changePasswordFailed;
         throw error;
       } finally {
-        this.loading = false;
+        if (generation === getSessionGeneration()) this.loading = false;
       }
     },
 
     async resetAdminPassword() {
+      const generation = getSessionGeneration();
       this.loading = true;
       this.errorMessage = "";
       try {
-        await resetAdminPasswordApi();
+        await sessionRequest(resetAdminPasswordApi(), generation);
       } catch (error) {
+        if (generation !== getSessionGeneration()) throw error;
         this.errorMessage = error instanceof Error ? error.message : messages.auth.resetAdminPasswordFailed;
         throw error;
       } finally {
-        this.loading = false;
+        if (generation === getSessionGeneration()) this.loading = false;
       }
     },
 

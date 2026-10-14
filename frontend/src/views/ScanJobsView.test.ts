@@ -24,6 +24,7 @@ vi.mock("../components/OperationLogDrawer.vue", () => ({ default: { render: () =
 vi.mock("../components/TablePagination.vue", () => ({ default: { render: () => null } }));
 vi.mock("../components/TextCell.vue", () => ({ default: { render: () => null } }));
 import ScanJobsView from "./ScanJobsView.vue";
+import { usePaginationStore } from "../stores/pagination";
 
 type Node = { children: Node[] };
 const renderer = createRenderer<Node, Node>({ createElement: () => ({ children: [] }), createText: () => ({ children: [] }),
@@ -92,9 +93,29 @@ describe("scan-job paging and independent activity", () => {
     expect(state.pagedScanJobs).toEqual([]);
   });
   it("requeries when the same mounted route changes its source", async () => {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    mocks.page.mockClear();
     reactive(mocks.route).query = { media_source_id: "2" };
-    await nextTick(); await nextTick(); await nextTick();
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(state.selectedSourceId).toBe(2);
+    expect(mocks.page.mock.calls.filter(([filters]) => !filters.active_only)).toHaveLength(1);
+    expect(mocks.page.mock.calls.filter(([filters]) => filters.active_only)).toHaveLength(1);
     expect(mocks.page).toHaveBeenCalledWith(expect.objectContaining({ media_source_id: 2 }));
+  });
+  it("retains independent activity checks for manual source selection", async () => {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    mocks.page.mockClear();
+    state.selectedSourceId = 2;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mocks.page.mock.calls.filter(([filters]) => !filters.active_only)).toHaveLength(0);
+    expect(mocks.page.mock.calls.filter(([filters]) => filters.active_only)).toHaveLength(1);
+  });
+  it("uses the server-clamped page without issuing another list request", async () => {
+    usePaginationStore().setPage("scan-jobs", 99);
+    mocks.page.mockImplementation(filters => Promise.resolve(filters.active_only ? empty : { ...empty, page: 2, total: 20 }));
+    mocks.page.mockClear();
+    await state.queryScanJobs(false);
+    expect(usePaginationStore().getState("scan-jobs").currentPage).toBe(2);
+    expect(mocks.page.mock.calls.filter(([filters]) => !filters.active_only)).toHaveLength(1);
   });
 });

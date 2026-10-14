@@ -128,6 +128,8 @@ def _query_previews(connection: sqlite3.Connection, preview_ids: list[int]) -> l
 
 
 def _previewSnapshot(settings: AppSettings, row: sqlite3.Row) -> dict:
+    from app.service.execution_guard_service import checkExecutionGuard
+    checkExecutionGuard(phase=f"probe:{row['id']}")
     snapshot = dict(row)
     if _is_remote_path_type(str(row["path_type"])):
         info = get_protocol(str(row["path_type"])).get_file_info(
@@ -260,6 +262,8 @@ def _build_item_plan(
     row: sqlite3.Row,
     duplicate_targets: Counter[str],
 ) -> tuple[str, str, str, str | None]:
+    from app.service.execution_guard_service import checkExecutionGuard
+    checkExecutionGuard(phase=f"probe:{row['id']}")
     source_path_value = str(row["file_path"])
     path_type = str(row["path_type"])
     target_name = str(row["edited_name"] or row["suggested_name"])
@@ -331,6 +335,8 @@ def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int], 
 
         # 探测可能耗时或阻塞，提交只核对数据库版本，不在写锁内再次探测文件。
         connection.execute("BEGIN IMMEDIATE")
+        from app.service.execution_guard_service import checkExecutionGuard
+        checkExecutionGuard(connection)
         if databaseSnapshot != [dict(row) for row in _query_previews(connection, preview_ids)]:
             raise ValueError("干跑探测期间预览或媒体源已变化，请重新核对")
         if auditContext is not None and auditContext.actor is not None:

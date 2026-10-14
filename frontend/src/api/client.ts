@@ -1,7 +1,7 @@
 import axios from "axios";
 
 import { zhCnMessages as messages } from "../locales/zh-CN";
-import { getSessionGeneration, invalidateSessionRequests, SessionChangedError } from "../utils/sessionGeneration";
+import { getSessionGeneration, invalidateSessionRequests, isSessionChangedError, SessionChangedError } from "../utils/sessionGeneration";
 
 export type HealthStatus = {
   app: string;
@@ -1082,7 +1082,7 @@ export async function bootstrapAdmin(
     const response = await post<AuthUser>("/auth/bootstrap-admin", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1093,7 +1093,7 @@ export async function fetchBootstrapStatus(
     const response = await httpClient.get<BootstrapStatus>("/auth/bootstrap-status");
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1107,7 +1107,7 @@ export async function login(
     setAuthToken(response.data.accessToken, payload.rememberLogin === true);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1120,7 +1120,7 @@ export async function changePassword(
     const response = await post<AuthUser>("/auth/change-password", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1130,7 +1130,7 @@ export async function resetAdminPassword(httpClient: ApiHttpClient = apiClient):
     const response = await post<AuthUser>("/auth/reset-admin-password", {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1140,7 +1140,7 @@ export async function logout(httpClient: ApiHttpClient = apiClient): Promise<voi
   try {
     await post("/auth/logout", {});
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   } finally {
     if (generation === getSessionGeneration()) clearAuthToken();
   }
@@ -1151,7 +1151,7 @@ export async function fetchCurrentUser(httpClient: ApiHttpClient = apiClient): P
     const response = await httpClient.get<AuthUser>("/auth/me");
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1160,7 +1160,7 @@ export async function fetchUsers(httpClient: ApiHttpClient = apiClient): Promise
     const response = await httpClient.get<UserListResult>("/users");
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1173,7 +1173,7 @@ export async function createUser(
     const response = await post<AuthUser>("/users", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1187,7 +1187,7 @@ export async function updateUser(
     const response = await put<AuthUser>(`/users/${userId}`, payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1201,7 +1201,7 @@ export async function resetUserPassword(
     const response = await post<AuthUser>(`/users/${userId}/reset-password`, payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1222,7 +1222,7 @@ export async function fetchAuditEvents(
     );
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1264,6 +1264,11 @@ function requireDelete(httpClient: ApiHttpClient) {
   return httpClient.delete.bind(httpClient);
 }
 
+function apiRequestError(error: unknown): Error {
+  // 保留会话取消类型，供调用方静默丢弃；真实失败继续提取接口错误详情。
+  return isSessionChangedError(error) ? error : new Error(apiErrorMessage(error));
+}
+
 function apiErrorMessage(error: unknown) {
   if (typeof error === "object" && error !== null && "response" in error) {
     const response = (error as { response?: { data?: { detail?: unknown } } }).response;
@@ -1290,7 +1295,7 @@ export async function createMediaSource(
     const response = await post<MediaSource>("/media-sources", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1317,7 +1322,7 @@ export async function updateMediaSource(
     const response = await put<MediaSourceMutationResult>(`/media-sources/${sourceId}`, payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1331,7 +1336,7 @@ export async function setMediaSourceEnabled(
     const response = await patch<MediaSource>(`/media-sources/${sourceId}/enabled`, { enabled });
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1344,7 +1349,7 @@ export async function deleteMediaSource(
     const response = await remove<MediaSourceMutationResult>(`/media-sources/${sourceId}`);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1359,7 +1364,7 @@ export async function bulkDeleteMediaSources(
     });
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1570,7 +1575,7 @@ export async function recoverRemoteOperation(
     );
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1790,7 +1795,7 @@ export async function verifyWebDavConditionalMove(
     );
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1803,7 +1808,7 @@ export async function testMediaSourceConnectionPayload(
     const response = await post<ConnectionTestResult>("/media-sources/test-connection", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1968,7 +1973,7 @@ export async function parseRenamePreviewWithAi(
     );
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -1991,7 +1996,7 @@ export async function parseRenamePreviewsWithAi(
     });
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2007,8 +2012,49 @@ export async function applyAiParseCandidate(
     });
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
+}
+
+export type BackgroundJobKind = "rename_dry_run" | "rollback_dry_run" | "metadata_batch" | "ai_batch";
+export type BackgroundJob = {
+  id: number;
+  request_id: string;
+  kind: BackgroundJobKind;
+  status: string;
+  total_count: number;
+  completed_count: number;
+  unknown_count: number;
+  success_count: number;
+  failed_count: number;
+  result_available: boolean;
+  result_cleared_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  result?: unknown;
+  items?: Array<{ item_id: number; status: string; outcome: unknown }>;
+};
+
+export type BackgroundJobPayload = {
+  rename_preview_ids?: number[];
+  plan_id?: number;
+  metadata_match_source?: MetadataMatchSource;
+  mode?: MultiSourceMatchMode;
+};
+
+export async function acceptBackgroundJob(kind: BackgroundJobKind, requestId: string, payload: BackgroundJobPayload,
+  httpClient: ApiHttpClient = apiClient): Promise<BackgroundJob> {
+  return (await requirePost(httpClient)<BackgroundJob>("/background-jobs", { ...payload, kind, request_id: requestId })).data;
+}
+
+export async function fetchBackgroundJob(requestId: string, includeResult = false,
+  httpClient: ApiHttpClient = apiClient): Promise<BackgroundJob> {
+  return (await httpClient.get<BackgroundJob>(`/background-jobs/${encodeURIComponent(requestId)}${includeResult ? "/result" : ""}`)).data;
+}
+
+export async function fetchRecentBackgroundJobs(httpClient: ApiHttpClient = apiClient): Promise<BackgroundJob[]> {
+  return (await httpClient.get<{ items: BackgroundJob[] }>("/background-jobs")).data.items;
 }
 
 export async function fetchSettings(
@@ -2053,7 +2099,7 @@ export async function testMetadataProviderConfig(
     const response = await post<MetadataProviderTestResult>(`/settings/metadata-providers/${provider}/test`, {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2066,7 +2112,7 @@ export async function testNamingTemplate(
     const response = await post<NamingTemplatePreviewResult>("/settings/naming/test", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2079,7 +2125,7 @@ export async function diffNamingTemplate(
     const response = await post<NamingTemplateDiffResult>("/settings/naming/diff", payload);
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2099,7 +2145,7 @@ export async function importNamingTemplateBundle(
     const response = await post<NamingTemplateBundle>("/settings/naming/import", { raw_text: rawText });
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2175,7 +2221,7 @@ export async function testTmdbSettings(
     const response = await post<TmdbConnectionTestResult>("/settings/tmdb/test", {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2187,7 +2233,7 @@ export async function testImdbSettings(
     const response = await post<ImdbConnectionTestResult>("/settings/imdb/test", {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2199,7 +2245,7 @@ export async function testAiSettings(
     const response = await post<AiConnectionTestResult>("/settings/ai/test", {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2212,7 +2258,7 @@ export async function testTmdbSettingsChannel(
     const response = await post<TmdbChannelTestResult>(`/settings/tmdb/test/${channel}`, {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 
@@ -2253,7 +2299,7 @@ export async function parsePendingFileWithAi(
     const response = await post<AiParseResult>(`/pending-files/${pendingFileId}/ai-parse`, {});
     return response.data;
   } catch (error) {
-    throw new Error(apiErrorMessage(error));
+    throw apiRequestError(error);
   }
 }
 

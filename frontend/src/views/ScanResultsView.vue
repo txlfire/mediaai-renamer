@@ -17,6 +17,7 @@ import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime, formatFileSize } from "../utils/displayFormat";
 import { fetchMediaFilesPage } from "../api/client";
+import { isSessionChangedError } from "../utils/sessionGeneration";
 
 const mediaStore = useMediaStore();
 const paginationStore = usePaginationStore();
@@ -100,7 +101,8 @@ async function queryMediaFiles(resetPage = true) {
     mediaStore.mediaFiles = result.items;
     mediaFileTotal.value = result.total;
     paginationStore.setPage("scan-results", result.page);
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (version === mediaRequestVersion) {
       mediaStore.mediaFiles = [];
       mediaFileTotal.value = 0;

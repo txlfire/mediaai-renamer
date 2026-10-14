@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import { Check, CircleCloseFilled, Delete, Edit, InfoFilled, Key, Loading, Plus, Refresh, SuccessFilled } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { isAxiosError } from "axios";
@@ -358,6 +359,7 @@ async function saveMetadataProvider(providerConfig: MetadataProviderConfig) {
     metadataProviderClearSecrets[provider] = false;
     ElMessage.success(pageText.metadataProviders.saveSuccess);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.metadataProviders.saveFailed);
   } finally {
     metadataProviderSaving.value = "";
@@ -376,6 +378,7 @@ async function testMetadataProvider(providerConfig: MetadataProviderConfig) {
       ElMessage.error(result.message || pageText.metadataProviders.statusFailed);
     }
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.metadataProviders.testFailed);
   } finally {
     metadataProviderTesting.value = "";
@@ -515,6 +518,7 @@ async function loadAuditEvents() {
     auditTotal.value = result.total;
     paginationStore.setPage("audit-events", result.page);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (!viewActive || version !== auditRequestVersion) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.audit.loadFailed);
   } finally {
@@ -550,6 +554,7 @@ async function loadUsers() {
     users.value = result.items;
     availableUserPermissions.value = result.permissions;
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (!viewActive || version !== usersRequestVersion) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.users.loadFailed);
   } finally {
@@ -597,6 +602,7 @@ async function saveUser() {
     await loadUsers();
     await authStore.loadStoredSession();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.users.saveFailed);
   }
 }
@@ -622,6 +628,7 @@ async function submitResetUserPassword() {
     passwordDialogVisible.value = false;
     await loadUsers();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.users.resetPasswordFailed);
   }
 }
@@ -735,6 +742,7 @@ function errorText(error: unknown) {
 }
 
 async function notifySaveFailed(error: unknown) {
+  if (isSessionChangedError(error)) return;
   await ElMessageBox.alert(`${pageText.saveFailedPrefix}${errorText(error)}`, pageText.saveFailedTitle, {
     confirmButtonText: messages.common.confirm,
     type: "error",
@@ -952,6 +960,7 @@ async function runNamingWorkbench() {
       namingWorkbenchResult.value = await testNamingTemplate(payload);
     }
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
   } finally {
     namingWorkbenchLoading.value = false;
@@ -972,6 +981,7 @@ function exportCurrentNamingTemplateBundle() {
       ElMessage.success(pageText.naming.exportSuccess);
     })
     .catch((error) => {
+      if (isSessionChangedError(error)) return;
       ElMessage.error(errorText(error));
     })
     .finally(() => {
@@ -1000,6 +1010,7 @@ async function importNamingTemplateFile(event: Event) {
     episodeNamingElements.value = parseNamingTemplate(imported.episode_template, "episode", pageText.naming);
     ElMessage.success(pageText.naming.importSuccess);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
   } finally {
     namingBundleLoading.value = false;
@@ -1097,6 +1108,7 @@ async function loadExternalSubmissionBlocks() {
     externalSubmissionBlocks.value = result.items;
     externalSubmissionBlockTotal.value = result.total;
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (!viewActive || version !== externalBlocksRequestVersion) return;
     ElMessage.error(errorText(error));
   } finally {
@@ -1137,6 +1149,7 @@ async function updateExternalSubmissionDecision(
     ElMessage.success(pageText.privacy.blockDecisionSaved);
     await loadExternalSubmissionBlocks();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
   }
 }
@@ -1165,6 +1178,7 @@ async function overrideExternalSubmission(record: ExternalSubmissionBlockRecord)
     externalSubmissionRequestRejected.value = false;
     externalSubmissionDialogVisible.value = true;
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
   } finally {
     externalSubmissionBusy.value = false;
@@ -1183,6 +1197,7 @@ async function confirmExternalSubmission() {
   try {
     externalSubmissionOutcome.value = await submitExternalSubmission(grant.snapshot.block_id, grant.id, externalSubmissionReason.value.trim());
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
     externalSubmissionRequestRejected.value = isAxiosError(error) && !!error.response && error.response.status >= 400 && error.response.status < 500;
     externalSubmissionOutcome.value = { id: grant.id, status: externalSubmissionRequestRejected.value ? "failed" : "unknown",
@@ -1206,6 +1221,7 @@ async function showExternalSubmissionOutcome(recordId: number) {
     externalSubmissionRequestRejected.value = false;
     externalSubmissionDialogVisible.value = true;
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
   } finally {
     externalSubmissionBusy.value = false;
@@ -1389,7 +1405,8 @@ async function refreshAiSettings() {
       aiLastTestTime.value = formatTestedAt(history.result.tested_at);
       return;
     }
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     // Keep settings refresh usable even if historical AI test data fails to load.
   }
   resetAiTestState();
@@ -1826,6 +1843,7 @@ async function executeTmdbTest() {
     savedTmdbSnapshot.value = testResult.value.config_snapshot ?? savedTmdbSnapshot.value;
     lastTestTime.value = formatTestedAt(testResult.value.tested_at) || formatClock(new Date());
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     testResult.value = {
       v4: { status: "failed", message: String(error) },
       v3: { status: "failed", message: String(error) },
@@ -1858,6 +1876,7 @@ async function executeImdbTest() {
     savedImdbSnapshot.value = imdbTestResult.value.config_snapshot;
     imdbLastTestTime.value = formatTestedAt(imdbTestResult.value.test_time) || formatClock(new Date());
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     imdbTestResult.value = {
       id: 1,
       connection_status: "failed",
@@ -1885,6 +1904,7 @@ async function executeAiTest() {
     savedAiSnapshot.value = result.config_snapshot ?? savedAiSnapshot.value;
     aiLastTestTime.value = formatTestedAt(result.tested_at) || formatClock(new Date());
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     aiTestResult.value = {
       status: "failed",
       message: error instanceof Error ? error.message : String(error),
@@ -1921,7 +1941,8 @@ async function testTmdbConnection() {
       await saveTmdbSettings({ rethrow: true });
       savedTmdbSnapshot.value = buildTmdbFormSnapshot();
       await executeTmdbTest();
-    } catch {
+    } catch (error) {
+      if (isSessionChangedError(error)) return;
       ElMessage.error(pageText.tmdb.saveBeforeTestFailed);
     }
   } catch {
@@ -1949,7 +1970,8 @@ async function testImdbConnection() {
       await saveImdbSettings({ rethrow: true });
       savedImdbSnapshot.value = buildImdbFormSnapshot();
       await executeImdbTest();
-    } catch {
+    } catch (error) {
+      if (isSessionChangedError(error)) return;
       ElMessage.error(pageText.imdb.saveBeforeTestFailed);
     }
   } catch {
@@ -1979,7 +2001,8 @@ async function testAiConnection() {
       const history = await settingsStore.loadAiTestResult({ silent: true });
       savedAiSnapshot.value = history.current_snapshot;
       await executeAiTest();
-    } catch {
+    } catch (error) {
+      if (isSessionChangedError(error)) return;
       ElMessage.error(pageText.ai.saveBeforeTestFailed);
     }
   } catch {
@@ -2000,7 +2023,8 @@ async function openTmdbTestDetail() {
         testResultSnapshot.value = history.result.config_snapshot;
         lastTestTime.value = formatTestedAt(history.result.tested_at);
       }
-    } catch {
+    } catch (error) {
+      if (isSessionChangedError(error)) return;
       // Keep the click behavior focused on the status bar message.
     }
   }
@@ -2023,7 +2047,8 @@ async function openImdbTestDetail() {
         imdbTestResult.value = history.result;
         imdbLastTestTime.value = formatTestedAt(history.result.test_time);
       }
-    } catch {
+    } catch (error) {
+      if (isSessionChangedError(error)) return;
       // Keep the click behavior focused on the status bar message.
     }
   }
@@ -2046,7 +2071,8 @@ async function openAiTestDetail() {
         aiTestResult.value = history.result;
         aiLastTestTime.value = formatTestedAt(history.result.tested_at);
       }
-    } catch {
+    } catch (error) {
+      if (isSessionChangedError(error)) return;
       // Keep the click behavior focused on the status bar message.
     }
   }
@@ -2154,11 +2180,17 @@ function restoreAiStatusPanelScroll() {
 }
 
 onMounted(async () => {
-  await settingsStore.loadSettings();
+  try {
+    await settingsStore.loadSettings();
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
+    throw error;
+  }
   syncForm();
   try {
     await settingsStore.loadMetadataProviders();
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     // 补充源配置加载失败不影响基础设置编辑。
   }
   try {
@@ -2169,7 +2201,8 @@ onMounted(async () => {
       testResultSnapshot.value = history.result.config_snapshot;
       lastTestTime.value = formatTestedAt(history.result.tested_at);
     }
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     // The page can still be edited and saved if historical test loading fails.
   }
   try {
@@ -2179,7 +2212,8 @@ onMounted(async () => {
       imdbTestResult.value = history.result;
       imdbLastTestTime.value = formatTestedAt(history.result.test_time);
     }
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     // The page can still be edited and saved if historical IMDb test loading fails.
   }
   try {
@@ -2189,7 +2223,8 @@ onMounted(async () => {
       aiTestResult.value = history.result;
       aiLastTestTime.value = formatTestedAt(history.result.tested_at);
     }
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     // The page can still be edited and saved if historical AI test loading fails.
   }
 });
@@ -2856,7 +2891,7 @@ onBeforeUnmount(() => {
                   <template #default="{ row }">
                     <div class="table-actions">
                       <el-tooltip :content="pageText.ai.editProfile" placement="top">
-                        <el-button
+                        <el-button :aria-label="pageText.ai.editProfile"
                           class="table-action-button action-edit"
                           :icon="Edit"
                           text
@@ -2865,7 +2900,7 @@ onBeforeUnmount(() => {
                         />
                       </el-tooltip>
                       <el-tooltip :content="pageText.ai.activateProfile" placement="top">
-                        <el-button
+                        <el-button :aria-label="pageText.ai.activateProfile"
                           class="table-action-button action-toggle"
                           :icon="Check"
                           text
@@ -2874,7 +2909,7 @@ onBeforeUnmount(() => {
                         />
                       </el-tooltip>
                       <el-tooltip :content="pageText.ai.deleteProfile" placement="top">
-                        <el-button
+                        <el-button :aria-label="pageText.ai.deleteProfile"
                           class="table-action-button action-delete"
                           :icon="Delete"
                           text
@@ -3972,16 +4007,12 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: var(--el-text-color-regular);
   cursor: pointer;
-  transition:
-    color 0.16s ease,
-    transform 0.16s ease;
+  transition: color 0.16s ease;
 }
 
 .settings-user-icon-action:hover {
-  color: var(--el-color-primary);
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .settings-user-icon-action:disabled {
@@ -4059,6 +4090,10 @@ onBeforeUnmount(() => {
 .settings-user-permission-readonly-grid :deep(.el-checkbox.is-disabled .el-checkbox__input.is-checked .el-checkbox__inner) {
   border-color: var(--el-color-primary);
   background-color: var(--el-color-primary);
+}
+
+.settings-user-permission-readonly-grid :deep(.el-checkbox.is-disabled .el-checkbox__input.is-checked .el-checkbox__inner::after) {
+  border-color: var(--brand-accent-ink);
 }
 
 .settings-user-reset-hint {

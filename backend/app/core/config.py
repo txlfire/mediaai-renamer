@@ -134,11 +134,38 @@ def externalRequestSettingsFromDict(value: dict) -> ExternalRequestSettings:
 
 
 @dataclass(frozen=True)
+class BackgroundJobSettings:
+    """只读探测与外发任务的有界执行和普通结果保留。"""
+
+    timeout_seconds: int = 3600
+    max_queued: int = 100
+    result_max_size_mb: int = 4
+    result_total_size_mb: int = 64
+    retention_days: int = 7
+
+
+def backgroundJobSettingsFromDict(values: dict) -> BackgroundJobSettings:
+    limits = {"timeout_seconds": (30, 86400), "max_queued": (1, 1000),
+              "result_max_size_mb": (1, 64), "result_total_size_mb": (1, 4096), "retention_days": (1, 365)}
+    if not isinstance(values, dict) or set(values) - limits.keys():
+        raise ValueError("后台任务配置字段无效")
+    parsed = {}
+    for key, (minimum, maximum) in limits.items():
+        value = values.get(key, getattr(BackgroundJobSettings(), key))
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"background_jobs.{key}超出有效范围")
+        parsed[key] = value
+    if parsed["result_total_size_mb"] < parsed["result_max_size_mb"]:
+        raise ValueError("后台结果总容量不能小于单任务容量")
+    return BackgroundJobSettings(**parsed)
+
+
+@dataclass(frozen=True)
 class AppSettings:
     """应用运行配置。"""
 
     app_name: str = "MediaAI Renamer"
-    version: str = "1.1.0"
+    version: str = "1.2.0"
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()
@@ -146,6 +173,7 @@ class AppSettings:
     auth: AuthSettings = AuthSettings()
     credential_key_file: Path | None = None
     external_requests: ExternalRequestSettings = field(default_factory=ExternalRequestSettings)
+    background_jobs: BackgroundJobSettings = field(default_factory=BackgroundJobSettings)
 
 
 DEFAULT_CONFIG_PATH = Path("config/config.toml")
@@ -223,5 +251,6 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         scan=scan,
         auth=auth,
         external_requests=externalRequestSettingsFromDict(config.get("external_requests", {})),
+        background_jobs=backgroundJobSettingsFromDict(config.get("background_jobs", {})),
         credential_key_file=(Path(str(paths_config["credential_key_file"])) if paths_config.get("credential_key_file") else None),
     )

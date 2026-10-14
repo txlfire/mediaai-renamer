@@ -22,10 +22,13 @@ import { useAppStore } from "./stores/app";
 import { useAuthStore } from "./stores/auth";
 import { routeLoading } from "./router";
 
+import BackgroundJobsButton from "./components/BackgroundJobsButton.vue";
+
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const systemThemeQuery = typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
 const menuItems = computed(() =>
   [
@@ -73,7 +76,7 @@ function selectThemeMode(value: unknown) {
 }
 
 function selectThemePalette(value: unknown) {
-  if (value === "default" || value === "candy") appStore.setThemePalette(value);
+  if (value === "default" || value === "candy" || value === "contrast") appStore.setThemePalette(value);
 }
 
 async function logout() {
@@ -99,13 +102,13 @@ onMounted(() => {
   void authStore.loadStoredSession();
   window.addEventListener("mediaai:auth-expired", handleAuthExpired);
   window.addEventListener("mediaai:audit-pending", handleAuditPending);
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateSystemTheme);
+  systemThemeQuery?.addEventListener("change", updateSystemTheme);
 });
 
 onUnmounted(() => {
   window.removeEventListener("mediaai:auth-expired", handleAuthExpired);
   window.removeEventListener("mediaai:audit-pending", handleAuditPending);
-  window.matchMedia("(prefers-color-scheme: dark)").removeEventListener("change", updateSystemTheme);
+  systemThemeQuery?.removeEventListener("change", updateSystemTheme);
 });
 </script>
 
@@ -164,7 +167,7 @@ onUnmounted(() => {
 
         <div class="version-theme-row">
           <span v-if="!appStore.sidebarCollapsed" class="version-text">{{ versionText }}</span>
-          <el-popover placement="right-end" trigger="click" :width="260">
+          <el-popover placement="right-end" trigger="click" :width="340">
             <template #reference>
               <el-button class="theme-toggle" circle :aria-label="themeLabel" :title="themeLabel">
                 <el-icon><component :is="isDarkTheme ? Sunny : Moon" /></el-icon>
@@ -184,6 +187,7 @@ onUnmounted(() => {
                 <el-radio-group :model-value="appStore.themePalette" :aria-label="messages.app.theme.palette" @change="selectThemePalette">
                   <el-radio-button value="default"><span class="palette-swatch palette-swatch-default" aria-hidden="true"></span>{{ messages.app.theme.defaultPalette }}</el-radio-button>
                   <el-radio-button value="candy"><span class="palette-swatch palette-swatch-candy" aria-hidden="true"></span>{{ messages.app.theme.candyPalette }}</el-radio-button>
+                  <el-radio-button value="contrast"><span class="palette-swatch palette-swatch-contrast" aria-hidden="true"></span>{{ messages.app.theme.contrastPalette }}</el-radio-button>
                 </el-radio-group>
               </fieldset>
             </div>
@@ -201,6 +205,7 @@ onUnmounted(() => {
 
     <main class="app-workbench" :aria-busy="routeLoading">
       <div class="workbench-topbar">
+        <BackgroundJobsButton />
         <el-input class="global-search" :placeholder="messages.app.globalSearchPlaceholder" :prefix-icon="Search" clearable />
       </div>
       <RouterView />

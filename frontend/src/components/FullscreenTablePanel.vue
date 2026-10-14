@@ -10,6 +10,7 @@ const props = withDefaults(defineProps<{
   variant: "default",
 });
 
+// 模板的Teleport延后解析工作区，兼容父工作区在同一轮挂载中创建。
 const isFullscreen = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
 const fullscreenIcon = "\u26f6";
@@ -60,7 +61,7 @@ watch(isFullscreen, async () => {
 </script>
 
 <template>
-  <Teleport to=".app-workbench" :disabled="!isFullscreen">
+  <Teleport defer to=".app-workbench" :disabled="!isFullscreen">
     <div
       ref="panelRef"
       class="fullscreen-table-panel"

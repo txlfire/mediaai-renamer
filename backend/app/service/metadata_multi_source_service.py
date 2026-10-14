@@ -18,6 +18,7 @@ from app.service.metadata_provider_service import PROVIDER_TMDB
 from app.service.settings_service import get_effective_settings
 from app.service.external_request_budget_service import transportDeadline, ExternalBudgetWaitError, ExternalBudgetUnavailable
 from contextlib import nullcontext
+from contextvars import copy_context
 
 logger = get_logger(__name__)
 
@@ -46,7 +47,8 @@ def _startProvider(item, parsed, deadline=None):
             siteSlot.release()
             _globalSlots.release()
     try:
-        Thread(target=execute, name=f"metadata-{item.provider}", daemon=True).start()
+        context = copy_context()
+        Thread(target=lambda: context.run(execute), name=f"metadata-{item.provider}", daemon=True).start()
     except Exception:
         siteSlot.release()
         _globalSlots.release()

@@ -4,6 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matchRenamePreviewsMetadataWithAiFallback, parseRenamePreviewsWithAi } from "../api/client";
 import { usePreviewStore } from "./preview";
 
+vi.mock("../api/backgroundJobs", async () => {
+  const client = await import("../api/client");
+  return {
+    parseRenamePreviewsWithAiBackground: client.parseRenamePreviewsWithAi,
+    matchRenamePreviewsMultiSourceBackground: vi.fn(),
+  };
+});
+
 vi.mock("../api/client", () => ({
   fetchRenamePreviews: vi.fn(async () => [
     {

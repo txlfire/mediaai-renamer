@@ -5,7 +5,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveTheme, useAppStore, type ThemeMode } from "./app";
+import { resolveTheme, useAppStore, type ThemeMode, type ThemePalette } from "./app";
 
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
@@ -20,7 +20,7 @@ function installLocalStorageMock() {
 describe("theme state", () => {
   beforeEach(() => {
     installLocalStorageMock();
-    vi.stubGlobal("document", { documentElement: { dataset: {} as Record<string, string> } });
+    vi.stubGlobal("document", { documentElement: { dataset: {} as Record<string, string>, style: { colorScheme: "" } } });
     localStorage.clear();
     setActivePinia(createPinia());
   });
@@ -39,6 +39,7 @@ describe("theme state", () => {
     expect(store.themeMode).toBe("dark");
     expect(localStorage.getItem("mediaai-theme-mode")).toBe("dark");
     expect(document.documentElement.dataset.scheme).toBe("dark");
+    expect(document.documentElement.style.colorScheme).toBe("dark");
     expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 
@@ -62,6 +63,39 @@ describe("theme state", () => {
     expect(resolveTheme("system", matchMedia)).toBe("dark");
     expect(resolveTheme("light", matchMedia)).toBe("light");
     expect(resolveTheme("dark", matchMedia)).toBe("dark");
+  });
+
+  it.each<ThemePalette>(["default", "candy", "contrast"])("restores complete %s theme without resetting workspace storage", palette => {
+    localStorage.setItem("mediaai-auth-token", "synthetic-session");
+    localStorage.setItem("mediaai-filter-fixture", "keep");
+    localStorage.setItem("mediaai-sidebar-collapsed", "true");
+    const store = useAppStore();
+    store.setThemePalette(palette);
+    store.setThemeMode("dark");
+    store.$reset();
+    store.loadThemeMode();
+    store.loadSidebarCollapsed();
+    expect(store.themePalette).toBe(palette);
+    expect(document.documentElement.dataset).toMatchObject({ palette, scheme: "dark" });
+    expect(store.sidebarCollapsed).toBe(true);
+    expect(localStorage.getItem("mediaai-auth-token")).toBe("synthetic-session");
+    expect(localStorage.getItem("mediaai-filter-fixture")).toBe("keep");
+  });
+
+  it("system preference changes preserve contrast theme and independent mode storage", () => {
+    let prefersDark = true;
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: prefersDark }) });
+    const store = useAppStore();
+    store.setThemePalette("contrast");
+    store.setThemeMode("system");
+    expect(store.resolvedTheme).toBe("dark");
+    prefersDark = false;
+    store.applyThemeMode();
+    expect(store.resolvedTheme).toBe("light");
+    expect(store.themePalette).toBe("contrast");
+    expect(localStorage.getItem("mediaai-theme-mode")).toBe("system");
+    expect(localStorage.getItem("mediaai-theme-palette")).toBe("contrast");
+    vi.unstubAllGlobals();
   });
 
   it("ignores invalid stored theme modes", () => {

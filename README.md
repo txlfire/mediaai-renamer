@@ -2,14 +2,14 @@
 
 MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、元数据匹配与安全重命名工具。它将媒体源管理、增量扫描、命名预览、外部元数据补充、真实重命名、回滚和审计集中在一个 Web 界面中。
 
-[![Release](https://img.shields.io/badge/release-v1.0.1-2f80ed)](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.0.1)
+[![Release](https://img.shields.io/badge/release-v1.2.0-2f80ed)](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.2.0)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776ab)](https://www.python.org/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-4c566a)](LICENSE)
 
-当前开发版本为 `1.1.0`，最新已发布稳定版本为 `v1.0.1`。项目已进入稳定维护阶段，后续以问题修复、兼容性和使用体验优化为主。
+当前源码版本为 `1.2.0`，发布包、镜像及发布状态以 [GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases) 和对应 CI 结果为准。
 
-当前开发分支的全项目审查修复尚未发布：分页、一次性外部提交授权、扫描/安全重命名/回滚/待处理迁移后台受理、外部HTTP共享速率与并发预算、独立凭据密钥及依赖哈希锁等进度见修复计划（`docs/development/reviews/remediation-plan-2026-10-01.md`）。开发分支验证不代表稳定镜像已经包含这些改动。
+v1.2.0包含服务端分页、一次性外部提交授权、文件任务与四类探测/匹配后台受理、HTTP共享预算、独立凭据密钥、依赖哈希锁和三套完整主题。详见[发布说明](docs/releases/v1.2.0.md)；真实组合缩放、NFS硬阻塞和正式实例回退不由本机测试替代。
 
 > 注：`docs/development/reviews/` 与 `design-plans/` 为双方互审产物，**本地保留、不入版本库**，因此在仓库视图中不可见；本机检出中路径有效。
 
@@ -42,11 +42,12 @@ MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、�
 
 ### 管理与审计
 
-- 外观支持跟随系统、亮色、暗色，以及独立选择默认或糖果粉紫配色，保存在当前浏览器。
+- 外观支持跟随系统、亮色、暗色，以及独立选择清爽专业、柔和彩色、精密高对比三套完整主题，保存在当前浏览器。
 - 提供本地用户、直接权限、管理员初始化和默认密码修改提醒。
 - 支持浏览器密码保存，以及由管理员配置有效期的“一周免登录”会话。
 - 记录登录、配置、媒体源、外部提交、重命名和回滚等审计事件。
 - 统一查看扫描任务、重命名批次、回滚计划和操作日志，并支持归档与恢复。
+- 顶部后台任务入口查看干跑、多源批量和AI批量进度、逐项结果及日志；未知结果先核查，不自动重试，结果清理后提示并禁用查看。
 - 系统设置覆盖刮削、补充元数据源、AI、扫描、敏感词、命名规则、共享目录和通用配置。
 
 ## 支持范围
@@ -76,10 +77,10 @@ FTP、FTPS、SFTP、S3 / MinIO 和 HTTP WebDAV 当前未实现，不应按可用
 ```bash
 git clone https://github.com/txlfire/mediaai-renamer.git
 cd mediaai-renamer
-git checkout v1.0.1
+git checkout v1.2.0
 
 cp config/config.example.toml config/config.toml
-printf "MEDIAAI_IMAGE_TAG=v1.0.1\n" > .env
+printf "MEDIAAI_IMAGE_TAG=v1.2.0\n" > .env
 
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
@@ -125,7 +126,7 @@ Copy-Item config/config.example.toml config/config.toml
 
 `config/config.toml`、数据库、日志、媒体路径、密码、Token 和 API Key 均不应提交到 Git。生产环境建议同时限制配置文件权限，并定期备份 `data/`。
 
-当前开发分支使用独立凭据密钥：优先读取环境秘密 `MEDIAAI_CREDENTIAL_KEY`，否则使用配置的 `credential_key_file` 或默认 `data/secrets/credentials.key`。数据库备份与密钥备份分别保管，恢复时必须成对使用；缺失原密钥时不能用新密钥替换，也不能清空旧凭据。此说明不用于推断旧稳定版本的加密格式。
+v1.2.0使用独立凭据密钥：优先读取环境秘密 `MEDIAAI_CREDENTIAL_KEY`，否则使用配置的 `credential_key_file` 或默认 `data/secrets/credentials.key`。数据库备份与密钥备份分别保管，恢复时必须成对使用；缺失原密钥时不能用新密钥替换，也不能清空旧凭据。旧版升级先保持原数据库路径并备份；回退须恢复匹配的旧库及密钥，不能让旧源码读取新schema或新密文。
 
 ## 本地开发
 
@@ -189,8 +190,10 @@ npm run check:encoding
 - [开发指南](docs/development/development-guide.md)
 - [常用命令与脚本](docs/development/common-tasks.md)
 - [系统设计](docs/design/project-design.md)
+- [完整主题设计](docs/design/workbench-theme-design.md)与[实施及验收入口](docs/development/ui-refresh/implementation-plan.md)
+- [后台任务接口与维护](docs/development/background-jobs/api-and-maintenance.md)
 - [全项目审查导航与修复进度](docs/development/reviews/README.md)（**本地保留，仓库视图中不可见**）
-- [v1.0.1 发布说明](docs/releases/v1.0.1.md)
+- [v1.2.0 发布说明](docs/releases/v1.2.0.md)
 - [历史文档归档](docs/archive/README.md)
 
 ## 发布与分支

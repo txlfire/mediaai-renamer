@@ -31,6 +31,7 @@ from app.api.settings import router as settings_router
 from app.api.shared_protocols import router as shared_protocols_router
 from app.api.tasks import router as tasks_router
 from app.api.users import router as users_router
+from app.api.background_jobs import router as background_jobs_router
 from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
@@ -41,6 +42,7 @@ from app.service.scan_worker_service import runScanWorkerLoop
 from app.service.rename_worker_service import runRenameWorkerLoop
 from app.service.rollback_worker_service import runRollbackWorkerLoop
 from app.service.pending_move_worker_service import runPendingMoveWorkerLoop
+from app.service.background_job_worker_service import runBackgroundJobLoop
 from app.service.scan_service import recover_interrupted_scan_jobs
 from app.service.settings_service import resolveRuntimeLogging
 from app.web import mount_frontend
@@ -119,12 +121,13 @@ def create_app(
         renames = asyncio.create_task(runRenameWorkerLoop(settings, stop))
         rollbacks = asyncio.create_task(runRollbackWorkerLoop(settings, stop))
         pendingMoves = asyncio.create_task(runPendingMoveWorkerLoop(settings, stop))
+        backgroundJobs = asyncio.create_task(runBackgroundJobLoop(settings, stop))
         try:
             yield
         finally:
             stop.set()
             # 等待本轮维护结束，不能取消线程后假称文件/数据库工作已停止。
-            await asyncio.gather(maintenance, scans, renames, rollbacks, pendingMoves)
+            await asyncio.gather(maintenance, scans, renames, rollbacks, pendingMoves, backgroundJobs)
             shutdown_logging()
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -136,6 +139,7 @@ def create_app(
     private_dependencies = [Depends(require_authenticated_user())]
     app.include_router(audit_router, dependencies=private_dependencies)
     app.include_router(users_router, dependencies=private_dependencies)
+    app.include_router(background_jobs_router, dependencies=private_dependencies)
     app.include_router(health_router)
     app.include_router(media_sources_router, dependencies=private_dependencies)
     app.include_router(shared_protocols_router, dependencies=private_dependencies)

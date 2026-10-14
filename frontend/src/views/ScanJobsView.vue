@@ -19,6 +19,7 @@ import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime, formatScanJobStatus } from "../utils/displayFormat";
+import { isSessionChangedError } from "../utils/sessionGeneration";
 
 const mediaStore = useMediaStore();
 const authStore = useAuthStore();
@@ -145,7 +146,7 @@ async function startScan() {
     scanProgressSummary.value = pageText.scanAcceptanceUnknown;
   }
   } catch (error) {
-    if (error !== "cancel" && error !== "close") throw error;
+    if (!isSessionChangedError(error) && error !== "cancel" && error !== "close") throw error;
   } finally {
     scanSubmitting.value = false;
   }
@@ -163,7 +164,8 @@ async function refreshActiveScan() {
       applyScanJob(activeScanJob.value);
       scanObserver.start(activeScanJob.value.id);
     } else scanObserver.stop();
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (viewActive && version === activeRequestVersion) {
       activeScanJob.value = null;
       ElMessage.error(pageText.loadFailed);
@@ -188,7 +190,8 @@ async function queryScanJobs(resetPage = true) {
     scanJobTotal.value = result.total;
     paginationStore.setPage("scan-jobs", result.page);
     await refreshActiveScan();
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (viewActive && version === jobRequestVersion) {
       pagedScanJobs.value = [];
       scanJobTotal.value = 0;
@@ -220,7 +223,8 @@ async function loadScanModeSuggestion(mediaSourceId: number) {
     if (!viewActive || version !== suggestionVersion || selectedSourceId.value !== mediaSourceId) return;
     mediaStore.scanModeSuggestion = suggestion;
     scanMode.value = suggestion.recommended_mode;
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (!viewActive || version !== suggestionVersion || selectedSourceId.value !== mediaSourceId) return;
     mediaStore.scanModeSuggestion = null;
     scanMode.value = "full";
@@ -310,7 +314,7 @@ watch(selectedSourceId, async (value) => {
   const sourceVersion = ++sourceRequestVersion;
   scanObserver.stop();
   scanProgressVisible.value = false;
-  jobRequestVersion += 1;
+  const queryVersion = ++jobRequestVersion;
   suggestionVersion += 1;
   jobsLoading.value = false;
   pagedScanJobs.value = [];
@@ -323,11 +327,15 @@ watch(selectedSourceId, async (value) => {
     scanMode.value = "full";
     return;
   }
-  void refreshActiveScan();
+  // 路由/初始化紧接着会查询历史并检查活动任务，只有单独选源才另做活动检查。
+  await nextTick();
+  if (!viewActive || sourceVersion !== sourceRequestVersion) return;
+  if (queryVersion === jobRequestVersion) void refreshActiveScan();
   try {
     const source = await fetchMediaSource(value);
     if (viewActive && sourceVersion === sourceRequestVersion && value === selectedSourceId.value) selectedSource.value = source;
-  } catch {
+  } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (viewActive && sourceVersion === sourceRequestVersion) ElMessage.error(messages.selectors.selectionUnavailable);
   }
   await loadScanModeSuggestion(value);
@@ -426,7 +434,7 @@ watch(() => route.query.media_source_id, async (value) => {
                 :content="row.error_message"
                 placement="top"
               >
-                <button class="scan-status-detail-button" type="button" @click.stop="openScanLog(row)">
+                <button :aria-label="row.error_message" class="scan-status-detail-button" type="button" @click.stop="openScanLog(row)">
                   <TextCell :value="scanStatusText(row)" :max-length="tableDisplayConfig.statusMaxLength" />
                 </button>
               </el-tooltip>
@@ -481,7 +489,7 @@ watch(() => route.query.media_source_id, async (value) => {
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :content="messages.scanJobs.viewResults" placement="top">
-                <el-button
+                <el-button :aria-label="messages.scanJobs.viewResults"
                   class="table-action-button action-view"
                   :icon="Files"
                   text
@@ -490,7 +498,7 @@ watch(() => route.query.media_source_id, async (value) => {
                 />
               </el-tooltip>
               <el-tooltip :content="messages.scanJobs.viewPreviews" placement="top">
-                <el-button
+                <el-button :aria-label="messages.scanJobs.viewPreviews"
                   class="table-action-button action-magic"
                   :icon="MagicStick"
                   text
@@ -499,7 +507,7 @@ watch(() => route.query.media_source_id, async (value) => {
                 />
               </el-tooltip>
               <el-tooltip :content="canReadLogs ? messages.scanJobs.viewLogs : messages.auth.permissionDenied" placement="top">
-                <el-button
+                <el-button :aria-label="canReadLogs ? messages.scanJobs.viewLogs : messages.auth.permissionDenied"
                   class="table-action-button action-view"
                   :icon="Notebook"
                   :disabled="!canReadLogs"

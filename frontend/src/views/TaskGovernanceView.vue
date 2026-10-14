@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSessionChangedError } from "../utils/sessionGeneration";
 import { Box, CircleClose, Document, Notebook, Refresh, RefreshLeft, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from "vue";
@@ -111,6 +112,7 @@ async function loadTasks() {
     taskTotal.value = result.total;
     paginationStore.setPage("task-governance", result.page);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (version !== taskRequestVersion) return;
     tasks.value = [];
     taskTotal.value = 0;
@@ -144,6 +146,7 @@ async function loadRemoteOperations() {
     remoteLoaded.value = true;
     paginationStore.setPage("webdav-recovery", result.page);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (version !== remoteRequestVersion) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.webdav.loadFailed);
   } finally {
@@ -204,6 +207,7 @@ async function loadAuditIntents() {
     auditIntentLoaded.value = true;
     paginationStore.setPage("audit-intents", page.page);
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (version !== auditIntentRequestVersion) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.auditIntents.loadFailed);
   } finally {
@@ -254,6 +258,7 @@ async function submitCloseIntent() {
     ElMessage.success(pageText.auditIntents.closeSuccess);
     await loadAuditIntents();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     ElMessage.error(error instanceof Error ? error.message : pageText.auditIntents.closeFailed);
   } finally {
     closeDialog.submitting = false;
@@ -384,6 +389,7 @@ async function handleRecoverRemoteOperation(row: RemoteOperationItem) {
     ElMessage.success(successMessage);
     await loadRemoteOperations();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (error === "cancel" || error === "close") {
       return;
     }
@@ -429,6 +435,7 @@ async function toggleTaskArchive(row: TaskGovernanceItem) {
     ElMessage.success(nextArchived ? pageText.archiveSuccess : pageText.restoreSuccess);
     await loadTasks();
   } catch (error) {
+    if (isSessionChangedError(error)) return;
     if (error === "cancel" || error === "close") {
       return;
     }
@@ -457,6 +464,7 @@ onBeforeUnmount(() => {
           <el-option :label="pageText.taskTypes.rename_operation" value="rename_operation" />
           <el-option :label="pageText.taskTypes.rollback_plan" value="rollback_plan" />
           <el-option :label="pageText.taskTypes.pending_move" value="pending_move" />
+          <el-option :label="pageText.taskTypes.background_job" value="background_job" />
         </el-select>
         <el-select v-model="filters.status" class="source-select" clearable :placeholder="pageText.filters.status">
           <el-option v-for="item in pageText.statusOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -603,13 +611,13 @@ onBeforeUnmount(() => {
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :content="pageText.openTarget" placement="top">
-                <el-button class="table-action-button action-view" :icon="Document" text circle @click="openTaskTarget(row)" />
+                <el-button :aria-label="pageText.openTarget" class="table-action-button action-view" :icon="Document" text circle @click="openTaskTarget(row)" />
               </el-tooltip>
               <el-tooltip :content="pageText.viewLog" placement="top">
-                <el-button class="table-action-button action-view" :icon="Notebook" :disabled="!canReadLogs" :title="canReadLogs ? '' : messages.auth.permissionDenied" text circle @click="openTaskLog(row)" />
+                <el-button :aria-label="pageText.viewLog" class="table-action-button action-view" :icon="Notebook" :disabled="!canReadLogs" :title="canReadLogs ? '' : messages.auth.permissionDenied" text circle @click="openTaskLog(row)" />
               </el-tooltip>
               <el-tooltip :content="row.archived ? pageText.restoreTask : pageText.archiveTask" placement="top">
-                <el-button
+                <el-button :aria-label="row.archived ? pageText.restoreTask : pageText.archiveTask"
                   :class="['table-action-button', row.archived ? 'action-sync' : 'action-edit']"
                   :icon="row.archived ? RefreshLeft : Box"
                   text
@@ -710,7 +718,7 @@ onBeforeUnmount(() => {
             <template #default="{ row }">
               <div class="table-actions">
                 <el-tooltip :content="pageText.webdav.viewDetail" placement="top">
-                  <el-button
+                  <el-button :aria-label="pageText.webdav.viewDetail"
                     class="table-action-button action-view"
                     :icon="Document"
                     text
@@ -719,7 +727,7 @@ onBeforeUnmount(() => {
                   />
                 </el-tooltip>
                 <el-tooltip v-if="canRecoverRemoteOperation(row)" :content="hasRecoveryPermission(row) ? pageText.webdav.recover : messages.auth.permissionDenied" placement="top">
-                  <el-button
+                  <el-button :aria-label="hasRecoveryPermission(row) ? pageText.webdav.recover : messages.auth.permissionDenied"
                     class="table-action-button action-sync"
                     :icon="RefreshLeft"
                     :loading="isRecovering(row.id)"
@@ -781,7 +789,7 @@ onBeforeUnmount(() => {
                   :content="canCloseAuditIntent ? pageText.auditIntents.close : messages.auth.permissionDenied"
                   placement="top"
                 >
-                  <el-button
+                  <el-button :aria-label="canCloseAuditIntent ? pageText.auditIntents.close : messages.auth.permissionDenied"
                     class="table-action-button action-delete"
                     :icon="CircleClose"
                     :disabled="!canCloseAuditIntent || !['pending', 'review_required'].includes(row.status)"
