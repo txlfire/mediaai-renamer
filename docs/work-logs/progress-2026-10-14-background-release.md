@@ -128,3 +128,22 @@ root .venv为Python3.14.6，不能拿它替代锁定3.11发布回归证据。测
 主流水线38569127567的Linux/Python3.11完整852项有2个旧测试缺陷：UrlRedactionTest只指定临时日志目录，数据库仍为项目默认data，Windows因已有本机库而通过，Linux空库报无system_settings；因此先前“全回归不读取正式库”的断言不成立，不能隐瞒。已把该fixture数据库也放临时目录并初始化，不自行回退/删除本机库。迁移API测试把合法target_directory/结果路径也当异常泄漏，在Windows靠JSON反斜杠转义误通过；改为明确保留合法结果路径，只禁止error_message和item.message回显内部路径。生产接口未改。
 
 增加候选镜像load→隔离容器健康/版本/SPA/认证边界/schema实跑→push门禁，所有测试仍依赖verify成功。仅创建并清理CI runner临时容器，不部署用户NAS。日志完整保留，需等待下一轮CI及制品来源验证后才能发布。
+
+## 最终发布与接续检查点
+
+2026-10-14 21:38（Asia/Shanghai）正式发布v1.2.0。本节覆盖上述待发布状态，不删除历史失败、暂停及中间计数。当前代码/标签来源为6d32bb986d4e9a2a70481c5157967429970252a3；develop/main已推送，工作区在文档收尾前干净。后续文档提交不移动标签，不改变运行源码或ZIP。
+
+| 项目 | 最终事实 | 证据 |
+| --- | --- | --- |
+| Windows完整后端 | 852项、361.164秒，840通过+12受控WebDAV跳过，无错误/失败 | .codex/run-logs/release-backend-portable-final-1.2.0-2026-10-14.log |
+| main CI | 38570539686成功；Linux/Python3.11完整852项，836通过+16平台/集成跳过；真实TLS WebDAV12项通过2.005秒 | .codex/run-logs/ci-release-main-success-38570539686.log |
+| 标签CI | 38572222807成功；统一镜像先运行健康/版本/SPA/认证/schema39门禁，再上传 | .codex/run-logs/ci-release-tag-success-38572222807.log |
+| 固定版本镜像 | 匿名读取成功，linux/amd64、版本1.2.0、源码6d32bb9；摘要sha256:0f3aa1093f3414281d990561e28e25131dd3d04e3761e341cf0a1af4e387cafb | .codex/run-logs/release-registry-verified-1.2.0-2026-10-14.log |
+| Release | 非草稿、非预发布，资产uploaded，732380字节；远端下载SHA256与本地一致 | gh release view/download及Get-FileHash |
+| 标准服务 | 项目脚本status确认前端5173、后端8970均running；没有手动停止或替换标准实例 | npm.cmd run dev:windows -- status |
+
+正式链接：[v1.2.0](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.2.0)。下载ZIP SHA256仍为f69a3f8aead315609fcb76481356758a38b44cc8299f7a0c6fb3450e7ac86343。main/latest首次镜像摘要387a8eae886f13cc3a599549713d5a7cc9714947af6214a6b8fc23faccb80e70不作为固定版本摘要使用；后续main构建可能更新滚动标签，固定v1.2.0不变。
+
+F02、完整主题及本轮可执行发布工程已完成限定验证。剩余仅按实际边界跟踪：F04安全审计独立保留/物理维护及登录/内网路径政策待确认；真实4K组合缩放/笔记本、完整键盘/WCAG、NFS硬阻塞、真实供应商混合负载与操作系统总内存、正式实例升级回退仍待环境或授权。188 NAS不满足条件MOVE时保持只读，不绕过门禁；Windows临时TLS fixture间歇性unknown未被Linux通过抹去。不使用聊天历史密钥、不部署NAS、不自动清审计或VACUUM。
+
+后续恢复先读本节及统一审核状态第6.5节，再核对Git、版本和脚本status。标准服务保持运行；启动规约见docs/development/development-guide.md。早期UrlRedactionTest误读默认数据库的事实已登记，不自行回退或删除实际库。现有Vite包体、Starlette测试客户端及Actions运行时弃用告警保留，未作为本轮失败掩盖。
