@@ -7,6 +7,8 @@ RUN apk add --no-cache curl openssl \
         PyYAML==6.0.2
 
 COPY entrypoint.sh /usr/local/bin/mediaai-webdav-entrypoint
+COPY strict_etag_provider.py /opt/mediaai-test/strict_etag_provider.py
+ENV PYTHONPATH=/opt/mediaai-test
 RUN chmod +x /usr/local/bin/mediaai-webdav-entrypoint
 
 HEALTHCHECK --interval=2s --timeout=3s --start-period=3s --retries=30 \

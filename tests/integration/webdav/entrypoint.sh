@@ -52,7 +52,9 @@ ssl_certificate: ${certDir}/server.crt
 ssl_private_key: ${certDir}/server.key
 ssl_certificate_chain: ${certDir}/ca.crt
 provider_mapping:
-  "/": "${dataDir}"
+  "/":
+    class: strict_etag_provider.StrictEtagProvider
+    args: ["${dataDir}"]
 http_authenticator:
   accept_basic: true
   accept_digest: false

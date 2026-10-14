@@ -118,3 +118,7 @@ root .venv为Python3.14.6，不能拿它替代锁定3.11发布回归证据。测
 79暂存文件启发式凭据检查、版本一致性和diff检查通过；排除.codex/.agents、互审目录、实际config/数据库/日志。提交9f3f7c3已推送develop/main；main经过祖先检查后CAS快进，未切换工作目录、未让运行服务读取旧源码。标准代理健康1.2.0/ok。
 
 远端首次WebDAV任务38565921584/38565921281失败，原日志ci-webdav-failed-38565921584.log保留。12:43 UTC的10个真实集成中3项MOVE失败；测试调用仍只传conditional_move_status却遗漏expected_source_version，被当前强ETag门禁在外发前正确拒绝。只更新集成fixture：实际运行端点三语义能力验证，通过后绑定强ETag；新增缺版本不写和错ETag服务端412且文件不变断言。不修改生产写入门禁、不跳过测试、不碰188 NAS。修正后须再等待远端协议门禁，不把本机跳过当集成通过；尚未创建标签或Release。
+
+第二轮c8d949f真实协议验证拒绝WsgiDAV默认未加引号DAV:getetag（38566596297日志保留），未放宽客户端。核对4.3.3实际源码：get_etag为内部无引号标识，HTTP响应会加引号，但DAV属性直接返回原标识。受控fixture添加StrictEtagProvider，只修正DAV属性序列化，底层If-Match/MOVE仍由原WsgiDAV处理；正式后端/包未改。仅在.codex隔离target安装测试依赖，不改requirements锁或标准venv。
+
+本机独立CA/TLS服务可实际完成MOVE、禁止覆盖、反向MOVE和恢复；第一次完整12案例有能力探测/清理unknown，不能算通过。独立缺版本场景1项通过58.401秒；127.0.0.1绕开localhost地址族等待后完整16.676秒仍3项setup unknown，原因继续排查；不降低验证强度。852完整中的1失败为原安全fixture未更新能力验证mock，已补明确返回并58专项通过；失败日志保留。待远端真实Linux确认最终fixture，不能跳过unknown强跑。

@@ -80,7 +80,7 @@ class WebDavEndToEndTest(unittest.TestCase):
             has_secret=True,
         )
         verification = self.protocol.verify_conditional_move(self.root_url, self.context)
-        self.assertEqual("verified", verification.status, verification.message)
+        self.assertEqual("verified", verification.status, f"{verification.message}；{verification.suggestion}")
         self.assertTrue(verification.cleanup_succeeded)
         self.context = replace(self.context, conditional_move_status=verification.status)
 

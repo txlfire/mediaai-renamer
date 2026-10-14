@@ -20,6 +20,7 @@ class WebDavIntegrationSafetyTest(unittest.TestCase):
         self.case.password = "synthetic"
         self.case.ssl_context = ssl.create_default_context()
         self.case.protocol = Mock()
+        self.case.protocol.verify_conditional_move.return_value = Mock(status="verified", cleanup_succeeded=True, message="synthetic")
         self.case.remoteCreated = False
         self.addCleanup(self.case.doCleanups)
 
