@@ -125,7 +125,10 @@ class PendingFileTest(unittest.TestCase):
             self.assertEqual(207, response.status_code)
             self.assertEqual("partial_failed", response.json()["status"])
             self.assertEqual((1, 1), (response.json()["moved_count"], response.json()["failed_count"]))
-            self.assertNotIn(str(targetDir), response.text)
+            self.assertEqual(str(targetDir), response.json()["target_directory"])
+            self.assertNotIn(str(targetDir), response.json()["error_message"] or "")
+            for item in response.json()["items"]:
+                self.assertNotIn(str(targetDir), item["message"] or "")
             shutdown_logging()
 
     def test_move_returns_committed_state_and_target_path(self):

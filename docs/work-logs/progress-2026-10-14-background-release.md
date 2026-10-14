@@ -122,3 +122,9 @@ root .venv为Python3.14.6，不能拿它替代锁定3.11发布回归证据。测
 第二轮c8d949f真实协议验证拒绝WsgiDAV默认未加引号DAV:getetag（38566596297日志保留），未放宽客户端。核对4.3.3实际源码：get_etag为内部无引号标识，HTTP响应会加引号，但DAV属性直接返回原标识。受控fixture添加StrictEtagProvider，只修正DAV属性序列化，底层If-Match/MOVE仍由原WsgiDAV处理；正式后端/包未改。仅在.codex隔离target安装测试依赖，不改requirements锁或标准venv。
 
 本机独立CA/TLS服务可实际完成MOVE、禁止覆盖、反向MOVE和恢复；第一次完整12案例有能力探测/清理unknown，不能算通过。独立缺版本场景1项通过58.401秒；127.0.0.1绕开localhost地址族等待后完整16.676秒仍3项setup unknown，原因继续排查；不降低验证强度。852完整中的1失败为原安全fixture未更新能力验证mock，已补明确返回并58专项通过；失败日志保留。待远端真实Linux确认最终fixture，不能跳过unknown强跑。
+
+800463b的两组Linux/Python3.13真实HTTPS WebDAV12项全部通过，38569127381为1.859秒，38569126220亦成功。Windows临时fixture的另轮恢复连接unknown保留为环境边界，不冒充全套通过。
+
+主流水线38569127567的Linux/Python3.11完整852项有2个旧测试缺陷：UrlRedactionTest只指定临时日志目录，数据库仍为项目默认data，Windows因已有本机库而通过，Linux空库报无system_settings；因此先前“全回归不读取正式库”的断言不成立，不能隐瞒。已把该fixture数据库也放临时目录并初始化，不自行回退/删除本机库。迁移API测试把合法target_directory/结果路径也当异常泄漏，在Windows靠JSON反斜杠转义误通过；改为明确保留合法结果路径，只禁止error_message和item.message回显内部路径。生产接口未改。
+
+增加候选镜像load→隔离容器健康/版本/SPA/认证边界/schema实跑→push门禁，所有测试仍依赖verify成功。仅创建并清理CI runner临时容器，不部署用户NAS。日志完整保留，需等待下一轮CI及制品来源验证后才能发布。

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from app.core.config import AppSettings, LoggingSettings
+from app.core.database import ensure_database
 from app.service.audit_service import sanitize_audit_detail
 from app.service.log_service import read_log_items, export_logs_text
 from app.utils.redaction import redactUrlCredentials
@@ -32,6 +33,7 @@ class UrlRedactionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "batch.log").write_text("path=https://review:synthetic-password@nas.invalid/dav/\n", encoding="utf-8")
-            settings = AppSettings(logging=LoggingSettings(log_dir=root))
+            settings = AppSettings(data_dir=root / "data", database_path=root / "data/test.sqlite3", logging=LoggingSettings(log_dir=root))
+            ensure_database(settings)
             self.assertNotIn("synthetic-password", str(read_log_items(settings)))
             self.assertNotIn("synthetic-password", export_logs_text(settings))

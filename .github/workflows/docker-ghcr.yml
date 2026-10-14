@@ -86,13 +86,71 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v') }}
 
-      - name: Build and push
+      - name: Build candidate image
+        id: candidate
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          load: true
+          push: false
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            mediaai-candidate:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=mediaai
           cache-to: type=gha,mode=max,scope=mediaai
+
+      - name: Smoke test unified image before publishing
+        env:
+          CANDIDATE_IMAGE: mediaai-candidate:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          name="mediaai-release-smoke"
+          cleanup() {
+            code=$?
+            trap - EXIT
+            if [[ "$code" -ne 0 ]]; then docker logs "$name" || true; fi
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            exit "$code"
+          }
+          trap cleanup EXIT
+          docker run -d --name "$name" -p 127.0.0.1:18970:8970 "$CANDIDATE_IMAGE"
+          ready=false
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18970/api/health >/dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          [[ "$ready" == true ]]
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          from urllib.error import HTTPError
+          root = "http://127.0.0.1:18970"
+          with urllib.request.urlopen(root + "/api/health", timeout=10) as response:
+              health = json.load(response)
+          with open("package.json", encoding="utf-8") as source:
+              version = json.load(source)["version"]
+          assert health["status"] == "ok" and health["version"] == version, health
+          with urllib.request.urlopen(root + "/settings", timeout=10) as response:
+              html = response.read()
+          assert b'id="app"' in html and b'/assets/' in html
+          try:
+              urllib.request.urlopen(root + "/api/background-jobs", timeout=10)
+          except HTTPError as error:
+              assert error.code == 401, error.code
+              error.close()
+          else:
+              raise AssertionError("private API did not require authentication")
+          print("unified image: health/version/SPA/auth boundary verified", version)
+          PY
+          docker exec "$name" python -c 'import sqlite3; from app.core.database import CURRENT_SCHEMA_VERSION; db=sqlite3.connect("file:/app/data/mediaai.sqlite3?mode=ro",uri=True); assert int(db.execute("SELECT value FROM app_meta WHERE key=?",("schema_version",)).fetchone()[0])==CURRENT_SCHEMA_VERSION; print("schema verified", CURRENT_SCHEMA_VERSION); db.close()'
+
+      - name: Publish verified image tags
+        env:
+          PUBLIC_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then docker push "$tag"; fi
+          done <<< "$PUBLIC_TAGS"
