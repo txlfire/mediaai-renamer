@@ -1,5 +1,7 @@
 # MediaAI Renamer M1 User Manual
 
+> 历史阶段资料：保留当时的设计、操作或验收语境，不作为当前版本的操作依据。现行资料见[文档索引](../README.md)，已交付能力与剩余边界见[项目状态](../development/project-status.md)。
+
 Version: v0.1.0 Preview
 Stage: M1 Local Directory Scanning and Page Framework
 Date: 2026-06-24

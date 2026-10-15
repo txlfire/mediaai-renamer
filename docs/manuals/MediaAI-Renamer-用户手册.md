@@ -45,8 +45,10 @@ MediaAI Renamer 用于扫描本地或服务端可访问的影视目录，生成�
 本地开发推荐使用：
 
 ```powershell
-npm run dev:start
+npm.cmd run dev:windows -- status
 ```
+
+仅未运行时执行 `npm.cmd run dev:windows -- start`；运行中不重复 start，不擅自 stop/restart。Linux 对应 `npm run dev:linux -- status`，仅停止时 start。依赖安装及后台日志检查见[开发指南](../development/development-guide.md)。
 
 启动后访问：
 
@@ -55,6 +57,8 @@ http://127.0.0.1:5173
 ```
 
 后端默认端口为 `8970`，前端开发端口为 `5173`，Docker Web 端口为 `8971`。
+
+Docker 安装和升级见[部署说明](../deployment/fnos-ghcr-docker.md)，当前已验证范围与剩余实机限制见[项目状态](../development/project-status.md)。连接成功不代表 WebDAV 已允许安全写入，仍须通过当前端点的条件 MOVE 验证。
 
 ## 3. 页面结构
 

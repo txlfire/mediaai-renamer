@@ -11,7 +11,7 @@ MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、�
 
 v1.3.0增加六套完整主题、可滚动预览选择器，以及键盘、焦点和窄窗口布局修复；侧栏直接显示实际版本号。保留v1.2.0的分页、后台任务、外发保护与独立凭据密钥。详见[发布说明](docs/releases/v1.3.0.md)；真实组合缩放、NFS硬阻塞和正式实例回退不由本机测试替代。
 
-> 注：`docs/development/reviews/` 与 `design-plans/` 为双方互审产物，**本地保留、不入版本库**，因此在仓库视图中不可见；本机检出中路径有效。
+当前能力、已验证结果和剩余边界见[项目状态](docs/development/project-status.md)，全部公开资料见[文档索引](docs/README.md)。历史阶段文档和工作日志保留当时结论，不替代当前操作手册。
 
 ## 核心能力
 
@@ -65,7 +65,7 @@ FTP、FTPS、SFTP、S3 / MinIO 和 HTTP WebDAV 当前未实现，不应按可用
 
 - 前端：Vue 3、TypeScript、Element Plus、Pinia、Vite。
 - 后端：Python、FastAPI、SQLite。
-- 正式镜像：一个 FastAPI 进程同时提供 Vue SPA 和 `/api`。
+- 正式镜像：FastAPI 提供 Vue SPA 和 `/api`，长任务按执行槽使用隔离 worker。
 - 持久化目录：`data/`、`logs/`、`config/`。
 
 正式 Docker 发布只运行一个 `mediaai` 服务和一个容器。`8971` 是 Web 主入口，`8970` 是兼容入口，两者映射到同一应用进程。
@@ -79,8 +79,8 @@ git clone https://github.com/txlfire/mediaai-renamer.git
 cd mediaai-renamer
 git checkout v1.3.0
 
-cp config/config.example.toml config/config.toml
-printf "MEDIAAI_IMAGE_TAG=v1.3.0\n" > .env
+if [ ! -f config/config.toml ]; then cp config/config.example.toml config/config.toml; fi
+if [ ! -f .env ]; then printf "MEDIAAI_IMAGE_TAG=v1.3.0\n" > .env; fi
 
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
@@ -115,13 +115,15 @@ services:
 项目只跟踪 [config/config.example.toml](config/config.example.toml)。首次运行前复制为正式配置：
 
 ```bash
-cp config/config.example.toml config/config.toml
+if [ ! -f config/config.toml ]; then cp config/config.example.toml config/config.toml; fi
 ```
 
 Windows PowerShell：
 
 ```powershell
-Copy-Item config/config.example.toml config/config.toml
+if (-not (Test-Path -LiteralPath config/config.toml)) {
+    Copy-Item config/config.example.toml config/config.toml
+}
 ```
 
 `config/config.toml`、数据库、日志、媒体路径、密码、Token 和 API Key 均不应提交到 Git。生产环境建议同时限制配置文件权限，并定期备份 `data/`。
@@ -132,33 +134,33 @@ v1.2.0使用独立凭据密钥：优先读取环境秘密 `MEDIAAI_CREDENTIAL_KE
 
 环境要求：
 
-- Python 3.11 或更高版本。
+- Python 3.11 为锁文件和发布验证基线；较新版本须验证依赖及完整回归。
 - Node.js 20.19+ 或 22.12+；当前本机验证使用 Node 24.15.0，不能使用 Node 16。
 - npm。
 
-Windows 后台启动与停止：
+Windows 首次安装后查看后台服务状态：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --require-hashes -r backend/requirements.lock
 npm ci
-npm run dev:start
-npm run dev:stop
+npm.cmd run dev:windows -- status
 ```
 
-Linux 后台启动与停止：
+仅当未运行时执行 `npm.cmd run dev:windows -- start`。运行中不要重复 start；只有明确需要停服或重启时使用对应 stop/restart。`frontend:dev` 也是后台 Vite 脚本，不使用 Python 静态服务器替代。
+
+Linux 首次安装后查看状态：
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install --require-hashes -r backend/requirements.lock
 npm ci
-npm run dev:start:linux
-npm run dev:stop:linux
+npm run dev:linux -- status
 ```
 
 开发环境默认地址：
 
-首次安装创建虚拟环境；已有环境不必重复创建。`backend/requirements.txt` 是直接依赖输入，`backend/requirements.lock` 固定传递依赖并校验下载哈希，CI、Docker 和发布包使用锁文件。镜像源缺包时可在安装命令增加 `--index-url https://pypi.org/simple`，不必修改全局 pip 配置。Windows Python3.11.15及3.12独立哈希环境完整回归通过；真实Linux运行仍需CI/容器验收。
+Linux 仅未运行时执行 `npm run dev:linux -- start`。首次安装才创建虚拟环境，已有环境不必重复创建。`backend/requirements.txt` 是直接依赖输入，`backend/requirements.lock` 固定传递依赖并校验下载哈希，CI、Docker 和发布包使用锁文件。镜像源缺包时可在安装命令增加 `--index-url https://pypi.org/simple`，不必修改全局 pip 配置。v1.3.0 已通过 Windows 回归及标签 CI 的 Linux、真实 TLS 与隔离容器门禁；真实 NAS/NFS 和正式实例升级回退仍需单独验收。
 
 ```text
 前端: http://127.0.0.1:5173
@@ -184,6 +186,7 @@ npm run check:encoding
 
 ## 文档
 
+- [文档索引](docs/README.md)与[当前项目状态及剩余边界](docs/development/project-status.md)
 - [完整用户手册](docs/manuals/MediaAI-Renamer-用户手册.md)
 - [fnOS Docker 部署说明](docs/deployment/fnos-ghcr-docker.md)
 - [WebDAV 部署说明](docs/deployment/webdav.md)
@@ -192,7 +195,6 @@ npm run check:encoding
 - [系统设计](docs/design/project-design.md)
 - [完整主题设计](docs/design/workbench-theme-design.md)与[实施及验收入口](docs/development/ui-refresh/implementation-plan.md)
 - [后台任务接口与维护](docs/development/background-jobs/api-and-maintenance.md)
-- [全项目审查导航与修复进度](docs/development/reviews/README.md)（**本地保留，仓库视图中不可见**）
 - [v1.3.0 发布说明](docs/releases/v1.3.0.md)
 - [v1.2.0 历史发布说明](docs/releases/v1.2.0.md)
 - [历史文档归档](docs/archive/README.md)

@@ -6,10 +6,11 @@
 
 - 总设计文档：`docs/design/MediaAI-Renamer-总设计文档.md`
 - 系统设计文档：`docs/design/project-design.md`
-- 当前阶段计划：`docs/development/m8/M8-命名规则高级配置二期开发计划.md`
+- 当前进度与剩余边界：[项目状态](project-status.md)
+- 全部现行入口：[文档索引](../README.md)
 - 历史归档副本：`docs/archive/development/MediaAI Renamer 初版开发里程碑计划.md`
 
 说明：
 
-- 本文件中的原始里程碑路线已经过时，和当前 M7 / M8 / M9 规划不一致。
+- 原始路线已经过时；M0-M11及后续审查修复、后台化和六主题均已有发布记录，不再把M8当作当前阶段。
 - 为避免旧路线继续被误用，原文已归档保存，后续请以上述权威文档为准。

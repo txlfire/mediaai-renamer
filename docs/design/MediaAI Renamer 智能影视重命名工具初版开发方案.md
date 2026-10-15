@@ -1,5 +1,7 @@
 # MediaAI Renamer 智能影视重命名工具初版开发方案
 
+> 历史阶段资料：保留当时的设计、操作或验收语境，不作为当前版本的操作依据。现行资料见[文档索引](../README.md)，已交付能力与剩余边界见[项目状态](../development/project-status.md)。
+
 ## 文档说明
 
 本文档定义 MediaAI Renamer 初版的可落地开发方案。项目名使用 `MediaAI Renamer`，仓库/包/目录名使用 `mediaai-renamer`，中文名为 `MediaAI 智能影视重命名工具`。本工具的主要目的不是替代 Emby、Jellyfin、Plex、影视墙或 NAS 媒体库系统，而是把下载得到的、命名混乱的视频文件整理成有序且符合主流刮削标准的文件名和目录结构，方便各类 NAS 或类 NAS 系统进行刮削、挂载和媒体库识别。

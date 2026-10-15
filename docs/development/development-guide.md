@@ -1,323 +1,117 @@
-# MediaAI Renamer 开发文档
+# MediaAI Renamer 开发指南
 
-## 1. 环境要求
+类型：开发与操作手册。适用 v1.3.0、schema39；[当前状态与剩余边界](project-status.md)，[全部文档](../README.md)。
 
-后端：
+## 1. 环境与依赖
 
-- Python 3.11+
-- FastAPI
-- Uvicorn
+- 后端使用 Python、FastAPI、SQLite；Python 3.11 是锁文件和发布验证基线。新 Python 版本需验证依赖及完整回归，不以安装成功代替兼容验收。
+- 前端使用 Vue 3、TypeScript、Element Plus、Pinia、Axios、Vite；Node 要求 20.19+ 或 22.12+，本次发布本机使用 24.15.0。Node 16 不可用。
+- `backend/requirements.txt` 是直接依赖输入，`backend/requirements.lock` 是传递依赖与下载哈希锁；前端使用根目录 `package-lock.json` 和 `npm ci`。
+- Docker 仅用于镜像构建/部署验证，不是本地源码启动的必需条件。
 
-前端：
+首次安装，在项目根目录执行；已有虚拟环境不重复创建：
 
-- Node.js
-- npm
-- Vue 3
-- Vite
-- TypeScript
-- Element Plus
-- Axios
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r backend/requirements.lock
+npm ci
+```
 
-部署：
+Linux 使用 `python3 -m venv .venv` 和 `.venv/bin/python`。镜像源缺包时可仅为本次 pip 命令增加 `--index-url https://pypi.org/simple`，不修改全局配置。更新依赖后必须重建锁并验证，不能绕过哈希安装。
 
-- Docker
-- Docker Compose
+实例配置不入 Git。Docker 示例中的 `/app/data`、`/app/logs` 是容器路径；本地自建配置应调整为实际实例路径，不盲目覆盖已有 `config/config.toml`。`MEDIAAI_CONFIG_PATH` 可指定隔离配置；执行前确认文件存在，避免回退到默认实例。数据库与凭据密钥成对备份、分开保管。
 
-## 2. 本地启动
+## 2. 规范启动
 
-Windows日常开发优先使用后台管理脚本，避免另起Python窗口或占用现有服务：
+Windows 先检查状态：
 
 ```powershell
 npm.cmd run dev:windows -- status
+```
+
+仅未运行时启动：
+
+```powershell
 npm.cmd run dev:windows -- start
 ```
 
-先看status；运行中不再start（start会停止并重新启动脚本管理的旧实例）。只有用户明确要求时才执行stop/restart。日志在.codex/run-logs，默认前端5173、后端8970；服务停止后须重新核对健康，不沿用旧PID。前端直接由Node/Vite后台运行，不使用Python静态HTTP替代Vite。
+Linux 对应 `npm run dev:linux -- status`，仅停止时 `npm run dev:linux -- start`。`start` 会替换脚本管理的旧实例，不是无副作用的健康查询。用户要求保持运行时，不执行 stop/restart，不因测试或文档工作重启服务。
 
-首次安装使用npm ci和后端requirements.lock哈希锁。推荐Node24.15.0、Python3.11；本机PATH只在当前PowerShell进程调整，不写系统PATH。以下单独前后端命令用于交互调试，不与上述后台实例重复启动。
+| 检查 | 预期结果 |
+| --- | --- |
+| `http://127.0.0.1:5173` | Vue 页面可访问 |
+| `http://127.0.0.1:8970/api/health` | 200，`status=ok`，版本与当前源码一致 |
+| `http://127.0.0.1:5173/api/health` | 200，Vite 代理可达同一后端 |
 
-后端启动：
+脚本的 running 提示包含端口探测，不替代上述健康检查。默认后台启动前后端，日志/PID 在 `.codex/run-logs/`；前端直接使用 Node/Vite，不用 Python 静态服务器替代，不另开可见窗口。`frontend:dev` 也是后台脚本，不是前台终端命令。
 
-```powershell
-$env:PYTHONPATH = "backend"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8970 --reload --app-dir backend
-```
+脚本仅管理本项目的可验证进程，未知进程占端口时先核对归属或选择其他端口，不强杀。日志中不应包含凭据，分享前仍需检查路径、账号等隐私。桌面宿主退出可能连带结束开发服务，脚本不是系统级守护服务；恢复后核对健康和任务意图，不重放未知操作。
 
-前端启动：
+需要明确停服/重启、改端口或单进程调试时见[命令目录](common-tasks.md)。局域网监听仅用于可信网络，不能当作互联网安全部署方案。
 
-```powershell
-npm install
-npm run frontend:dev
-```
-
-局域网可访问的一键启动：
+## 3. 隔离测试与构建
 
 ```powershell
-npm run dev:lan
-```
-
-该命令会后台启动前后端，并将日志写入 `.codex/run-logs/`。如果当前 PowerShell 环境中同时存在 `Path` 和 `PATH`，脚本会在当前进程内临时规整，避免 Windows 后台启动报重复键错误。
-
-访问地址：
-
-```text
-http://127.0.0.1:5173
-```
-
-后端健康检查：
-
-```text
-GET http://127.0.0.1:8970/api/health
-```
-
-## 3. Docker 启动
-
-正式 Docker 结构只有一个 `mediaai` 服务。统一镜像由 Node 构建阶段生成 Vue 页面，再由 FastAPI 同时提供页面和 API；本地源码开发仍保持 Vite 与 Uvicorn 独立运行。
-
-源码构建启动：
-
-```powershell
-docker compose up --build
-```
-
-镜像方式启动：
-
-```bash
-docker compose -f docker-compose.ghcr.yml pull
-docker compose -f docker-compose.ghcr.yml up -d
-```
-
-默认地址：
-
-```text
-Web: http://localhost:8971
-Web 同源 API: http://localhost:8971/api/health
-兼容 API: http://localhost:8970/api/health
-```
-
-fnOS 推荐使用镜像方式部署，避免在 NAS 上执行前后端构建。详细步骤见 `docs/deployment/fnos-ghcr-docker.md`。
-
-## 4. 测试命令
-
-后端测试：
-
-```powershell
-$env:PYTHONPATH = "backend"
-.\.venv\Scripts\python.exe -m unittest discover backend\tests -v
-```
-
-前端测试：
-
-```powershell
-npm run frontend:test
-```
-
-前端构建：
-
-```powershell
-npm run frontend:build
-```
-
-安全检查：
-
-```powershell
-npm audit --audit-level=moderate
-```
-
-## 5. 编码规范
-
-### 5.1 编码和换行
-
-- 所有源码、配置和 Markdown 文档统一使用 UTF-8 no BOM。
-- 除 `.bat`、`.cmd` 外，文本文件统一使用 LF 换行。
-- 新增或修改文件前优先使用 `apply_patch`；如需脚本批量处理文本，必须显式使用 UTF-8 no BOM 写入。
-- Windows PowerShell 5 的 `Set-Content -Encoding UTF8` 会写入 BOM，除非明确需要，否则不要用于源码和文档。
-- 提交前执行：
-
-```powershell
-npm run check:encoding
+npm.cmd run backend:test
+npm.cmd run frontend:test
+npm.cmd run frontend:build
+npm.cmd run check:encoding
 git diff --check
 ```
 
-### 5.2 前端国际化
+- 后端命令通过 `backend/run_tests.py` 创建临时配置/数据/日志，避免模块导入初始化真实实例。**不要直接对默认环境执行 `python -m unittest discover`**。
+- 指定测试使用 `.\.venv\Scripts\python.exe backend/run_tests.py test_background_jobs -v`，模块名须来自 `backend/tests/`；真实 WebDAV 集成默认跳过，只能在已授权专用目录启用。
+- Linux 后端测试为 `npm run backend:test:linux`。前端单测覆盖组件、状态和客户端，不仅是 API；构建同时运行 `vue-tsc`。
+- 文档变更检查事实、链接、编码、差异和敏感信息，不需要无差别重跑产品测试；引用发布阶段证据必须标明来源及日期。
+- 涉及 Docker/Compose、协议或发布流程时，在具备条件的环境验证相应门禁；本机无 Docker 时明确记录，不能声称本机容器通过。CI 通过也不能代替真实 NAS/NFS 或正式实例升级验收。
+- `npm audit --audit-level=moderate` 用于依赖风险核查；失败时核对具体依赖和影响，不未经评估自动升级。
 
-- 用户可见文本统一维护在 `frontend/src/locales/zh-CN.ts`。
-- Vue 页面、Pinia store、API client 中不得直接硬编码中文提示、按钮、标题、表头和空状态文案。
-- 测试用例和内部字符串判断可以保留必要中文样例，但不得作为页面展示文案来源。
-- 新增页面或功能前先检查 `zh-CN.ts` 是否已有可复用文案，避免重复提取。
-- 后续增加其他语言时，以 `zh-CN.ts` 的 key 结构作为基准，不在页面中新增临时文本。
+## 4. 代码与接口规范
 
-## 5. M1 API
+- API 接收与校验参数，`service/` 承载业务，`schema/` 定义契约，`core/` 管理配置、数据库、迁移和基础设施。SQLite 使用参数化 `sqlite3`，没有 ORM 映射。
+- 前端请求集中在 `frontend/src/api/`，使用相对 `/api`，不硬编码主机；状态放 Pinia，表单沿用 Element Plus。
+- 用户可见文案集中在 `frontend/src/locales/zh-CN.ts`；主题注册在 `themeRegistry.ts`，颜色值以 `styles.css` 为唯一来源，不引入第二套配色常量。
+- 源码与 Markdown 使用 UTF-8 no BOM、LF（`.bat/.cmd` 例外）；手工修改优先 `apply_patch`，避免 PowerShell 5 写入 BOM。
+- 注释使用中文，解释职责、风险、边界和异常，不堆砌赋值说明；标识符使用英文并遵循所属模块约定，不为命名风格改动公共契约。
+- 异常要区分明确拒绝、已生效但返读失败、未知外发/文件结果；不能将所有异常写为“失败可重试”。日志包含可追踪关联信息，但不能记录密码、完整令牌、URL 内嵌凭据或完整 prompt。
 
-媒体源：
+当前主要 API 分域如下，详细字段以运行实例的 `/docs`、路由模型和专项手册为准；私有业务接口需要会话及相应直接权限：
 
-- `GET /api/media-sources`
-- `POST /api/media-sources`
+| 分域 | 路径/约束 |
+| --- | --- |
+| 健康与登录 | `/api/health`、`/api/auth/*`；不是供应商认证令牌 |
+| 媒体源与扫描 | `/api/media-sources`、`/api/scan-jobs/async`、`/api/media-files/page`；扫描受理返回202 |
+| 预览与选择范围 | `/api/rename-previews/page`、`/api/rename-previews/selection`；全部操作不能仅处理当前页 |
+| 文件执行 | `/api/rename-operations/{id}/execute-async`、`/api/rename-rollback-plans/{id}/execute-async`、`/api/pending-files/move-async`；确认、dry-run和执行前复核不可省略 |
+| 探测与匹配任务 | `/api/background-jobs`；稳定UUID、202、摘要观察及终态结果，详见[接口定义与调用示例](background-jobs/api-and-maintenance.md) |
+| 日志与治理 | `/api/logs`、`/api/operation-logs`、`/api/audit-events`、`/api/tasks`；各自保留策略不可混用 |
+| 配置与用户 | `/api/settings`、`/api/users`；权限直接授予用户，不引入角色 |
 
-扫描：
+## 5. 外部服务与文件安全
 
-- `POST /api/scan-jobs`
-- `GET /api/scan-jobs`
-- `GET /api/media-files`
+- 本地解析优先；匹配只产生或回填候选，不由 AI 执行文件动作。外发必须复用权限、确认和敏感词保护；未知结果先查询/核查，不自动重试。
+- `[external_requests]` 控制向配置的 AI/元数据站点发出的实际 HTTP 请求，不是本地 API 限流。默认全局4并发、同源1并发和2次/秒，等待计入预算；相同 origin 共用槽，修改配置后重启全部相关 worker。
+- 真实重命名、回滚和迁移共用写任务 FIFO，动作前再次检查当前权限、配置、快照和源身份；槽位释放须证明进程退出。
+- HTTPS WebDAV 严格验证证书/主机名，拒绝自动跳转；端点条件 MOVE 验证未通过时保持只读，不降级 HTTP、忽略 TLS 或省略强 ETag。
+- 支持协议以[系统设计](../design/project-design.md)为准；未实现的 FTP/FTPS/SFTP/S3 不写成当前功能或下一阶段承诺。
 
-日志：
+## 6. 日志、清理与维护
 
-- `GET /api/logs`
-- `GET /api/logs/export`
+运行日志通过 `app.core.logger`，不重复配置 `basicConfig()`，不使用 `print()` 写业务日志。`config.toml` 的 `[logging]` 控制基础目录/级别/轮转，系统热设置控制运行维护策略；`app.log/error.log/llm.log/batch.log` 按职责分流。`llm.log` 只记录允许的模型、用量、耗时等摘要。
 
-## 6. 扫描配置
+文件轮转/归档、数据库操作日志、后台结果、安全审计及审计辅助意图是不同对象：
 
-配置示例：
+- 文件日志与操作日志按系统设置的保留期、大小和有界维护执行；轮转/维护使用目录锁，变化中的文件保留到后续核对，不清理锁文件腾容量。
+- 操作日志按游标增量查询，限制渲染和请求并发，关闭后停止额外观察；清理后提示或禁用查看，不伪装成无操作历史。
+- 后台普通结果按 `[background_jobs]` 管理，默认单任务4MiB、总逻辑64MiB、7天；清理不删除幂等UUID、不重发请求，详见[维护手册](background-jobs/api-and-maintenance.md)。
+- 安全审计不套用普通日志保留期；未知/待补写意图不为腾空间删除。逻辑删除不承诺 SQLite/WAL 物理缩小；未批准政策前不自动清审计或在线 VACUUM。
 
-```toml
-[scan]
-batch_size = 100
-batch_interval_seconds = 1
-```
+维护 CLI 默认只读；执行参数需要核对目标实例、停止服务及显式确认，不能拿生产配置跑合成测试。详细恢复/脱敏操作见[完整手册](../manuals/MediaAI-Renamer-用户手册.md)与[WebDAV 维护](../deployment/webdav.md)。
 
-扫描采用分批执行，默认每批 100 个文件，每批之间间隔 1 秒。
+## 7. 文档、Skill 与提交
 
-## 7. 编码规范
+设计只写已确认目标；实施/演进记录差异和迁移；手册写可用操作；验收记录场景与证据。只同步受影响的权威文档，不覆盖历史报告。当前状态统一在 `project-status.md`，本机互审目录不作为公开入口。
 
-通用要求：
+本机可提供 `mediaai-docs-lifecycle`、`mediaai-frontend-ui`、`mediaai-backend-api`、`mediaai-test-release` 等项目 Skill；目录不随公开仓库分发，缺少 Skill 不妨碍按本指南开发。是否启用及流程强度遵循当前用户/代理指令，不因已安装而自动全部加载。
 
-- 新功能按里程碑范围实现，不提前扩张。
-- 真实文件操作必须可预览、可确认、可记录。
-- 敏感信息不得写入代码、日志和提交记录。
-- 关键逻辑必须有测试。
-
-后端要求：
-
-- API 层只做请求接收和返回。
-- 核心业务放在 service。
-- 请求和响应模型放在 schema。
-- 文件名清洗、路径处理等通用逻辑放在 utils。
-- 日志统一使用 `app.core.logger`，不得使用 `print()` 或重复调用 `logging.basicConfig()`。
-
-前端要求：
-
-- 接口请求统一放在 `frontend/src/api/`。
-- 使用 Axios 统一实例，基础路径为 `/api`。
-- 页面不得硬编码后端主机和端口。
-- 状态放在 Pinia store。
-- 表单使用 Element Plus 校验。
-
-## 8. 注释要求
-
-注释使用中文，命名保持英文。
-
-硬性要求：
-
-- 顶层公共注释使用中文，包括模块说明、类说明、公共函数和公共方法说明。
-- 行内注释使用中文。
-- 变量名、函数名、类名、文件名仍使用英文命名，保持代码国际化和生态兼容。
-
-必须添加注释：
-
-- 关键文件顶部说明职责。
-- 公共函数和公共方法说明用途、参数、返回值和异常。
-- 文件重命名、路径校验、AI 调用、共享挂载、数据库写入等高风险逻辑。
-- 插件接口和抽象基类。
-
-不应添加注释：
-
-- 简单赋值。
-- 重复代码字面含义的说明。
-- 已经过期或与代码不一致的说明。
-
-## 9. 日志标准
-
-日志配置位于后端 `LoggingSettings`，后续接入 `config.toml` 后由配置文件控制。
-
-标准日志文件：
-
-- `app.log`：应用启动、配置加载、普通业务流程。
-- `error.log`：ERROR 及以上错误。
-- `llm.log`：AI 模型、token 数、耗时、费用估算等统计信息，不记录 prompt 原文。
-- `batch.log`：扫描、预览、重命名等批量任务历史。
-
-日志级别：
-
-- `DEBUG`：开发调试信息，不记录敏感内容。
-- `INFO`：关键业务节点和正常状态变化。
-- `WARNING`：可恢复异常或降级处理。
-- `ERROR`：单项功能失败，但服务仍可继续运行。
-- `CRITICAL`：配置缺失、数据库不可用等导致任务或服务无法继续的严重错误。
-
-敏感信息规则：
-
-- 不记录 API Key、密码、完整 token、共享目录凭据。
-- LLM 日志可以记录 token 数、模型名、耗时和费用估算。
-- 批量重命名日志可以记录原路径和目标路径，但后续如果路径中包含账号或凭据必须脱敏。
-
-Docker 部署时，`./logs` 会挂载到统一容器的 `/app/logs`，便于 NAS 页面查看和导出。
-
-## 10. 提交前检查
-
-提交前至少执行：
-
-```powershell
-$env:PYTHONPATH = "backend"
-.\.venv\Scripts\python.exe -m unittest discover backend\tests -v
-npm run frontend:test
-npm run frontend:build
-npm audit --audit-level=moderate
-```
-
-如果 Docker 相关文件有变化，还需要在具备 Docker 的环境中执行：
-
-```powershell
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
-```
-
-如果变更 Docker 镜像发布流程，还需要检查：
-
-```powershell
-git status --short --branch
-```
-
-并确认 `.github/workflows/docker-ghcr.yml` 能在推送 `main` 或 `v*` 标签后自动发布 GHCR 镜像。
-
-## 11. 文档更新
-
-每次完成阶段性开发后，必须更新：
-
-- `docs/design/` 中的设计文档。
-- `docs/development/` 中的开发文档。
-- `docs/work-logs/` 中的工作日志、阶段复盘和验证记录。
-- `docs/manuals/` 中的当前阶段用户手册和总用户手册。
-- README 中的启动和验证说明。
-
-阶段收尾时必须执行设计一致性检查：
-
-- 对照总设计文档、当前阶段设计文档、开发计划和验收清单，确认实际实现是否存在偏差。
-- 如果实现与设计不一致，必须先补全文档，再进入下一阶段。
-- 偏差修正内容必须记录到 `docs/work-logs/` 下对应日期或阶段的工作日志中，并在收尾汇报中明确告知。
-- 如果确认无偏差，也需要在工作日志中记录本次比对结论。
-
-阶段用户手册汇总要求：
-
-- 每个阶段完成后，必须先更新对应阶段用户手册，再同步更新 `docs/manuals/MediaAI-Renamer-用户手册.md`。
-- 总用户手册只记录已完成、可使用的功能，不写入未落地能力的操作步骤。
-- 如果阶段实现改变了既有用户流程，必须同步修正总用户手册中的相关章节。
-- 用户手册更新内容必须记录到 `docs/work-logs/` 下对应日期或阶段的工作日志中。
-
-API 稳定后，新增接口文档放入 `docs/api/`。
-
-## 12. Project Local Skill Usage
-
-This project now splits repeatable Codex workflows into project-local skills under `.codex/skills/`. These skills are first used by this project and can later be promoted to global `~/.codex/skills/` for similar projects.
-
-- `mediaai-docs-lifecycle`: requirement analysis, requirement design, requirement split, requirement supplementation, design docs, user manuals, acceptance checklists, acceptance reports, README, work logs, and milestone archive.
-- `mediaai-frontend-ui`: Vue pages, Element Plus controls, Pinia stores, frontend API calls, tables, dialogs, theme behavior, sidebar behavior, i18n, and UI polish.
-- `mediaai-backend-api`: FastAPI routes, service logic, SQLite schema migration, shared protocols, scan, rename, TMDB, settings, encryption, validation, and backend tests.
-- `mediaai-test-release`: testing, builds, packaging, version bumps, Git flow, GitHub Release, release notes, and milestone release verification.
-
-Rules:
-
-- Before starting a matching task type, read the matching skill's `SKILL.md` first.
-- Keep reusable workflow, paths, and commands in each skill's `references/`; do not store temporary daily notes there.
-- When real development reveals a workflow gap, update the matching skill and record the change in `docs/work-logs/`.
-- At milestone closeout, use `mediaai-docs-lifecycle` for document consistency and `mediaai-test-release` for validation and release steps.
+提交前检查实际 diff，保留用户已有改动，不提交配置、数据库、日志、密钥和本机证据。按变更范围验证，再在 `develop` 提交；需要同步公开文档时推进 `main`，确认远端并保留 CI 结果。纯文档更新不升版本、不移动既有标签、不覆盖同版包。完整发布操作见[命令目录](common-tasks.md)。

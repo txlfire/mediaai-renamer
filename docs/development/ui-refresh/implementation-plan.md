@@ -4,7 +4,7 @@
 
 目标设计：[完整主题设计](../../design/workbench-theme-design.md)。门禁：[验收清单](acceptance-checklist.md)。过程记录：[本轮工作日志](../../work-logs/progress-2026-10-14-review-themes.md)；[前期文档准备](../../work-logs/progress-2026-10-13-ui-theme-docs.md)保留历史。
 
-## 1. 当前状态与差异
+## 1. 起始状态与差异（历史基线）
 
 | 项目 | 当前事实 | 目标与兼容要求 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@
 - 文档阶段：`mediaai-docs-lifecycle`负责类型和权威入口，`skill-creator`负责现有Skill修订。
 - 原型和实现阶段：以`mediaai-frontend-ui`承接项目约束；主设计参考按实际需要选择一种，不同时叠加多个风格Skill。
 - Garden单项已核验至`7a6d5a72e4f44bb4cc0c23c01b3d97205c723b68`。有风格配方收益，但含流式字号、大标题比例、Tweaks面板、React/CDN默认说明，本轮不安装；可选择性参考布局与风格对照原则，不能让它覆盖项目契约。[核验源码](https://github.com/ConardLi/garden-skills/blob/7a6d5a72e4f44bb4cc0c23c01b3d97205c723b68/skills/web-design-engineer/SKILL.md)
-- Glyph暂不接入；Aioli只参考分层令牌；UI UX Design Pro暂不引入Bun；CCW已归档，不安装整套工作流。[评估与来源](../../../design-plans/workbench-theme-system-refresh.md)为本地参考，不作为仓库必需入口。
+- Glyph暂不接入；Aioli只参考分层令牌；UI UX Design Pro暂不引入Bun；CCW已归档，不安装整套工作流。评估草案保存在本机 `design-plans/workbench-theme-system-refresh.md`，公开执行依据为完整主题设计，不依赖本地草案链接。
 - 用户允许安装有用的依赖与Skill，但不等于必须安装。确需安装时记录包或Skill、固定版本/提交、许可、脚本与网络行为、安装范围、卸载办法及项目适配差异；不执行未经核验的初始化脚本，不覆盖现有MCP配置。
 - 本阶段推荐不新增运行时依赖，不更换Element Plus，不引入在线字体或动画库。无需安装外部MCP才能生成本地同页预览。
 
@@ -54,7 +54,7 @@ UI-P1先提供同页对照，用户确认后才推广全站。批准方向保留
 - 原型放在`.codex/test-artifacts/ui-refresh/`等本地隔离位置，不进入生产路由。截图与数据包含主题、模式、视口及状态信息。
 - 使用显式合成数据或已脱敏数据。禁止测试凭据、真实媒体路径和用户数据出现在预览、截图或分享内容。
 - 原型业务动作使用模拟结果，不提交扫描、匹配、重命名、NAS写入或真实外部请求。
-- 标准服务只用项目脚本，遵守[开发服务启动规约](../reviews/discussions/harness-development-service-startup.md)；用户要求保持运行，不停止或重启标准5173/8970实例。
+- 标准服务只用项目脚本，遵守[开发服务启动规约](../development-guide.md#2-规范启动)；用户要求保持运行，不停止或重启标准5173/8970实例。
 - 需要隔离服务时使用独立端口和库，结束后只清理该隔离实例；脚本细节以现有正式[开发文档](../development-guide.md)为准。
 
 ## 6. 兼容、恢复与停止条件
@@ -108,7 +108,7 @@ git diff --check
 - 对8类操作正常/hover在面板、选中和悬停行三背景取样，共288颜色对均达4.5:1；正文/说明、品牌及输入边界另取样。有限取样不等于全部复合状态WCAG合规。
 - 最终前端34文件/226测试通过，类型/生产构建通过。保留既有500kB chunk警告，不关闭告警掩盖包体。
 - 本地证据目录`.codex/test-artifacts/ui-refresh/`：`production-results.json`、`interaction-results.json`及对应`product-*`/`interaction-*`截图；补充边界结果与最终命令在[工作日志](../../work-logs/progress-2026-10-14-review-themes.md)登记。所有API合成拦截，不触发真实文件、NAS或外发。
-- 真实4K/200%/125%、笔记本真实分辨率、完整Tab/Enter/Space及全部复合状态待验。其他审核剩余工程/政策/平台仍见[统一状态第6.5节](../reviews/remediation-plan-2026-10-01.md#65-当前剩余项2026-10-14)，不由主题阶段代为关闭。
+- 此检查点的真实4K/200%/125%、笔记本真实分辨率、完整Tab/Enter/Space及全部复合状态仍待验。后续键盘接续见第13～15节，当前政策/平台边界统一见[项目状态](../project-status.md)，不由主题阶段代为关闭。
 
 ## 11. 常用桌面适配接续（2026-10-14）
 

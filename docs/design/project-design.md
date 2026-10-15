@@ -1,6 +1,6 @@
 # MediaAI Renamer 系统设计文档
 
-文档类型：系统设计。本文描述已确认的目标约束，不作为实现完成或发布验收证明；修复进度、兼容迁移和未验证限制见[实施计划](../development/reviews/remediation-plan-2026-10-01.md)，部署操作见[部署说明](../deployment/fnos-ghcr-docker.md)。
+文档类型：系统设计。本文描述已确认的目标约束，不作为实现完成或发布验收证明；实现进度和未验证限制见[项目状态](../development/project-status.md)，兼容迁移与部署操作见[部署说明](../deployment/fnos-ghcr-docker.md)。
 
 ## 1. 项目定位
 
@@ -100,7 +100,7 @@ Backend: FastAPI
 
 ### 6.1 工作台界面与主题
 
-界面目标采用三套完整主题及独立的亮暗显示模式，主题覆盖背景、侧栏、表格、表单和状态反馈，不限于强调色。共享Vue 3、Element Plus与CSS变量，保留导航、权限、接口及文件操作边界；外观仍由当前浏览器保存，不新增服务端设置。
+界面采用清爽专业、柔和彩色、精密高对比、海盐青、林间绿、琥珀日光六套完整主题及独立的亮暗显示模式，主题覆盖背景、侧栏、表格、表单和状态反馈，不限于强调色。共享Vue 3、Element Plus与CSS变量，保留导航、权限、接口及文件操作边界；外观由当前浏览器保存，不新增服务端设置。
 
 具体职责与交互约束以[完整主题设计](workbench-theme-design.md)为准，根目录[design.md](../../design.md)为设计执行入口。此处描述目标，不证明当前实现状态；兼容与阶段进度见[主题实施计划](../development/ui-refresh/implementation-plan.md)，测试证据见[主题验收清单](../development/ui-refresh/acceptance-checklist.md)。
 
@@ -259,8 +259,9 @@ Backend: FastAPI
 - `external_submission_authorizations`：一次性外部提交授权、消费与已保存结果。
 - `external_request_sites`：外部HTTP origin摘要、最近准入时间及间隔；最多1024个站点状态，超过一天且没有在途请求的状态有界清理。
 - `external_request_leases`：实际请求的随机令牌、PID和限制；同机共享数据库协调，不存URL、凭据、正文或媒体信息。
+- `background_jobs`、`background_job_items`：稳定UUID受理、配置/输入摘要、执行租约、逐项结果与普通结果清理标记；不保存供应商密钥或完整原始响应。
 
-AI候选保存在对应预览/返回结果中，不虚列独立的AI任务表。凭据分布在媒体源、Provider和敏感热配置字段，统一使用独立密钥，不建立角色体系或全局凭据表。
+AI候选保存在对应预览/返回结果中，后台批量任务的结果另受background_jobs容量与保留约束，不另设独立AI任务表。凭据分布在媒体源、Provider和敏感热配置字段，统一使用独立密钥，不建立角色体系或全局凭据表。
 
 ## 10. 安全边界
 
@@ -341,8 +342,6 @@ AI候选保存在对应预览/返回结果中，不虚列独立的AI任务表。
 - 不自动重放未知请求；释放槽需证明进程实际退出。查询摘要不加载完整结果，前端前台1.5秒/隐藏6秒串行观察，终态才主动读取结果；会话切换隔离旧响应。
 - 普通结果按单任务/总容量/保留期有界清理，保留幂等请求ID、计数与安全审计；不宣称逻辑容量等于SQLite/WAL物理上限，不在线VACUUM。接口、状态及维护限制见[后台任务手册](../development/background-jobs/api-and-maintenance.md)。
 
-> `docs/development/reviews/` 与 `design-plans/` 为**双方互审产物，本地保留、不入版本库**，因此在仓库视图中不可见；下列路径以本机检出为准。
-
-- [代码审查与缺口](../development/reviews/code-review-2026-09-30.md)和[设计审查](../development/reviews/design-review-2026-09-30.md)记录历史差异及验证门禁，不作为当前功能完成清单。
-- [实施计划](../development/reviews/remediation-plan-2026-10-01.md)维护已确认政策、接续顺序、迁移兼容与最新证据；各阶段手册按实际可用操作编写，未发布分支和稳定版本分别说明。
+- [项目状态](../development/project-status.md)维护当前已交付范围、证据及剩余边界；[文档索引](../README.md)区分现行设计、操作手册与历史阶段资料。
+- 审查原始差异与双方交流材料在本机 `docs/development/reviews/` 保留，不入版本库；公开进度不依赖本地链接。
 - [fnOS部署](../deployment/fnos-ghcr-docker.md)与[用户手册](../manuals/MediaAI-Renamer-用户手册.md)提供操作说明。正式升级、回退、真实NAS/NFS、组合缩放、Linux/Docker和性能验收必须有独立证据，不能用本机单测替代。

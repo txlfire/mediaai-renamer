@@ -1,5 +1,7 @@
 # M4 里程碑 \- TMDB元数据刮削开发文档（Codex专用） \| M4 Milestone \- TMDB Metadata Scraper Development Docs
 
+> 历史阶段资料：保留当时的设计、操作或验收语境，不作为当前版本的操作依据。现行资料见[文档索引](../../README.md)，已交付能力与剩余边界见[项目状态](../project-status.md)。
+
 ## 0\. Codex 阅读与开发前置规则（强制）
 
 本文档为 **M4 迭代唯一开发依据**，专供 Codex 拆解任务、编码落地、自测验收使用，所有编码行为必须严格遵循以下规则：

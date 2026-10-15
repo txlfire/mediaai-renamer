@@ -1,6 +1,6 @@
 # 后台探测与匹配接口及维护
 
-类型：接口与维护手册。适用源码版本1.2.0、schema39。
+类型：接口与维护手册。适用版本1.3.0、schema39；该后台任务接口自v1.2.0交付，v1.3.0保持兼容。当前状态及剩余边界见[项目状态](../project-status.md)。
 
 ## 接口
 
@@ -8,7 +8,7 @@
 
 | 方法与路径 | 参数/结果 | 限制 |
 | --- | --- | --- |
-| POST /api/background-jobs | request_id、kind及下表参数；202小型任务摘要 | 受理只读数据库，不探测媒体、不外发HTTP |
+| POST /api/background-jobs | request_id、kind及下表参数；202小型任务摘要 | 仅做数据库预检与持久化，不探测媒体、不外发HTTP |
 | GET /api/background-jobs | 最近20条当前用户任务摘要 | 不返回输入快照、租约、候选或供应商原始响应 |
 | GET /api/background-jobs/{UUID} | 状态、总数、已处理数、成功/失败/未知数、result_available、清理时间和错误信息 | 原用户或task:manage；另需该任务原权限 |
 | GET /api/background-jobs/{UUID}/result | 摘要、result及items逐项结果 | 结果已清理则404，不重建或重发任务 |

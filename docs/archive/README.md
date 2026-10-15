@@ -4,7 +4,7 @@
 
 当前归档原则：
 
-- 现行开发以 `docs/design/project-design.md`、`docs/design/MediaAI-Renamer-总设计文档.md` 和当前阶段开发计划为准。
+- 现行入口见[文档索引](../README.md)和[项目状态](../development/project-status.md)；目标以系统设计为准，总设计保留阶段回溯，不以历史待办替代当前计划。
 - 已失效的路线图、初版草案和不再维护的历史说明，优先归档，不继续放在主入口文档中作为权威引用。
 - 工作日志保留原始记录，不改写历史结论。
 

@@ -1,5 +1,7 @@
 # MediaAI Renamer M5 用户手册
 
+> 历史阶段资料：保留当时的设计、操作或验收语境，不作为当前版本的操作依据。现行资料见[文档索引](../README.md)，已交付能力与剩余边界见[项目状态](../development/project-status.md)。
+
 版本：`0.5.4`
 阶段：M5 NAS / SMB / NFS 共享目录支持
 
