@@ -1,65 +1,47 @@
-/*
- * 全局样式。
- *
- * M1 提供应用级布局、主题变量和通用操作台样式。
- *
- * 完整主题声明亮暗基础值，scheme只选择对应语义别名。
- * default/candy/contrast共享组件规则；所有运行时颜色在此集中维护。
- */
-
-:root {
-  color-scheme: light;
-  --sidebar-width: var(--sidebar-expanded-min-width);
-  --sidebar-expanded-min-width: 216px;
-  --sidebar-collapsed-width: 64px;
-  --sidebar-transition: 300ms ease-in-out;
-
-  /* 清爽专业：成对基础值是主题取值源，后续规则仅使用语义别名。 */
-  --app-bg-light: #f3f5f7; --app-bg-dark: #151719;
-  --panel-bg-light: #ffffff; --panel-bg-dark: #202326;
-  --panel-soft-bg-light: #f5f7f9; --panel-soft-bg-dark: #292d31;
-  --sidebar-bg-light: #edf1f4; --sidebar-bg-dark: #191c1f;
-  --text-main-light: #25313b; --text-main-dark: #edf0f2;
-  --text-muted-light: #536273; --text-muted-dark: #b2bbc4;
-  --border-color-light: #d4dbe1; --border-color-dark: #454e56;
-  --input-border-light: #7c8995; --input-border-dark: #7d8b98;
-  --table-header-bg-light: #edf1f5; --table-header-bg-dark: #30353b;
-  --table-row-hover-bg-light: #eaf0f7; --table-row-hover-bg-dark: #303a44;
-  --input-bg-light: #ffffff; --input-bg-dark: #272c31;
-  --selection-bg-light: #e5edfb; --selection-bg-dark: #2c3d53;
-  --selection-ink-light: #1d4ed8; --selection-ink-dark: #93c5fd;
-  --panel-shadow-light: none; --panel-shadow-dark: none;
+/* 六套主题共用组件规则；页面和缩略预览复用亮暗基础值，模式仅解析语义别名。 */
+:root, .theme-preview[data-preview-palette="default"] {
+  --app-bg-light: #f3f5f7;
+  --app-bg-dark: #151719;
+  --panel-bg-light: #ffffff;
+  --panel-bg-dark: #202326;
+  --panel-soft-bg-light: #f1f4f9;
+  --panel-soft-bg-dark: #292d31;
+  --sidebar-bg-light: #e9eef6;
+  --sidebar-bg-dark: #1c232a;
+  --text-main-light: #25313b;
+  --text-main-dark: #edf0f2;
+  --text-muted-light: #536273;
+  --text-muted-dark: #b2bbc4;
+  --border-color-light: #d4dbe1;
+  --border-color-dark: #454e56;
+  --input-border-light: #7c8995;
+  --input-border-dark: #7d8b98;
+  --table-header-bg-light: #e7edf7;
+  --table-header-bg-dark: #303a46;
+  --table-row-hover-bg-light: #eaf0f7;
+  --table-row-hover-bg-dark: #303a44;
+  --input-bg-light: #ffffff;
+  --input-bg-dark: #272c31;
+  --selection-bg-light: #e5edfb;
+  --selection-bg-dark: #2c3d53;
+  --selection-ink-light: #1d4ed8;
+  --selection-ink-dark: #93c5fd;
+  --panel-shadow-light: none;
+  --panel-shadow-dark: none;
   --login-shadow-light: 0 18px 48px rgb(15 23 42 / 10%);
   --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
-  --app-bg: var(--app-bg-light); --panel-bg: var(--panel-bg-light);
-  --panel-soft-bg: var(--panel-soft-bg-light); --sidebar-bg: var(--sidebar-bg-light);
-  --text-main: var(--text-main-light); --text-muted: var(--text-muted-light);
-  --border-color: var(--border-color-light); --input-border: var(--input-border-light);
-  --table-header-bg: var(--table-header-bg-light); --table-row-hover-bg: var(--table-row-hover-bg-light);
-  --input-bg: var(--input-bg-light); --selection-bg: var(--selection-bg-light); --selection-ink: var(--selection-ink-light);
-  --panel-shadow: var(--panel-shadow-light); --login-panel-shadow: var(--login-shadow-light);
-  --status-button-ink: #ffffff;
-  /* 品牌强调：值按方案分两套，--brand-accent 与 --brand-accent-ink 为方案别名。 */
-  /* 显示模式独立选择品牌与状态的亮暗基础值。 */
-  --brand-accent-light: #2563eb;
+  --brand-accent-light: #1d4ed8;
   --brand-accent-light-ink: #ffffff;
   --brand-accent-dark: #93b7f8;
   --brand-accent-dark-ink: #172333;
-  --brand-accent: var(--brand-accent-light);
-  --brand-accent-ink: var(--brand-accent-light-ink);
-  --brand-accent-hover: color-mix(in srgb, var(--brand-accent-light) 90%, black);
-  --semantic-success-light: #15803d;
-  --semantic-warning-light: #b45309;
-  --semantic-danger-light: #dc2626;
-  --semantic-info-light: #2563eb;
+  --semantic-success-light: #166534;
+  --semantic-warning-light: #92400e;
+  --semantic-danger-light: #b91c1c;
+  --semantic-info-light: #1d4ed8;
   --semantic-success-dark: #4ade80;
   --semantic-warning-dark: #f6d98a;
   --semantic-danger-dark: #f87171;
   --semantic-info-dark: #60a5fa;
-  --semantic-success: var(--semantic-success-light);
-  --semantic-warning: var(--semantic-warning-light);
-  --semantic-danger: var(--semantic-danger-light);
-  --semantic-info: var(--semantic-info-light);
   --action-edit: #1d4ed8;
   --action-edit-hover: #1e40af;
   --action-view: #155e75;
@@ -94,6 +76,416 @@
   --action-delete-dark-hover: #fecaca;
 }
 
+:root[data-palette="candy"], .theme-preview[data-preview-palette="candy"] {
+  --app-bg-light: #f8f2f5;
+  --app-bg-dark: #211d20;
+  --panel-bg-light: #fffdfd;
+  --panel-bg-dark: #2d252b;
+  --panel-soft-bg-light: #f7edf2;
+  --panel-soft-bg-dark: #382e36;
+  --sidebar-bg-light: #e7f0e6;
+  --sidebar-bg-dark: #202e27;
+  --text-main-light: #362a35;
+  --text-main-dark: #f3eaf0;
+  --text-muted-light: #705363;
+  --text-muted-dark: #c6afbf;
+  --border-color-light: #dfcbd7;
+  --border-color-dark: #64515d;
+  --input-border-light: #89707f;
+  --input-border-dark: #ac8b9e;
+  --table-header-bg-light: #f0e2e9;
+  --table-header-bg-dark: #42313c;
+  --table-row-hover-bg-light: #f9eaf3;
+  --table-row-hover-bg-dark: #48353f;
+  --input-bg-light: #fffbfd;
+  --input-bg-dark: #352c32;
+  --selection-bg-light: #f7dce9;
+  --selection-bg-dark: #573344;
+  --selection-ink-light: #9d174d;
+  --selection-ink-dark: #f9a8d4;
+  --panel-shadow-light: 0 2px 10px rgb(93 28 63 / 5%);
+  --panel-shadow-dark: 0 2px 10px rgb(0 0 0 / 10%);
+  --login-shadow-light: 0 18px 48px rgb(93 28 63 / 10%);
+  --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
+  --brand-accent-light: #be185d;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #f9a8d4;
+  --brand-accent-dark-ink: #4a102b;
+  --semantic-success-light: #166534;
+  --semantic-warning-light: #92400e;
+  --semantic-danger-light: #b91c1c;
+  --semantic-info-light: #1d4ed8;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --action-edit: #be185d;
+  --action-edit-hover: #9d174d;
+  --action-view: #155e75;
+  --action-view-hover: #164e63;
+  --action-magic: #7e22ce;
+  --action-magic-hover: #6b21a8;
+  --action-run: #065f46;
+  --action-run-hover: #064e3b;
+  --action-toggle: #065f46;
+  --action-toggle-hover: #064e3b;
+  --action-sync: #155e75;
+  --action-sync-hover: #164e63;
+  --action-ai: #6d28d9;
+  --action-ai-hover: #5b21b6;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-edit-dark: #f9a8d4;
+  --action-edit-dark-hover: #fbcfe8;
+  --action-view-dark: #22d3ee;
+  --action-view-dark-hover: #67e8f9;
+  --action-magic-dark: #c4b5fd;
+  --action-magic-dark-hover: #ddd6fe;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync-dark: #22d3ee;
+  --action-sync-dark-hover: #67e8f9;
+  --action-ai-dark: #c4b5fd;
+  --action-ai-dark-hover: #ddd6fe;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
+}
+
+:root[data-palette="contrast"], .theme-preview[data-preview-palette="contrast"] {
+  --app-bg-light: #ffffff;
+  --app-bg-dark: #101111;
+  --panel-bg-light: #ffffff;
+  --panel-bg-dark: #181a1a;
+  --panel-soft-bg-light: #eef2f2;
+  --panel-soft-bg-dark: #262a2a;
+  --sidebar-bg-light: #eef2f2;
+  --sidebar-bg-dark: #141818;
+  --text-main-light: #111c20;
+  --text-main-dark: #f6faf8;
+  --text-muted-light: #414f55;
+  --text-muted-dark: #bcc9c5;
+  --border-color-light: #829499;
+  --border-color-dark: #7b918a;
+  --input-border-light: #627a82;
+  --input-border-dark: #9aaca6;
+  --table-header-bg-light: #dde7e9;
+  --table-header-bg-dark: #31413a;
+  --table-row-hover-bg-light: #e5efec;
+  --table-row-hover-bg-dark: #293a32;
+  --input-bg-light: #ffffff;
+  --input-bg-dark: #191f1c;
+  --selection-bg-light: #d9eeeb;
+  --selection-bg-dark: #364826;
+  --selection-ink-light: #005e5b;
+  --selection-ink-dark: #d2f4a0;
+  --panel-shadow-light: none;
+  --panel-shadow-dark: none;
+  --login-shadow-light: 0 18px 48px rgb(0 0 0 / 10%);
+  --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
+  --brand-accent-light: #006b68;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #c8ef83;
+  --brand-accent-dark-ink: #182009;
+  --semantic-success-light: #166534;
+  --semantic-warning-light: #92400e;
+  --semantic-danger-light: #b91c1c;
+  --semantic-info-light: #1d4ed8;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --action-edit: #1d4ed8;
+  --action-edit-hover: #1e40af;
+  --action-view: #155e75;
+  --action-view-hover: #164e63;
+  --action-magic: #7c3aed;
+  --action-magic-hover: #6d28d9;
+  --action-run: #166534;
+  --action-run-hover: #14532d;
+  --action-toggle: #166534;
+  --action-toggle-hover: #14532d;
+  --action-sync: #166534;
+  --action-sync-hover: #14532d;
+  --action-ai: #1d4ed8;
+  --action-ai-hover: #1e40af;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-edit-dark: #93c5fd;
+  --action-edit-dark-hover: #bfdbfe;
+  --action-view-dark: #22d3ee;
+  --action-view-dark-hover: #67e8f9;
+  --action-magic-dark: #c4b5fd;
+  --action-magic-dark-hover: #ddd6fe;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync-dark: #4ade80;
+  --action-sync-dark-hover: #86efac;
+  --action-ai-dark: #93c5fd;
+  --action-ai-dark-hover: #bfdbfe;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
+}
+
+:root[data-palette="ocean"], .theme-preview[data-preview-palette="ocean"] {
+  --app-bg-light: #f0f5f5;
+  --app-bg-dark: #141c1d;
+  --panel-bg-light: #ffffff;
+  --panel-bg-dark: #202a2b;
+  --panel-soft-bg-light: #eaf2f2;
+  --panel-soft-bg-dark: #293536;
+  --sidebar-bg-light: #dcecea;
+  --sidebar-bg-dark: #17292a;
+  --text-main-light: #243637;
+  --text-main-dark: #e7f3f1;
+  --text-muted-light: #4e6465;
+  --text-muted-dark: #b1c9c5;
+  --border-color-light: #c6d8d7;
+  --border-color-dark: #4a6364;
+  --input-border-light: #718d8c;
+  --input-border-dark: #7d9e9b;
+  --table-header-bg-light: #dfeeed;
+  --table-header-bg-dark: #304547;
+  --table-row-hover-bg-light: #e9f4f2;
+  --table-row-hover-bg-dark: #314447;
+  --input-bg-light: #fbfefe;
+  --input-bg-dark: #253234;
+  --selection-bg-light: #d3eae5;
+  --selection-bg-dark: #214e4c;
+  --selection-ink-light: #185c58;
+  --selection-ink-dark: #a3e2d6;
+  --panel-shadow-light: none;
+  --panel-shadow-dark: none;
+  --login-shadow-light: 0 16px 40px rgb(16 72 65 / 10%);
+  --login-shadow-dark: 0 16px 40px rgb(0 0 0 / 25%);
+  --brand-accent-light: #176963;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #8ad6d1;
+  --brand-accent-dark-ink: #123330;
+  --semantic-success-light: #166534;
+  --semantic-warning-light: #92400e;
+  --semantic-danger-light: #b91c1c;
+  --semantic-info-light: #1d4ed8;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --action-edit: #185c58;
+  --action-edit-hover: #114b47;
+  --action-view: #155e75;
+  --action-view-hover: #164e63;
+  --action-magic: #9a421b;
+  --action-magic-hover: #763314;
+  --action-run: #166534;
+  --action-run-hover: #14532d;
+  --action-toggle: #166534;
+  --action-toggle-hover: #14532d;
+  --action-sync: #166534;
+  --action-sync-hover: #14532d;
+  --action-ai: #1d4ed8;
+  --action-ai-hover: #1e40af;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-edit-dark: #a3e2d6;
+  --action-edit-dark-hover: #c9eee6;
+  --action-view-dark: #22d3ee;
+  --action-view-dark-hover: #67e8f9;
+  --action-magic-dark: #ffb18a;
+  --action-magic-dark-hover: #ffd2bb;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync-dark: #4ade80;
+  --action-sync-dark-hover: #86efac;
+  --action-ai-dark: #93c5fd;
+  --action-ai-dark-hover: #bfdbfe;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
+}
+
+:root[data-palette="forest"], .theme-preview[data-preview-palette="forest"] {
+  --app-bg-light: #f2f5f2;
+  --app-bg-dark: #171d19;
+  --panel-bg-light: #ffffff;
+  --panel-bg-dark: #222b25;
+  --panel-soft-bg-light: #eef3e9;
+  --panel-soft-bg-dark: #2d382f;
+  --sidebar-bg-light: #e4ecdf;
+  --sidebar-bg-dark: #1d3025;
+  --text-main-light: #29372b;
+  --text-main-dark: #eef3e8;
+  --text-muted-light: #53664f;
+  --text-muted-dark: #bacbb6;
+  --border-color-light: #cad7c4;
+  --border-color-dark: #4f6552;
+  --input-border-light: #7b8d73;
+  --input-border-dark: #8ca17f;
+  --table-header-bg-light: #e5eddd;
+  --table-header-bg-dark: #344a38;
+  --table-row-hover-bg-light: #edf4e8;
+  --table-row-hover-bg-dark: #304435;
+  --input-bg-light: #fdfffc;
+  --input-bg-dark: #27332a;
+  --selection-bg-light: #dcedd1;
+  --selection-bg-dark: #324b2c;
+  --selection-ink-light: #286136;
+  --selection-ink-dark: #d1edb2;
+  --panel-shadow-light: none;
+  --panel-shadow-dark: none;
+  --login-shadow-light: 0 16px 40px rgb(35 77 36 / 10%);
+  --login-shadow-dark: 0 16px 40px rgb(0 0 0 / 25%);
+  --brand-accent-light: #2e6c3f;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #acd391;
+  --brand-accent-dark-ink: #21351d;
+  --semantic-success-light: #166534;
+  --semantic-warning-light: #92400e;
+  --semantic-danger-light: #b91c1c;
+  --semantic-info-light: #1d4ed8;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --action-edit: #2d6240;
+  --action-edit-hover: #204c30;
+  --action-view: #155e75;
+  --action-view-hover: #164e63;
+  --action-magic: #92521b;
+  --action-magic-hover: #744114;
+  --action-run: #166534;
+  --action-run-hover: #14532d;
+  --action-toggle: #166534;
+  --action-toggle-hover: #14532d;
+  --action-sync: #166534;
+  --action-sync-hover: #14532d;
+  --action-ai: #1d4ed8;
+  --action-ai-hover: #1e40af;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-edit-dark: #b8dba1;
+  --action-edit-dark-hover: #d2e9c2;
+  --action-view-dark: #22d3ee;
+  --action-view-dark-hover: #67e8f9;
+  --action-magic-dark: #efc385;
+  --action-magic-dark-hover: #ffdcac;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync-dark: #4ade80;
+  --action-sync-dark-hover: #86efac;
+  --action-ai-dark: #93c5fd;
+  --action-ai-dark-hover: #bfdbfe;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
+}
+
+:root[data-palette="amber"], .theme-preview[data-preview-palette="amber"] {
+  --app-bg-light: #f4f5f4;
+  --app-bg-dark: #1c1d1a;
+  --panel-bg-light: #ffffff;
+  --panel-bg-dark: #292a25;
+  --panel-soft-bg-light: #f0f1ed;
+  --panel-soft-bg-dark: #34362d;
+  --sidebar-bg-light: #e8ebe6;
+  --sidebar-bg-dark: #202c2b;
+  --text-main-light: #30342b;
+  --text-main-dark: #f5f4e8;
+  --text-muted-light: #60654f;
+  --text-muted-dark: #c6c8b5;
+  --border-color-light: #d4d6c6;
+  --border-color-dark: #646751;
+  --input-border-light: #858a72;
+  --input-border-dark: #a2a781;
+  --table-header-bg-light: #eeefdf;
+  --table-header-bg-dark: #44452f;
+  --table-row-hover-bg-light: #f5f3df;
+  --table-row-hover-bg-dark: #3d412c;
+  --input-bg-light: #fffffc;
+  --input-bg-dark: #2e3028;
+  --selection-bg-light: #f9e6a8;
+  --selection-bg-dark: #51431b;
+  --selection-ink-light: #5d4106;
+  --selection-ink-dark: #ffe097;
+  --panel-shadow-light: none;
+  --panel-shadow-dark: none;
+  --login-shadow-light: 0 16px 40px rgb(82 63 13 / 10%);
+  --login-shadow-dark: 0 16px 40px rgb(0 0 0 / 25%);
+  --brand-accent-light: #946200;
+  --brand-accent-light-ink: #ffffff;
+  --brand-accent-dark: #f9ce59;
+  --brand-accent-dark-ink: #302b17;
+  --semantic-success-light: #166534;
+  --semantic-warning-light: #92400e;
+  --semantic-danger-light: #b91c1c;
+  --semantic-info-light: #1d4ed8;
+  --semantic-success-dark: #4ade80;
+  --semantic-warning-dark: #f6d98a;
+  --semantic-danger-dark: #f87171;
+  --semantic-info-dark: #60a5fa;
+  --action-edit: #855400;
+  --action-edit-hover: #6b4400;
+  --action-view: #1b6666;
+  --action-view-hover: #144f4f;
+  --action-magic: #7c3aed;
+  --action-magic-hover: #6d28d9;
+  --action-run: #166534;
+  --action-run-hover: #14532d;
+  --action-toggle: #166534;
+  --action-toggle-hover: #14532d;
+  --action-sync: #166534;
+  --action-sync-hover: #14532d;
+  --action-ai: #1d4ed8;
+  --action-ai-hover: #1e40af;
+  --action-delete: #b91c1c;
+  --action-delete-hover: #991b1b;
+  --action-edit-dark: #ffe097;
+  --action-edit-dark-hover: #fff0bd;
+  --action-view-dark: #8ddbd4;
+  --action-view-dark-hover: #b5eee8;
+  --action-magic-dark: #c4b5fd;
+  --action-magic-dark-hover: #ddd6fe;
+  --action-run-dark: #4ade80;
+  --action-run-dark-hover: #86efac;
+  --action-toggle-dark: #4ade80;
+  --action-toggle-dark-hover: #86efac;
+  --action-sync-dark: #4ade80;
+  --action-sync-dark-hover: #86efac;
+  --action-ai-dark: #93c5fd;
+  --action-ai-dark-hover: #bfdbfe;
+  --action-delete-dark: #fca5a5;
+  --action-delete-dark-hover: #fecaca;
+}
+
+:root {
+  color-scheme: light;
+  --sidebar-width: var(--sidebar-expanded-min-width);
+  --sidebar-expanded-min-width: 216px;
+  --sidebar-collapsed-width: 64px;
+  --sidebar-transition: 300ms ease-in-out;
+
+  /* 组件只消费当前模式的语义别名。 */
+  --app-bg: var(--app-bg-light); --panel-bg: var(--panel-bg-light);
+  --panel-soft-bg: var(--panel-soft-bg-light); --sidebar-bg: var(--sidebar-bg-light);
+  --text-main: var(--text-main-light); --text-muted: var(--text-muted-light);
+  --border-color: var(--border-color-light); --input-border: var(--input-border-light);
+  --table-header-bg: var(--table-header-bg-light); --table-row-hover-bg: var(--table-row-hover-bg-light);
+  --input-bg: var(--input-bg-light); --selection-bg: var(--selection-bg-light); --selection-ink: var(--selection-ink-light);
+  --panel-shadow: var(--panel-shadow-light); --login-panel-shadow: var(--login-shadow-light);
+  --status-button-ink: #ffffff;
+  --brand-accent: var(--brand-accent-light);
+  --brand-accent-ink: var(--brand-accent-light-ink);
+  --brand-accent-hover: color-mix(in srgb, var(--brand-accent-light) 90%, black);
+  --semantic-success: var(--semantic-success-light);
+  --semantic-warning: var(--semantic-warning-light);
+  --semantic-danger: var(--semantic-danger-light);
+  --semantic-info: var(--semantic-info-light);
+}
+
 :root[data-scheme="dark"] {
   color-scheme: dark;
   --app-bg: var(--app-bg-dark); --panel-bg: var(--panel-bg-dark);
@@ -113,89 +505,6 @@
   --semantic-warning: var(--semantic-warning-dark);
   --semantic-danger: var(--semantic-danger-dark);
   --semantic-info: var(--semantic-info-dark);
-}
-
-:root[data-palette="candy"] {
-  --app-bg-light: #fcf1f5; --app-bg-dark: #221c21;
-  --panel-bg-light: #fffdfd; --panel-bg-dark: #2d252b;
-  --panel-soft-bg-light: #f7edf2; --panel-soft-bg-dark: #382e36;
-  --sidebar-bg-light: #eaf5ef; --sidebar-bg-dark: #1d2b26;
-  --text-main-light: #362a35; --text-main-dark: #f3eaf0;
-  --text-muted-light: #705363; --text-muted-dark: #c6afbf;
-  --border-color-light: #dfcbd7; --border-color-dark: #64515d;
-  --input-border-light: #89707f; --input-border-dark: #ac8b9e;
-  --table-header-bg-light: #f3e6ee; --table-header-bg-dark: #463440;
-  --table-row-hover-bg-light: #f9eaf3; --table-row-hover-bg-dark: #48353f;
-  --input-bg-light: #fffbfd; --input-bg-dark: #352c32;
-  --selection-bg-light: #f7dce9; --selection-bg-dark: #573344;
-  --selection-ink-light: #9d174d; --selection-ink-dark: #f9a8d4;
-  --panel-shadow-light: 0 2px 10px rgb(93 28 63 / 5%); --panel-shadow-dark: 0 2px 10px rgb(0 0 0 / 10%);
-  --login-shadow-light: 0 18px 48px rgb(93 28 63 / 10%); --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
-  --brand-accent-light: #be185d;
-  --brand-accent-light-ink: #ffffff;
-  --brand-accent-dark: #f9a8d4;
-  --brand-accent-dark-ink: #4a102b;
-  --semantic-success-light: #15803d;
-  --semantic-warning-light: #b45309;
-  --semantic-danger-light: #dc2626;
-  --semantic-info-light: #1d4ed8;
-  --semantic-success-dark: #4ade80;
-  --semantic-warning-dark: #f6d98a;
-  --semantic-danger-dark: #f87171;
-  --semantic-info-dark: #60a5fa;
-  --action-edit: #be185d;
-  --action-edit-hover: #9d174d;
-  --action-edit-dark: #f9a8d4;
-  --action-edit-dark-hover: #fbcfe8;
-  --action-view: #155e75;
-  --action-view-hover: #164e63;
-  --action-view-dark: #22d3ee;
-  --action-view-dark-hover: #67e8f9;
-  --action-magic: #7e22ce;
-  --action-magic-hover: #6b21a8;
-  --action-magic-dark: #c4b5fd;
-  --action-magic-dark-hover: #ddd6fe;
-  --action-run: #065f46;
-  --action-run-hover: #064e3b;
-  --action-run-dark: #4ade80;
-  --action-run-dark-hover: #86efac;
-  --action-toggle: #065f46;
-  --action-toggle-hover: #064e3b;
-  --action-toggle-dark: #4ade80;
-  --action-toggle-dark-hover: #86efac;
-  --action-sync: #155e75;
-  --action-sync-hover: #164e63;
-  --action-sync-dark: #22d3ee;
-  --action-sync-dark-hover: #67e8f9;
-  --action-ai: #6d28d9;
-  --action-ai-hover: #5b21b6;
-  --action-ai-dark: #c4b5fd;
-  --action-ai-dark-hover: #ddd6fe;
-  --action-delete: #b91c1c;
-  --action-delete-hover: #991b1b;
-  --action-delete-dark: #fca5a5;
-  --action-delete-dark-hover: #fecaca;
-}
-
-/* 精密高对比沿用公共语义/动作基线，不依赖上一主题的属性残留。 */
-:root[data-palette="contrast"] {
-  --app-bg-light: #ffffff; --app-bg-dark: #101111;
-  --panel-bg-light: #ffffff; --panel-bg-dark: #181a1a;
-  --panel-soft-bg-light: #eef2f2; --panel-soft-bg-dark: #262a2a;
-  --sidebar-bg-light: #eef2f2; --sidebar-bg-dark: #141818;
-  --text-main-light: #111c20; --text-main-dark: #f6faf8;
-  --text-muted-light: #414f55; --text-muted-dark: #bcc9c5;
-  --border-color-light: #829499; --border-color-dark: #7b918a;
-  --input-border-light: #627a82; --input-border-dark: #9aaca6;
-  --table-header-bg-light: #dde7e9; --table-header-bg-dark: #31413a;
-  --table-row-hover-bg-light: #e5efec; --table-row-hover-bg-dark: #293a32;
-  --input-bg-light: #ffffff; --input-bg-dark: #191f1c;
-  --selection-bg-light: #d9eeeb; --selection-bg-dark: #364826;
-  --selection-ink-light: #005e5b; --selection-ink-dark: #d2f4a0;
-  --panel-shadow-light: none; --panel-shadow-dark: none;
-  --login-shadow-light: 0 18px 48px rgb(0 0 0 / 10%); --login-shadow-dark: 0 18px 48px rgb(0 0 0 / 25%);
-  --brand-accent-light: #006b68; --brand-accent-light-ink: #ffffff;
-  --brand-accent-dark: #c8ef83; --brand-accent-dark-ink: #182009;
 }
 
 /* 别名和Element Plus映射同源，输入、固定列和浮层都继承完整主题。 */
@@ -247,15 +556,41 @@
   --el-button-active-text-color: var(--brand-accent-ink);
 }
 
-.theme-preferences { display: grid; gap: 16px; }
 .el-radio-button { --el-radio-button-checked-text-color: var(--brand-accent-ink); }
+
+.theme-preference-popover.el-popper { max-width: calc(100vw - 24px); padding: 16px; border-color: var(--input-border); background: var(--panel-bg); color: var(--text-main); border-radius: 8px; }
+.theme-preferences { display: flex; flex-direction: column; gap: 16px; max-height: min(528px, calc(100dvh - 56px)); min-width: 0; }
+.theme-preference-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.theme-preference-heading strong { font-size: 16px; }
+.theme-preference-heading .el-button { width: 28px; height: 28px; padding: 0; }
 .theme-preferences fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-.theme-preferences legend { margin-bottom: 8px; color: var(--text-muted); font-size: 13px; }
-.theme-preferences .el-radio-button__inner { padding: 8px 10px; }
-.palette-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: baseline; }
-.palette-swatch-default { background: #2563eb; }
-.palette-swatch-candy { background: #be185d; }
-.palette-swatch-contrast { background: #006b68; }
+.theme-preferences legend, .theme-preference-label { padding: 0 0 8px; color: var(--text-muted); font-size: 13px; }
+.theme-preferences .el-radio-group:not(.theme-preference-options) { display: flex; }
+.theme-preferences .el-radio-button { flex: 1; }
+.theme-preferences .el-radio-button__inner { display: block; padding: 9px 10px; transition: none; }
+.theme-preference-field { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.theme-preference-options.el-radio-group { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 10px; overflow-y: auto; overscroll-behavior: contain; padding: 3px; margin: -3px; }
+.theme-preference-option.el-radio { position: relative; display: block; min-width: 0; width: 100%; height: 110px; margin: 0; padding: 8px; border: 1px solid var(--input-border); background: var(--panel-bg); border-radius: 6px; color: var(--text-main); }
+.theme-preference-option:hover { background: var(--panel-soft-bg); }
+.theme-preference-option.is-checked { border-color: var(--selection-ink); box-shadow: inset 0 0 0 1px var(--selection-ink); }
+.theme-preference-option:has(input:focus-visible) { outline: 2px solid var(--selection-ink); outline-offset: 1px; }
+.theme-preference-option .el-radio__input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.theme-preference-option .el-radio__label { display: grid; min-width: 0; height: 100%; grid-template-rows: 60px auto; gap: 8px; padding: 0; color: var(--text-main) !important; }
+.theme-preference-caption { display: flex; gap: 4px; justify-content: space-between; align-items: center; font-size: 13px; line-height: 18px; }
+.theme-preference-caption > span { overflow-wrap: anywhere; white-space: normal; }
+.theme-preference-caption .el-icon { flex-shrink: 0; color: var(--selection-ink); }
+.theme-preview { --preview-canvas: var(--app-bg-light); --preview-sidebar: var(--sidebar-bg-light); --preview-panel: var(--panel-bg-light); --preview-header: var(--table-header-bg-light); --preview-ink: var(--text-muted-light); --preview-accent: var(--brand-accent-light); display: grid; grid-template-columns: 20% minmax(0, 1fr); gap: 7px; height: 60px; padding: 6px; background: var(--preview-canvas); border-radius: 3px; overflow: hidden; }
+.theme-preview[data-preview-scheme="dark"] { --preview-canvas: var(--app-bg-dark); --preview-sidebar: var(--sidebar-bg-dark); --preview-panel: var(--panel-bg-dark); --preview-header: var(--table-header-bg-dark); --preview-ink: var(--text-muted-dark); --preview-accent: var(--brand-accent-dark); }
+.theme-preview i { display: block; min-width: 0; font-style: normal; }
+.theme-preview-sidebar { background: var(--preview-sidebar); border-left: 3px solid var(--preview-accent); }
+.theme-preview-sheet { display: grid !important; grid-template-rows: 8px 1fr 5px; gap: 5px; padding: 4px; background: var(--preview-panel); }
+.theme-preview-header { background: var(--preview-header); }
+.theme-preview-lines { border-top: 2px solid var(--preview-ink); border-bottom: 2px solid var(--preview-header); opacity: .6; }
+.theme-preview-command { width: 30%; margin-left: auto; background: var(--preview-accent); }
+.theme-preference-dialog.el-dialog { max-height: calc(100dvh - 24px); padding: 16px; display: flex; flex-direction: column; }
+.theme-preference-dialog .el-dialog__body { display: flex; min-height: 0; overflow: hidden; }
+.theme-preference-dialog .theme-preferences { width: 100%; max-height: calc(100dvh - 88px); }
+@media (max-width: 359px) { .theme-preference-options.el-radio-group { grid-template-columns: minmax(0, 1fr); } }
 
 .scan-jobs-table .cell,
 .task-governance-table .cell { font-variant-numeric: tabular-nums; }
@@ -263,7 +598,15 @@
 .brand-block:focus-visible,
 .settings-test-status-bar:focus-visible,
 .media-source-path-type-help:focus-visible,
+.media-source-path-help:focus-visible,
+.settings-help-icon:focus-visible,
+.text-cell:focus-visible,
 .table-action-button:focus-visible,
+.naming-builder-token-main:focus-visible,
+.naming-builder-token-remove:focus-visible,
+.naming-element-button:focus-visible,
+.naming-context-menu button:focus-visible,
+.naming-builder-dropzone:focus-visible,
 .naming-builder-token-input:focus-visible {
   outline: 2px solid var(--el-color-primary) !important;
   outline-offset: 2px;
@@ -1461,6 +1804,8 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
 .settings-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: clamp(0.75rem, 1.5vw, 1rem);
 }
 
@@ -3773,6 +4118,7 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
 
 .naming-builder {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(0.75rem, 1.5vw, 1rem);
   min-width: 0;
 }
@@ -3845,6 +4191,22 @@ body :where(.list-filter-row, .list-filter-primary, .list-filter-extra, .list-fi
   cursor: pointer;
   font-size: 0.875rem;
   line-height: 1;
+  padding: 0;
+  border: 0;
+  font-family: inherit;
+}
+
+.naming-builder-token-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: grab;
 }
 
 .naming-builder-token-remove:hover {

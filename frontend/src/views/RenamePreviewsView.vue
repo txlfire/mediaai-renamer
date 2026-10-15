@@ -1931,7 +1931,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div v-if="!aiBatchReady" class="rename-toolbar-status-row">
-          <el-tooltip :content="aiBatchBlockMessage" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="aiBatchBlockMessage" placement="top">
             <div class="rename-toolbar-status-chip" role="status" aria-live="polite">
               <span class="rename-toolbar-status-dot" aria-hidden="true"></span>
               <span>{{ aiBatchStatusLabel }}</span>
@@ -2026,7 +2026,7 @@ onBeforeUnmount(() => {
           <template #default="{ row }">
           <div class="target-name-cell">
             <TextCell :value="row.current_target_name" :max-length="tableDisplayConfig.fileNameMaxLength" />
-            <el-tooltip
+            <el-tooltip :trigger-keys="[]"
               v-if="shouldShowNamingTemplateStatus(row)"
               :content="namingTemplateStatusReason(row)"
               placement="top"
@@ -2044,7 +2044,7 @@ onBeforeUnmount(() => {
           </el-table-column>
           <el-table-column :label="messages.renamePreviews.columns.parsedTitle" min-width="132" align="left" header-align="left">
           <template #default="{ row }">
-          <el-tooltip
+          <el-tooltip :trigger-keys="[]"
             :content="`${row.parsed_title || '-'} · ${messages.renamePreviews.columns.titleSource}: ${titleSourceLabel(row.title_source)}${row.parent_folder_title ? ` · ${messages.renamePreviews.columns.parentFolderTitle}: ${row.parent_folder_title}` : ''}`"
             placement="top"
           >
@@ -2060,7 +2060,7 @@ onBeforeUnmount(() => {
           header-align="center"
           >
           <template #default="{ row }">
-          <el-tooltip :content="metadataReason(row)" placement="top" :disabled="!metadataReason(row) || metadataReason(row) === '-'">
+          <el-tooltip :trigger-keys="[]" :content="metadataReason(row)" placement="top" :disabled="!metadataReason(row) || metadataReason(row) === '-'">
             <el-tag :type="metadataStatusTagType(row.metadata_match_status)" effect="light">
             {{ metadataStatusLabel(row.metadata_match_status) }}
             </el-tag>
@@ -2078,7 +2078,7 @@ onBeforeUnmount(() => {
           sortable="custom"
           >
           <template #default="{ row }">
-            <el-tooltip :content="metadataReason(row)" placement="top" :disabled="!metadataReason(row) || metadataReason(row) === '-'">
+            <el-tooltip :trigger-keys="[]" :content="metadataReason(row)" placement="top" :disabled="!metadataReason(row) || metadataReason(row) === '-'">
               <span>{{ row.metadata_match_score ?? 0 }}%</span>
             </el-tooltip>
           </template>
@@ -2128,7 +2128,7 @@ onBeforeUnmount(() => {
           <el-table-column :label="messages.common.actions" width="190" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
           <div class="table-actions">
-          <el-tooltip :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.actions.tmdbMatch" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.tmdbMatch"
           class="table-action-button action-sync"
           :icon="Connection"
@@ -2138,7 +2138,7 @@ onBeforeUnmount(() => {
           @click.stop="matchMetadata(row)"
           />
           </el-tooltip>
-          <el-tooltip :content="messages.renamePreviews.actions.multiSourceMatch" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.actions.multiSourceMatch" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.multiSourceMatch"
           class="table-action-button action-sync"
           :icon="Connection"
@@ -2148,7 +2148,7 @@ onBeforeUnmount(() => {
           @click.stop="matchMultiSource(row)"
           />
           </el-tooltip>
-          <el-tooltip :content="messages.renamePreviews.actions.aiParse" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.actions.aiParse" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.aiParse"
           class="table-action-button action-ai"
           :icon="MagicStick"
@@ -2159,7 +2159,7 @@ onBeforeUnmount(() => {
           @click.stop="parseSingleWithAi(row)"
           />
           </el-tooltip>
-          <el-tooltip v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataResult" placement="top">
+          <el-tooltip :trigger-keys="[]" v-if="row.metadata_candidate_count > 0" :content="messages.renamePreviews.actions.metadataResult" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.metadataResult"
           class="table-action-button action-sync"
           :icon="View"
@@ -2169,10 +2169,10 @@ onBeforeUnmount(() => {
           @click.stop="openMetadataBackfill(row)"
           />
           </el-tooltip>
-          <el-tooltip :content="messages.renamePreviews.actions.edit" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.actions.edit" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.edit" class="table-action-button action-edit" :icon="Edit" :disabled="!canExecuteRename" :title="canExecuteRename ? '' : messages.auth.permissionDenied" text circle @click.stop="openEditDialog(row)" />
           </el-tooltip>
-          <el-tooltip :content="messages.renamePreviews.actions.exclude" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.actions.exclude" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.exclude"
           class="table-action-button action-delete"
           :icon="CloseBold"
@@ -2183,7 +2183,7 @@ onBeforeUnmount(() => {
           @click.stop="excludeSinglePreview(row)"
           />
           </el-tooltip>
-          <el-tooltip :content="messages.renamePreviews.actions.execute" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.actions.execute" placement="top">
           <el-button :aria-label="messages.renamePreviews.actions.execute"
           class="table-action-button action-run"
           :icon="Select"
@@ -2224,7 +2224,7 @@ onBeforeUnmount(() => {
 
         <el-tab-pane name="pending" class="pending-files-pane">
           <template #label>
-            <el-tooltip :content="messages.renamePreviews.pendingFiles.description" placement="top">
+            <el-tooltip :trigger-keys="[]" :content="messages.renamePreviews.pendingFiles.description" placement="top">
               <span class="tab-label-with-tooltip">{{ messages.renamePreviews.tabs.pendingFiles }}</span>
             </el-tooltip>
           </template>
@@ -2252,7 +2252,7 @@ onBeforeUnmount(() => {
           <el-table-column type="selection" width="44" align="center" fixed="left" :selectable="(row: PendingFile) => row.status === 'pending'" />
           <el-table-column :label="messages.common.status" width="116" align="center" header-align="center">
           <template #default="{ row }">
-          <el-tooltip :disabled="row.status === 'pending'" :content="messages.renamePreviews.pendingFiles.unresolved" placement="top">
+          <el-tooltip :trigger-keys="[]" :disabled="row.status === 'pending'" :content="messages.renamePreviews.pendingFiles.unresolved" placement="top">
           <el-tag :type="row.status === 'recovery_required' ? 'danger' : row.status === 'moving' ? 'warning' : 'info'" effect="light">
           {{ messages.renamePreviews.pendingFiles.statuses[row.status as keyof typeof messages.renamePreviews.pendingFiles.statuses] || row.status }}
           </el-tag>
@@ -2282,7 +2282,7 @@ onBeforeUnmount(() => {
           </el-table-column>
           <el-table-column :label="messages.common.actions" width="144" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
-          <el-tooltip :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.actions.aiParse" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.actions.aiParse" placement="top">
           <el-button :aria-label="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.actions.aiParse"
           class="table-action-button action-ai"
           :icon="MagicStick"
@@ -2294,7 +2294,7 @@ onBeforeUnmount(() => {
           @click="parsePendingWithAi(row)"
           />
           </el-tooltip>
-          <el-tooltip :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.pendingFiles.remove" placement="top">
+          <el-tooltip :trigger-keys="[]" :content="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.pendingFiles.remove" placement="top">
           <el-button :aria-label="row.status !== 'pending' ? messages.renamePreviews.pendingFiles.unresolved : messages.renamePreviews.pendingFiles.remove"
           class="table-action-button action-delete"
           :icon="Delete"

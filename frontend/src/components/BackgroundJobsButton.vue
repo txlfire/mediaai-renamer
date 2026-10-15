@@ -109,7 +109,7 @@ onBeforeUnmount(clearTimer);
   <el-drawer v-model="visible" :title="text.title" size="min(880px, calc(100vw - 24px))" destroy-on-close>
     <div class="background-job-panel">
       <div class="background-job-toolbar">
-        <el-select v-model="jobs.activeRequestId" :placeholder="text.recent">
+        <el-select v-model="jobs.activeRequestId" :aria-label="text.recent" :placeholder="text.recent">
           <el-option v-for="job in jobs.recent" :key="job.request_id" :value="job.request_id"
             :label="`#${job.id} ${kindLabel(job.kind)} · ${statusLabel(job.status)}`" />
         </el-select>

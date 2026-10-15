@@ -610,13 +610,13 @@ onBeforeUnmount(() => {
         <el-table-column :label="messages.common.actions" width="168" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
-              <el-tooltip :content="pageText.openTarget" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="pageText.openTarget" placement="top">
                 <el-button :aria-label="pageText.openTarget" class="table-action-button action-view" :icon="Document" text circle @click="openTaskTarget(row)" />
               </el-tooltip>
-              <el-tooltip :content="pageText.viewLog" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="pageText.viewLog" placement="top">
                 <el-button :aria-label="pageText.viewLog" class="table-action-button action-view" :icon="Notebook" :disabled="!canReadLogs" :title="canReadLogs ? '' : messages.auth.permissionDenied" text circle @click="openTaskLog(row)" />
               </el-tooltip>
-              <el-tooltip :content="row.archived ? pageText.restoreTask : pageText.archiveTask" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="row.archived ? pageText.restoreTask : pageText.archiveTask" placement="top">
                 <el-button :aria-label="row.archived ? pageText.restoreTask : pageText.archiveTask"
                   :class="['table-action-button', row.archived ? 'action-sync' : 'action-edit']"
                   :icon="row.archived ? RefreshLeft : Box"
@@ -717,7 +717,7 @@ onBeforeUnmount(() => {
           <el-table-column :label="messages.common.actions" width="112" align="center" header-align="center" fixed="right">
             <template #default="{ row }">
               <div class="table-actions">
-                <el-tooltip :content="pageText.webdav.viewDetail" placement="top">
+                <el-tooltip :trigger-keys="[]" :content="pageText.webdav.viewDetail" placement="top">
                   <el-button :aria-label="pageText.webdav.viewDetail"
                     class="table-action-button action-view"
                     :icon="Document"
@@ -726,7 +726,7 @@ onBeforeUnmount(() => {
                     @click="showRemoteOperationDetail(row)"
                   />
                 </el-tooltip>
-                <el-tooltip v-if="canRecoverRemoteOperation(row)" :content="hasRecoveryPermission(row) ? pageText.webdav.recover : messages.auth.permissionDenied" placement="top">
+                <el-tooltip :trigger-keys="[]" v-if="canRecoverRemoteOperation(row)" :content="hasRecoveryPermission(row) ? pageText.webdav.recover : messages.auth.permissionDenied" placement="top">
                   <el-button :aria-label="hasRecoveryPermission(row) ? pageText.webdav.recover : messages.auth.permissionDenied"
                     class="table-action-button action-sync"
                     :icon="RefreshLeft"
@@ -785,7 +785,7 @@ onBeforeUnmount(() => {
             </el-table-column>
             <el-table-column :label="messages.common.actions" width="96" align="center" header-align="center" fixed="right">
               <template #default="{ row }">
-                <el-tooltip
+                <el-tooltip :trigger-keys="[]"
                   :content="canCloseAuditIntent ? pageText.auditIntents.close : messages.auth.permissionDenied"
                   placement="top"
                 >

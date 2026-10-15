@@ -2,13 +2,11 @@
 import {
   EditPen,
   FolderOpened,
-  Moon,
   Notebook,
   Operation,
   Search,
   Setting,
   SwitchButton,
-  Sunny,
   VideoCamera,
   Loading,
 } from "@element-plus/icons-vue";
@@ -23,6 +21,7 @@ import { useAuthStore } from "./stores/auth";
 import { routeLoading } from "./router";
 
 import BackgroundJobsButton from "./components/BackgroundJobsButton.vue";
+import ThemePreferences from "./components/ThemePreferences.vue";
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -41,11 +40,10 @@ const menuItems = computed(() =>
   ].filter((item) => item.visible),
 );
 
-const isDarkTheme = computed(() => appStore.resolvedTheme === "dark");
 const isPublicPage = computed(() => route.matched.length === 0 || Boolean(route.meta.public));
 const currentUserName = computed(() => authStore.currentUser?.displayName || authStore.currentUser?.username || "");
 const versionText = computed(() => appStore.health?.version
-  ? `${messages.app.previewVersion} v${appStore.health.version}` : messages.app.versionPending);
+  ? `v${appStore.health.version}` : messages.app.versionPending);
 
 const connectionLabel = computed(() => {
   if (appStore.connectionState === "online") {
@@ -63,20 +61,10 @@ const sidebarToggleLabel = computed(() =>
   appStore.sidebarCollapsed ? messages.app.sidebar.expandTooltip : messages.app.sidebar.collapseTooltip,
 );
 
-const themeLabel = computed(() => messages.app.theme.settings);
-
 function updateSystemTheme() {
   if (appStore.themeMode === "system") {
     appStore.applyThemeMode();
   }
-}
-
-function selectThemeMode(value: unknown) {
-  if (value === "system" || value === "light" || value === "dark") appStore.setThemeMode(value);
-}
-
-function selectThemePalette(value: unknown) {
-  if (value === "default" || value === "candy" || value === "contrast") appStore.setThemePalette(value);
 }
 
 async function logout() {
@@ -119,7 +107,7 @@ onUnmounted(() => {
   <RouterView v-if="isPublicPage" />
   <div v-else class="app-layout" :class="{ 'is-collapsed': appStore.sidebarCollapsed }">
     <aside class="app-sidebar">
-      <el-tooltip :content="sidebarToggleLabel" placement="right">
+      <el-tooltip :trigger-keys="[]" :content="sidebarToggleLabel" placement="right">
         <button type="button" class="brand-block" :aria-label="sidebarToggleLabel" @click="appStore.toggleSidebar">
           <div class="brand-logo">MR</div>
           <div v-if="!appStore.sidebarCollapsed" class="brand-copy">
@@ -130,14 +118,14 @@ onUnmounted(() => {
       </el-tooltip>
 
       <nav class="side-menu">
-        <el-tooltip
+        <el-tooltip :trigger-keys="[]"
           v-for="item in menuItems"
           :key="item.path"
           :content="item.label"
           :disabled="!appStore.sidebarCollapsed"
           placement="right"
         >
-          <RouterLink :class="{ active: route.path === item.path }" :to="item.path">
+          <RouterLink :class="{ active: route.path === item.path }" :to="item.path" :aria-label="item.label">
             <el-icon><component :is="item.icon" /></el-icon>
             <span v-if="!appStore.sidebarCollapsed">{{ item.label }}</span>
           </RouterLink>
@@ -148,7 +136,7 @@ onUnmounted(() => {
         <p v-if="!appStore.sidebarCollapsed" class="hint-text">{{ messages.app.hint }}</p>
 
         <div class="status-language-row">
-          <el-tooltip :content="connectionLabel" :disabled="!appStore.sidebarCollapsed" placement="right">
+          <el-tooltip :trigger-keys="[]" :content="connectionLabel" :disabled="!appStore.sidebarCollapsed" placement="right">
             <div class="connection-state" :class="`is-${appStore.connectionState}`">
               <span class="status-dot" />
               <span v-if="!appStore.sidebarCollapsed">{{ connectionLabel }}</span>
@@ -167,34 +155,10 @@ onUnmounted(() => {
 
         <div class="version-theme-row">
           <span v-if="!appStore.sidebarCollapsed" class="version-text">{{ versionText }}</span>
-          <el-popover placement="right-end" trigger="click" :width="340">
-            <template #reference>
-              <el-button class="theme-toggle" circle :aria-label="themeLabel" :title="themeLabel">
-                <el-icon><component :is="isDarkTheme ? Sunny : Moon" /></el-icon>
-              </el-button>
-            </template>
-            <div class="theme-preferences">
-              <fieldset>
-                <legend>{{ messages.app.theme.scheme }}</legend>
-                <el-radio-group :model-value="appStore.themeMode" :aria-label="messages.app.theme.scheme" @change="selectThemeMode">
-                  <el-radio-button value="system">{{ messages.app.theme.system }}</el-radio-button>
-                  <el-radio-button value="light">{{ messages.app.theme.light }}</el-radio-button>
-                  <el-radio-button value="dark">{{ messages.app.theme.dark }}</el-radio-button>
-                </el-radio-group>
-              </fieldset>
-              <fieldset>
-                <legend>{{ messages.app.theme.palette }}</legend>
-                <el-radio-group :model-value="appStore.themePalette" :aria-label="messages.app.theme.palette" @change="selectThemePalette">
-                  <el-radio-button value="default"><span class="palette-swatch palette-swatch-default" aria-hidden="true"></span>{{ messages.app.theme.defaultPalette }}</el-radio-button>
-                  <el-radio-button value="candy"><span class="palette-swatch palette-swatch-candy" aria-hidden="true"></span>{{ messages.app.theme.candyPalette }}</el-radio-button>
-                  <el-radio-button value="contrast"><span class="palette-swatch palette-swatch-contrast" aria-hidden="true"></span>{{ messages.app.theme.contrastPalette }}</el-radio-button>
-                </el-radio-group>
-              </fieldset>
-            </div>
-          </el-popover>
+          <ThemePreferences />
         </div>
 
-        <el-button class="logout-button" :icon="SwitchButton" text :loading="authStore.loading" @click="logout">
+        <el-button class="logout-button" :icon="SwitchButton" :aria-label="messages.app.logout" text :loading="authStore.loading" @click="logout">
           <template v-if="!appStore.sidebarCollapsed">
             <span class="logout-text">{{ messages.app.logout }}</span>
             <span class="user-name">{{ currentUserName || messages.auth.loginRequired }}</span>
@@ -206,7 +170,7 @@ onUnmounted(() => {
     <main class="app-workbench" :aria-busy="routeLoading">
       <div class="workbench-topbar">
         <BackgroundJobsButton />
-        <el-input class="global-search" :placeholder="messages.app.globalSearchPlaceholder" :prefix-icon="Search" clearable />
+        <el-input class="global-search" :aria-label="messages.app.globalSearchPlaceholder" :placeholder="messages.app.globalSearchPlaceholder" :prefix-icon="Search" clearable />
       </div>
       <RouterView />
     </main>

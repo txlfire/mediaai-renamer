@@ -89,6 +89,14 @@ async function loadLogStorage() {
   }
 }
 const pageText = messages.settings;
+const timeoutHelpVisible = ref(false);
+
+function dismissTimeoutHelp(event: KeyboardEvent) {
+  if (!timeoutHelpVisible.value) return;
+  event.stopPropagation();
+  timeoutHelpVisible.value = false;
+}
+
 const settingsWriteDisabled = computed(() => !authStore.hasPermission("settings:write"));
 const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? messages.auth.permissionDenied : ""));
 const movieNamingElements = ref<NamingTemplateElement[]>([]);
@@ -2308,8 +2316,8 @@ onBeforeUnmount(() => {
               <template #label>
                 <span class="settings-label-with-help">
                   <span>{{ pageText.tmdb.timeout }}</span>
-                  <el-tooltip :content="pageText.tmdb.timeoutHelp" placement="top">
-                    <span class="settings-help-icon">?</span>
+                  <el-tooltip v-model:visible="timeoutHelpVisible" :trigger-keys="[]" :trigger="['hover', 'focus']" :content="pageText.tmdb.timeoutHelp" placement="top">
+                    <span class="settings-help-icon" tabindex="0" :aria-label="pageText.tmdb.timeoutHelp" @keydown.esc="dismissTimeoutHelp">?</span>
                   </el-tooltip>
                 </span>
               </template>
@@ -2890,7 +2898,7 @@ onBeforeUnmount(() => {
                 >
                   <template #default="{ row }">
                     <div class="table-actions">
-                      <el-tooltip :content="pageText.ai.editProfile" placement="top">
+                      <el-tooltip :trigger-keys="[]" :content="pageText.ai.editProfile" placement="top">
                         <el-button :aria-label="pageText.ai.editProfile"
                           class="table-action-button action-edit"
                           :icon="Edit"
@@ -2899,7 +2907,7 @@ onBeforeUnmount(() => {
                           @click="loadAiProfile(row)"
                         />
                       </el-tooltip>
-                      <el-tooltip :content="pageText.ai.activateProfile" placement="top">
+                      <el-tooltip :trigger-keys="[]" :content="pageText.ai.activateProfile" placement="top">
                         <el-button :aria-label="pageText.ai.activateProfile"
                           class="table-action-button action-toggle"
                           :icon="Check"
@@ -2908,7 +2916,7 @@ onBeforeUnmount(() => {
                           @click="activateAiProfile(row)"
                         />
                       </el-tooltip>
-                      <el-tooltip :content="pageText.ai.deleteProfile" placement="top">
+                      <el-tooltip :trigger-keys="[]" :content="pageText.ai.deleteProfile" placement="top">
                         <el-button :aria-label="pageText.ai.deleteProfile"
                           class="table-action-button action-delete"
                           :icon="Delete"
@@ -3491,7 +3499,7 @@ onBeforeUnmount(() => {
               </el-table-column>
               <el-table-column :label="pageText.users.permissions" width="108" align="center">
                 <template #default="{ row }: { row: AuthUser }">
-                  <el-tooltip :content="pageText.users.viewPermissions" placement="top">
+                  <el-tooltip :trigger-keys="[]" :content="pageText.users.viewPermissions" placement="top">
                     <button
                       type="button"
                       class="settings-user-icon-action table-action-button action-view"
@@ -3516,7 +3524,7 @@ onBeforeUnmount(() => {
               >
                 <template #default="{ row }: { row: AuthUser }">
                   <div class="settings-user-row-actions">
-                    <el-tooltip :content="pageText.users.editUser" placement="top">
+                    <el-tooltip :trigger-keys="[]" :content="pageText.users.editUser" placement="top">
                       <button
                         type="button"
                         class="settings-user-icon-action table-action-button action-edit"
@@ -3528,7 +3536,7 @@ onBeforeUnmount(() => {
                         <el-icon><Edit /></el-icon>
                       </button>
                     </el-tooltip>
-                    <el-tooltip :content="pageText.users.resetPassword" placement="top">
+                    <el-tooltip :trigger-keys="[]" :content="pageText.users.resetPassword" placement="top">
                       <button
                         type="button"
                         class="settings-user-icon-action table-action-button action-sync"
@@ -3745,7 +3753,7 @@ onBeforeUnmount(() => {
               </el-table-column>
               <el-table-column :label="pageText.audit.detail" width="92" fixed="right" align="center">
                 <template #default="{ row }: { row: AuditEvent }">
-                  <el-tooltip :content="pageText.audit.viewDetail" placement="top">
+                  <el-tooltip :trigger-keys="[]" :content="pageText.audit.viewDetail" placement="top">
                     <button
                       type="button"
                       class="settings-user-icon-action table-action-button action-view"
@@ -3859,6 +3867,9 @@ onBeforeUnmount(() => {
 
 .naming-workbench-actions {
   margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 
 .naming-workbench-dialog {

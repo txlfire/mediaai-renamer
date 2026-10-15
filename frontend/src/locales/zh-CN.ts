@@ -4,7 +4,6 @@ export const zhCnMessages = {
     tagline: "智能影视重命名工具",
     hint: "先扫描目录，再生成重命名预览",
     globalSearchPlaceholder: "搜索媒体源、任务、结果",
-    previewVersion: "预览版",
     versionPending: "版本待确认",
     pageLoading: "正在加载页面",
     pageLoadFailed: "页面加载失败，请检查网络后重试或刷新页面。",
@@ -33,6 +32,10 @@ export const zhCnMessages = {
       defaultPalette: "清爽专业",
       candyPalette: "柔和彩色",
       contrastPalette: "精密高对比",
+      oceanPalette: "海盐青",
+      forestPalette: "林间绿",
+      amberPalette: "琥珀日光",
+      close: "关闭外观",
     },
     menu: {
       mediaSources: "媒体源",

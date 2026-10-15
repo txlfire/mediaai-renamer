@@ -38,7 +38,7 @@ describe("initial route and version display", () => {
       reactive(mocks.appStore).health = { version: "1.0.1" };
       await nextTick();
       expect(state.isPublicPage).toBe(true);
-      expect(state.versionText).toBe("预览版 v1.0.1");
+      expect(state.versionText).toBe("v1.0.1");
     } finally {
       app.unmount();
       vi.unstubAllGlobals();

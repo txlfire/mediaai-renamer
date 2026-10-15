@@ -370,7 +370,7 @@ watch(() => route.query.media_source_id, async (value) => {
           <el-radio-button value="full">{{ messages.scanJobs.scanModes.full }}</el-radio-button>
           <el-radio-button value="incremental">{{ messages.scanJobs.scanModes.incremental }}</el-radio-button>
         </el-radio-group>
-        <el-tooltip
+        <el-tooltip :trigger-keys="[]"
           v-if="scanModeSuggestion"
           :content="scanModeSuggestion.reason"
           placement="top"
@@ -429,13 +429,13 @@ watch(() => route.query.media_source_id, async (value) => {
               <el-tag :type="scanStatusTagType(row.status)" effect="light">
                 {{ formatScanJobStatus(row.status) }}
               </el-tag>
-              <el-tooltip
+              <el-tooltip :trigger-keys="[]"
                 v-if="hasScanDetail(row)"
                 :content="row.error_message"
                 placement="top"
               >
                 <button :aria-label="row.error_message" class="scan-status-detail-button" type="button" @click.stop="openScanLog(row)">
-                  <TextCell :value="scanStatusText(row)" :max-length="tableDisplayConfig.statusMaxLength" />
+                  <TextCell :value="scanStatusText(row)" :max-length="tableDisplayConfig.statusMaxLength" :focusable="false" />
                 </button>
               </el-tooltip>
             </div>
@@ -488,7 +488,7 @@ watch(() => route.query.media_source_id, async (value) => {
         <el-table-column :label="messages.common.actions" width="112" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
-              <el-tooltip :content="messages.scanJobs.viewResults" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="messages.scanJobs.viewResults" placement="top">
                 <el-button :aria-label="messages.scanJobs.viewResults"
                   class="table-action-button action-view"
                   :icon="Files"
@@ -497,7 +497,7 @@ watch(() => route.query.media_source_id, async (value) => {
                   @click="viewScanResults(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="messages.scanJobs.viewPreviews" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="messages.scanJobs.viewPreviews" placement="top">
                 <el-button :aria-label="messages.scanJobs.viewPreviews"
                   class="table-action-button action-magic"
                   :icon="MagicStick"
@@ -506,7 +506,7 @@ watch(() => route.query.media_source_id, async (value) => {
                   @click="viewRenamePreviews(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="canReadLogs ? messages.scanJobs.viewLogs : messages.auth.permissionDenied" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="canReadLogs ? messages.scanJobs.viewLogs : messages.auth.permissionDenied" placement="top">
                 <el-button :aria-label="canReadLogs ? messages.scanJobs.viewLogs : messages.auth.permissionDenied"
                   class="table-action-button action-view"
                   :icon="Notebook"

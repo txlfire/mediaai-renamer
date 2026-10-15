@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import html from "../../index.html?raw";
 import { describe, expect, it } from "vitest";
+import { themeDefinitions } from "../config/themeRegistry";
 
 const bootstrap = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 if (!bootstrap) throw new Error("Missing theme bootstrap");
@@ -17,9 +18,15 @@ function initialTheme(mode: string | null, palette: string | null, prefersDark =
 }
 
 describe("theme before first paint", () => {
-  it.each(["default", "candy", "contrast"])("restores %s in both modes before app startup", palette => {
+  it.each(themeDefinitions.map(theme => theme.id))("restores %s in both modes before app startup", palette => {
     expect(initialTheme("light", palette)).toEqual({ scheme: "light", palette });
     expect(initialTheme("dark", palette)).toEqual({ scheme: "dark", palette });
+  });
+
+  it("keeps the pre-paint whitelist identical to the registry", () => {
+    const whitelist = bootstrap!.match(/(\[[^\]]+\])\.includes\(palette\)/)?.[1];
+    expect(whitelist).toBeDefined();
+    expect(JSON.parse(whitelist!)).toEqual(themeDefinitions.map(theme => theme.id));
   });
 
   it("resolves system preference without dropping the selected theme", () => {

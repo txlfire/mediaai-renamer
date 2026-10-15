@@ -80,7 +80,7 @@ function setPageSize(size: number) {
       v-if="pagination.pageSize !== PAGE_SIZE_ALL && compactPagerEnabled"
       class="compact-pagination"
     >
-      <el-tooltip :content="messages.common.firstPage" placement="top">
+      <el-tooltip :trigger-keys="[]" :content="messages.common.firstPage" placement="top">
         <el-button
           size="small"
           :disabled="pagination.currentPage <= 1"
@@ -122,7 +122,7 @@ function setPageSize(size: number) {
         @change="(page: number | undefined) => setCompactPage(page ?? 1)"
       />
       <span class="compact-pagination-page-label">&#39029;</span>
-      <el-tooltip :content="messages.common.lastPage" placement="top">
+      <el-tooltip :trigger-keys="[]" :content="messages.common.lastPage" placement="top">
         <el-button
           size="small"
           :disabled="pagination.currentPage >= pageCount"
@@ -136,7 +136,7 @@ function setPageSize(size: number) {
       v-if="pagination.pageSize !== PAGE_SIZE_ALL && !compactPagerEnabled"
       class="standard-pagination"
     >
-      <el-tooltip :content="messages.common.firstPage" placement="top">
+      <el-tooltip :trigger-keys="[]" :content="messages.common.firstPage" placement="top">
         <el-button
           size="small"
           :disabled="pagination.currentPage <= 1"
@@ -154,7 +154,7 @@ function setPageSize(size: number) {
         layout="prev, pager, next, jumper"
         @current-change="setCompactPage"
       />
-      <el-tooltip :content="messages.common.lastPage" placement="top">
+      <el-tooltip :trigger-keys="[]" :content="messages.common.lastPage" placement="top">
         <el-button
           size="small"
           :disabled="pagination.currentPage >= pageCount"

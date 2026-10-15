@@ -77,6 +77,14 @@ const editForm = reactive({
 const selectedRows = ref<MediaSource[]>([]);
 const editDialogVisible = ref(false);
 const pathPopoverVisible = ref(false);
+const pathHelpVisible = ref(false);
+
+function dismissPathHelp(event: KeyboardEvent) {
+  if (!pathHelpVisible.value) return;
+  event.stopPropagation();
+  pathHelpVisible.value = false;
+}
+
 const testingEditSource = ref(false);
 const testingSourceIds = ref<Set<number>>(new Set());
 const verifyingSourceIds = ref<Set<number>>(new Set());
@@ -688,7 +696,7 @@ onBeforeUnmount(() => {
                     :width="360"
                   >
                     <template #reference>
-                      <button class="media-source-path-type-help" type="button">
+                      <button class="media-source-path-type-help" type="button" :aria-label="pathTypeNotice">
                         <el-icon><InfoFilled /></el-icon>
                       </button>
                     </template>
@@ -750,13 +758,18 @@ onBeforeUnmount(() => {
                   >
                     {{ messages.mediaSources.chooseDirectory }}
                   </el-button>
-                  <el-tooltip
+                  <el-tooltip :trigger-keys="[]"
+                    v-model:visible="pathHelpVisible"
+                    :trigger="['hover', 'focus']"
                     :content="pathTypeNotice"
                     placement="bottom-end"
                     :disabled="form.path_type === 'local'"
                   >
                     <span
                       class="media-source-path-help"
+                      :tabindex="form.path_type === 'local' ? undefined : 0"
+                      :aria-label="pathTypeNotice"
+                      @keydown.esc="dismissPathHelp"
                       :class="{ 'is-hidden': form.path_type === 'local' }"
                       :aria-hidden="form.path_type === 'local'"
                     >
@@ -811,8 +824,8 @@ onBeforeUnmount(() => {
         <el-table-column type="selection" width="44" align="center" fixed="left" />
         <el-table-column :label="messages.mediaSources.name" min-width="180" align="left" header-align="left">
           <template #default="{ row }">
-            <button type="button" class="link-cell" @click="openEditDialog(row)">
-              <TextCell :value="row.name" :max-length="tableDisplayConfig.mediaSourceNameMaxLength" />
+            <button type="button" class="link-cell" :aria-label="row.name" @click="openEditDialog(row)">
+              <TextCell :value="row.name" :max-length="tableDisplayConfig.mediaSourceNameMaxLength" :focusable="false" />
             </button>
           </template>
         </el-table-column>
@@ -843,7 +856,7 @@ onBeforeUnmount(() => {
         <el-table-column :label="messages.common.actions" width="240" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
-              <el-tooltip :content="pageText.testConnection" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="pageText.testConnection" placement="top">
                 <el-button :aria-label="pageText.testConnection"
                   class="table-action-button action-view"
                   :icon="Link"
@@ -853,7 +866,7 @@ onBeforeUnmount(() => {
                   @click="testConnection(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="pageText.verifyConditionalMove" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="pageText.verifyConditionalMove" placement="top">
                 <el-button :aria-label="pageText.verifyConditionalMove"
                   class="table-action-button action-magic"
                   :icon="Lock"
@@ -864,7 +877,7 @@ onBeforeUnmount(() => {
                   @click="verifyConditionalMove(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="messages.mediaSources.viewTasks" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="messages.mediaSources.viewTasks" placement="top">
                 <el-button :aria-label="messages.mediaSources.viewTasks"
                   class="table-action-button action-view"
                   :disabled="!row.enabled"
@@ -874,7 +887,7 @@ onBeforeUnmount(() => {
                   @click="viewScanJobs(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="pageText.edit" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="pageText.edit" placement="top">
                 <el-button :aria-label="pageText.edit"
                   class="table-action-button action-edit"
                   :icon="Edit"
@@ -884,7 +897,7 @@ onBeforeUnmount(() => {
                   @click="openEditDialog(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="row.enabled ? pageText.disable : pageText.enable" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="row.enabled ? pageText.disable : pageText.enable" placement="top">
                 <el-button :aria-label="row.enabled ? pageText.disable : pageText.enable"
                   class="table-action-button action-toggle"
                   :icon="SwitchButton"
@@ -894,7 +907,7 @@ onBeforeUnmount(() => {
                   @click="toggleSource(row)"
                 />
               </el-tooltip>
-              <el-tooltip :content="pageText.remove" placement="top">
+              <el-tooltip :trigger-keys="[]" :content="pageText.remove" placement="top">
                 <el-button :aria-label="pageText.remove"
                   class="table-action-button action-delete"
                   :icon="Delete"

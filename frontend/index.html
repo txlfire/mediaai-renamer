@@ -12,7 +12,7 @@
         const palette = localStorage.getItem("mediaai-theme-palette");
         document.documentElement.dataset.scheme = mode === "light" || mode === "dark"
           ? mode : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        document.documentElement.dataset.palette = ["default", "candy", "contrast"].includes(palette) ? palette : "default";
+        document.documentElement.dataset.palette = ["default", "candy", "contrast", "ocean", "forest", "amber"].includes(palette) ? palette : "default";
         document.documentElement.style.colorScheme = document.documentElement.dataset.scheme;
       } catch {
         // 此恢复脚本失败时保留CSS默认主题；应用存储逻辑仍按原契约处理。

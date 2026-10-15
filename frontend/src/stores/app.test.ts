@@ -5,7 +5,8 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveTheme, useAppStore, type ThemeMode, type ThemePalette } from "./app";
+import { resolveTheme, useAppStore, type ThemeMode } from "./app";
+import { themeDefinitions } from "../config/themeRegistry";
 
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
@@ -65,7 +66,7 @@ describe("theme state", () => {
     expect(resolveTheme("dark", matchMedia)).toBe("dark");
   });
 
-  it.each<ThemePalette>(["default", "candy", "contrast"])("restores complete %s theme without resetting workspace storage", palette => {
+  it.each(themeDefinitions.map(theme => theme.id))("restores complete %s theme without resetting workspace storage", palette => {
     localStorage.setItem("mediaai-auth-token", "synthetic-session");
     localStorage.setItem("mediaai-filter-fixture", "keep");
     localStorage.setItem("mediaai-sidebar-collapsed", "true");
@@ -82,19 +83,19 @@ describe("theme state", () => {
     expect(localStorage.getItem("mediaai-filter-fixture")).toBe("keep");
   });
 
-  it("system preference changes preserve contrast theme and independent mode storage", () => {
+  it.each(themeDefinitions.map(theme => theme.id))("system preference changes preserve %s theme and independent mode storage", palette => {
     let prefersDark = true;
     vi.stubGlobal("window", { matchMedia: () => ({ matches: prefersDark }) });
     const store = useAppStore();
-    store.setThemePalette("contrast");
+    store.setThemePalette(palette);
     store.setThemeMode("system");
     expect(store.resolvedTheme).toBe("dark");
     prefersDark = false;
     store.applyThemeMode();
     expect(store.resolvedTheme).toBe("light");
-    expect(store.themePalette).toBe("contrast");
+    expect(store.themePalette).toBe(palette);
     expect(localStorage.getItem("mediaai-theme-mode")).toBe("system");
-    expect(localStorage.getItem("mediaai-theme-palette")).toBe("contrast");
+    expect(localStorage.getItem("mediaai-theme-palette")).toBe(palette);
     vi.unstubAllGlobals();
   });
 

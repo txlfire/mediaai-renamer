@@ -1,12 +1,13 @@
 import { defineStore } from "pinia";
 
 import { getHealth, type HealthStatus } from "../api/client";
+import { isThemePalette, type ThemePalette } from "../config/themeRegistry";
 import { zhCnMessages as messages } from "../locales/zh-CN";
 
 type ConnectionState = "idle" | "loading" | "online" | "offline";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
-export type ThemePalette = "default" | "candy" | "contrast";
+export type { ThemePalette } from "../config/themeRegistry";
 
 const THEME_STORAGE_KEY = "mediaai-theme-mode";
 const PALETTE_STORAGE_KEY = "mediaai-theme-palette";
@@ -14,10 +15,6 @@ const SIDEBAR_STORAGE_KEY = "mediaai-sidebar-collapsed";
 
 function isThemeMode(value: string | null): value is ThemeMode {
   return value === "system" || value === "light" || value === "dark";
-}
-
-function isThemePalette(value: string | null): value is ThemePalette {
-  return value === "default" || value === "candy" || value === "contrast";
 }
 
 export function resolveTheme(

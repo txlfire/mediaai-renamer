@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     environment: "node",
+    css: { include: [/styles\.css/] },
     include: ["frontend/src/**/*.test.ts"],
   },
 });

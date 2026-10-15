@@ -1,13 +1,13 @@
 # Design — MediaAI Renamer
 
-文档类型：界面设计执行入口。目标确认日期：2026-10-13；原型视觉方向确认日期：2026-10-14。
+文档类型：界面设计执行入口。目标确认日期：2026-10-13；六主题扩展原型确认日期：2026-10-15。
 
 品类为数据密集型媒体整理工作台，不是营销页。详细目标以[完整主题设计](docs/design/workbench-theme-design.md)为准；系统与业务边界见[系统设计](docs/design/project-design.md)。本文件约束目标设计，不证明源码已经实现；当前差异、兼容与进度见[实施计划](docs/development/ui-refresh/implementation-plan.md)，测试与实际缩放见[验收清单](docs/development/ui-refresh/acceptance-checklist.md)。
 
 ## System
 
 - 工作台保持现有导航、路由、权限、查询和安全文件操作流程。
-- 三套完整主题：default清爽专业、candy柔和彩色、contrast精密高对比；各自支持亮暗。
+- 六套完整主题：default清爽专业、candy柔和彩色、contrast精密高对比、ocean海盐青、forest林间绿、amber琥珀日光；各自支持亮暗。
 - 界面差异覆盖画布、侧栏、表头、输入和选择状态，不只替换按钮强调色。
 - 共享Vue 3、Element Plus、Pinia与公共CSS，不替换组件库或引入营销页结构。
 - 具体颜色以获确认的原型及运行时CSS为准，不在本文件复制第二份真值。
@@ -17,9 +17,9 @@
 | 轴 | 状态 | 职责 |
 | --- | --- | --- |
 | 显示模式 | system / light / dark | system解析为light或dark，选择对应语义别名及浏览器color-scheme |
-| 视觉主题 | default / candy / contrast | 提供每套亮暗的背景、面板、侧栏、文本、边框、表格、输入、按钮、语义及材质基础值 |
+| 视觉主题 | default / candy / contrast / ocean / forest / amber | 提供每套亮暗的背景、面板、侧栏、文本、边框、表格、输入、按钮、语义及材质基础值 |
 
-两个选择独立，主题取值与显示模式共同决定最终颜色。主题可以改变中性色，不再限制为只换强调色；六种视觉组合共享一套组件规则。
+两个选择独立，主题取值与显示模式共同决定最终颜色。主题可以改变中性色，不再限制为只换强调色；十二种视觉组合共享一套组件规则。外观使用固定Brush入口与可滚动预览单选列表，低高度使用同组选项的Dialog；预览与页面共享颜色基础值。
 
 - 根节点沿用data-scheme与data-palette，不增加第三个选择轴。
 - 外观沿用mediaai-theme-mode与mediaai-theme-palette，两项独立保存在当前浏览器。
@@ -62,7 +62,7 @@
 
 - 克制使用短时transform/opacity反馈，不做逐行入场、装饰性弹跳、大面积模糊或持续背景动画。
 - 焦点即时出现，不添加动画；支持prefers-reduced-motion。
-- 六种组合的正文、状态文字、品牌文字和表格动作分别满足项目4.5:1门禁；焦点和必要边界目标至少3:1。
+- 十二种组合的正文、状态文字、品牌文字和表格动作分别满足项目4.5:1门禁；焦点和必要边界目标至少3:1。
 - 检查实际背景上的正常、hover、active及选择状态；禁用项保持可识别并提供必要原因。
 - 实际主屏门禁为3840×2160、Windows200%、浏览器125%；CSS视口模拟不得代替实机结果。
 - 页面根级不得横向溢出，工作区纵向可见；不能只检查横向坐标就判断按钮可用。
@@ -74,12 +74,12 @@
 - 可访问性由专项检查与实际键盘/颜色验证负责，不能由普通UI报告无发现推导合规。
 - 外部风格配方只作参考；不得覆盖本工作台字号、字体、布局、图标和业务约束。
 - Hallmark营销Hero、页脚、截图导览和差异化页面风格规则不适用；不以纯白、纯黑、系统字体判模板缺陷。
-- 三套主题共享系统，不鼓励每页另选设计。无必要收益不安装MCP、Bun、UI或动画依赖。
+- 六套主题共享系统，不鼓励每页另选设计。无必要收益不安装MCP、Bun、UI或动画依赖。
 
 ## Design And Evidence
 
 - 目标设计：[完整主题设计](docs/design/workbench-theme-design.md)。
 - 实施、兼容、工具与停止条件：[实施计划](docs/development/ui-refresh/implementation-plan.md)。
-- 六态、视口、状态和交付门禁：[验收清单](docs/development/ui-refresh/acceptance-checklist.md)。
+- 十二态、视口、状态和交付门禁：[验收清单](docs/development/ui-refresh/acceptance-checklist.md)。
 - 旧强调配色的历史证据：[原审核与前端收尾](docs/work-logs/progress-2026-10-13-review-closeout.md)。该证据不证明新的完整主题已验收。
-- 获批准的三套方向由styles.css登记实际色值；验收记录取样与比值，README和手册区分已落地源码与已发布制品。
+- 获批准的六套方向由styles.css登记实际色值；验收记录取样与比值，README和手册区分已落地源码与已发布制品。

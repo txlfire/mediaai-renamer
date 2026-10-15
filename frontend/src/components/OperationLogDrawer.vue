@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
         </el-tag>
       </div>
       <div class="operation-log-actions">
-        <el-select v-model="levelFilter" size="small" class="operation-log-level-select">
+        <el-select v-model="levelFilter" :aria-label="pageText.allLevels" size="small" class="operation-log-level-select">
           <el-option :label="pageText.allLevels" value="all" />
           <el-option :label="pageText.levels.info" value="info" />
           <el-option :label="pageText.levels.success" value="success" />

@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
 // 模板的Teleport延后解析工作区，兼容父工作区在同一轮挂载中创建。
 const isFullscreen = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
+const toggleRef = ref<{ $el: HTMLButtonElement } | null>(null);
 const fullscreenIcon = "\u26f6";
 const exitFullscreenIcon = "\u2922";
 let resizeObserver: ResizeObserver | null = null;
@@ -33,9 +34,10 @@ function toggleFullscreen() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") {
-    isFullscreen.value = false;
-  }
+  if (event.key !== "Escape" || !isFullscreen.value || event.defaultPrevented) return;
+  // 内部弹窗、菜单与选择器先处理ESC，避免同一次按键连带退出全屏。
+  if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="menu"], [role="listbox"], .el-popper, [aria-expanded="true"]')) return;
+  isFullscreen.value = false;
 }
 
 onMounted(() => {
@@ -56,6 +58,8 @@ onBeforeUnmount(() => {
 
 watch(isFullscreen, async () => {
   await nextTick();
+  // Teleport搬移节点会使浏览器丢失焦点，返回同一开关而不是页面body。
+  toggleRef.value?.$el.focus({ preventScroll: true });
   requestTableRelayout();
 });
 </script>
@@ -72,8 +76,9 @@ watch(isFullscreen, async () => {
     >
       <div class="fullscreen-table-toolbar" :class="{ 'is-titleless': !title }">
         <span v-if="title">{{ title }}</span>
-        <el-tooltip :content="isFullscreen ? messages.common.exitFullscreen : messages.common.fullscreen" placement="top">
+        <el-tooltip :trigger-keys="[]" :content="isFullscreen ? messages.common.exitFullscreen : messages.common.fullscreen" placement="top">
           <el-button
+            ref="toggleRef"
             class="fullscreen-icon-button"
             :aria-label="isFullscreen ? messages.common.exitFullscreen : messages.common.fullscreen"
             @click="toggleFullscreen"

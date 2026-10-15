@@ -4,7 +4,7 @@ import {
   ElDatePicker, ElDescriptions, ElDescriptionsItem, ElDialog, ElDivider, ElDrawer,
   ElDropdown, ElDropdownItem, ElDropdownMenu, ElEmpty, ElForm, ElFormItem, ElIcon,
   ElInput, ElInputNumber, ElLoading, ElMessage, ElMessageBox, ElOption, ElPagination, ElPopover, ElProgress,
-  ElRadioButton, ElRadioGroup, ElSegmented, ElSelect, ElSwitch, ElTabPane, ElTable,
+  ElRadio, ElRadioButton, ElRadioGroup, ElSegmented, ElSelect, ElSwitch, ElTabPane, ElTable,
   ElTableColumn, ElTabs, ElTag, ElTooltip, provideGlobalConfig,
 } from "element-plus";
 
@@ -13,7 +13,7 @@ export const elementPlusComponents = {
   ElAlert, ElButton, ElCard, ElCheckbox, ElCheckboxGroup, ElCollapse, ElCollapseItem,
   ElDatePicker, ElDescriptions, ElDescriptionsItem, ElDialog, ElDivider, ElDrawer,
   ElDropdown, ElDropdownItem, ElDropdownMenu, ElEmpty, ElForm, ElFormItem, ElIcon,
-  ElInput, ElInputNumber, ElOption, ElPagination, ElPopover, ElProgress, ElRadioButton,
+  ElInput, ElInputNumber, ElOption, ElPagination, ElPopover, ElProgress, ElRadio, ElRadioButton,
   ElRadioGroup, ElSegmented, ElSelect, ElSwitch, ElTabPane, ElTable, ElTableColumn,
   ElTabs, ElTag, ElTooltip,
 };

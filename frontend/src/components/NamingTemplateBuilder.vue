@@ -46,6 +46,7 @@ const selectedPresets = reactive<Record<NamingTemplateType, string>>({
   episode: "standard",
 });
 const builderRef = ref<HTMLElement | null>(null);
+const contextMenuRef = ref<HTMLElement | null>(null);
 const editingIndex = ref<number | null>(null);
 const editingValue = ref("");
 const formatPopoverIndex = ref<number | null>(null);
@@ -144,16 +145,30 @@ function resetCurrentPreset() {
 }
 
 function removeElement(index: number) {
-  emitElements(currentElements.value.filter((_, itemIndex) => itemIndex !== index));
+  formatPopoverIndex.value = null;
+  const elements = currentElements.value.filter((_, itemIndex) => itemIndex !== index);
+  emitElements(elements);
   closeContextMenu();
+  focusToken(elements[Math.min(index, elements.length - 1)]?.id);
+}
+
+function focusToken(id?: string) {
+  nextTick(() => {
+    const token = [...(builderRef.value?.querySelectorAll<HTMLElement>("[data-element-id]") || [])]
+      .find(element => element.dataset.elementId === id);
+    (token?.querySelector<HTMLButtonElement>(".naming-builder-token-main") || builderRef.value)?.focus();
+  });
 }
 
 function moveElement(index: number, targetIndex: number) {
+  if (index < 0 || index >= currentElements.value.length) return;
+  formatPopoverIndex.value = null;
   const elements = cloneElements(currentElements.value);
   const [item] = elements.splice(index, 1);
   elements.splice(Math.max(0, Math.min(targetIndex, elements.length)), 0, item);
   emitElements(elements);
   closeContextMenu();
+  focusToken(item.id);
 }
 
 function moveToStart(index: number) {
@@ -165,8 +180,19 @@ function moveToEnd(index: number) {
 }
 
 function startEditing(index: number) {
+  formatPopoverIndex.value = null;
   editingIndex.value = index;
   editingValue.value = currentElements.value[index]?.variable || "";
+  nextTick(() => {
+    const input = builderRef.value?.querySelector<HTMLInputElement>(".naming-builder-token-input");
+    input?.focus();
+    input?.select();
+  });
+}
+
+function cancelEditing(index: number) {
+  editingIndex.value = null;
+  focusToken(currentElements.value[index]?.id);
 }
 
 function commitEditing() {
@@ -179,6 +205,12 @@ function commitEditing() {
   editingIndex.value = null;
   editingValue.value = "";
   emitElements(elements);
+}
+
+function commitEditingWithFocus() {
+  const id = currentElements.value[editingIndex.value ?? -1]?.id;
+  commitEditing();
+  focusToken(id);
 }
 
 function updateElementVariable(index: number, variable: string) {
@@ -220,12 +252,21 @@ function elementFormatPreview(element: NamingTemplateElement) {
   return buildNamingElementPreview(element, text);
 }
 
-function showContextMenu(event: MouseEvent, index: number) {
+function showContextMenu(event: MouseEvent | KeyboardEvent, index: number) {
   event.preventDefault();
+  formatPopoverIndex.value = null;
   contextMenu.visible = true;
-  contextMenu.x = event.clientX;
-  contextMenu.y = event.clientY;
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  contextMenu.x = Math.max(0, Math.min(event instanceof MouseEvent ? event.clientX : rect.left, window.innerWidth - 168));
+  contextMenu.y = Math.max(0, Math.min(event instanceof MouseEvent ? event.clientY : rect.bottom, window.innerHeight - 224));
   contextMenu.index = index;
+  nextTick(() => contextMenuRef.value?.querySelector<HTMLButtonElement>("button")?.focus());
+}
+
+function dismissContextMenu() {
+  const id = currentElements.value[contextMenu.index]?.id;
+  closeContextMenu();
+  focusToken(id);
 }
 
 function closeContextMenu() {
@@ -254,6 +295,8 @@ function syncSortable() {
 }
 
 watch(activeType, () => {
+  editingIndex.value = null;
+  formatPopoverIndex.value = null;
   closeContextMenu();
   nextTick(syncSortable);
 });
@@ -280,9 +323,10 @@ onBeforeUnmount(() => {
       <span class="naming-builder-label">{{ text.applicableType }}</span>
       <el-segmented
         v-model="activeType"
+        :aria-label="text.applicableType"
         :options="[{ label: text.movie, value: 'movie' }, { label: text.episode, value: 'episode' }]"
       />
-      <el-select v-model="selectedPreset" class="naming-preset-select" :placeholder="text.presetPlaceholder" @change="applyPreset">
+      <el-select v-model="selectedPreset" :aria-label="text.presetPlaceholder" class="naming-preset-select" :placeholder="text.presetPlaceholder" @change="applyPreset">
         <el-option
           v-for="preset in presetOptions"
           :key="preset.value"
@@ -299,7 +343,7 @@ onBeforeUnmount(() => {
 
     <div class="naming-builder-section">
       <div class="naming-builder-section-title">{{ text.builderTitle }}</div>
-      <div ref="builderRef" class="naming-builder-dropzone">
+      <div ref="builderRef" class="naming-builder-dropzone" tabindex="-1" :aria-label="text.builderTitle">
         <el-popover
           v-for="(element, index) in currentElements"
           :key="element.id"
@@ -310,39 +354,50 @@ onBeforeUnmount(() => {
           @hide="formatPopoverIndex = null"
         >
           <template #reference>
-            <button
+            <div
               class="naming-builder-token"
+              tabindex="-1"
+              :data-element-id="element.id"
               :class="{ 'is-invalid': elementHasError(currentErrors, index) }"
-              type="button"
-              @click.stop="formatPopoverIndex = formatPopoverIndex === index ? null : index"
-              @dblclick.stop="startEditing(index)"
-              @contextmenu="showContextMenu($event, index)"
             >
               <template v-if="editingIndex === index">
                 <input
                   v-model="editingValue"
                   class="naming-builder-token-input"
                   @click.stop
-                  @keydown.enter.prevent="commitEditing"
-                  @keydown.esc.prevent="editingIndex = null"
+                  @keydown.enter.stop.prevent="commitEditingWithFocus"
+                  :aria-label="text.variableName"
+                  @keydown.esc.stop.prevent="cancelEditing(index)"
                   @blur="commitEditing"
                 />
               </template>
               <template v-else>
-                <span>{{ element.label }}</span>
-                <small>{ {{ element.variable }} }</small>
-                <span
+                <button
+                  class="naming-builder-token-main"
+                  type="button"
+                  :aria-expanded="formatPopoverIndex === index"
+                  @click.stop="formatPopoverIndex = formatPopoverIndex === index ? null : index"
+                  @dblclick.stop="startEditing(index)"
+                  @keydown.f2.stop.prevent="startEditing(index)"
+                  @keydown.esc.stop.prevent="formatPopoverIndex = null"
+                  @keydown.shift.f10.stop="showContextMenu($event, index)"
+                  @contextmenu.stop="showContextMenu($event, index)"
+                >
+                  <span>{{ element.label }}</span>
+                  <small>{ {{ element.variable }} }</small>
+                </button>
+                <button
                   class="naming-builder-token-remove"
-                  role="button"
-                  :aria-label="text.removeElement"
+                  type="button"
+                  :aria-label="`${text.removeElement}：${element.label}`"
                   @click.stop="removeElement(index)"
                 >
                   ×
-                </span>
+                </button>
               </template>
-            </button>
+            </div>
           </template>
-          <div class="naming-format-popover">
+          <div class="naming-format-popover" @keydown.esc.stop.prevent="formatPopoverIndex = null; focusToken(element.id)">
             <label>
               <span>{{ text.variableName }}</span>
               <el-input
@@ -409,6 +464,7 @@ onBeforeUnmount(() => {
       <label>{{ text.separator }}：</label>
       <el-input
         :model-value="separator"
+        :aria-label="text.separator"
         class="naming-separator-input"
         :class="{ 'is-invalid': separatorError }"
         maxlength="5"
@@ -443,9 +499,11 @@ onBeforeUnmount(() => {
 
     <div
       v-if="contextMenu.visible"
+      ref="contextMenuRef"
       class="naming-context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
       @click.stop
+      @keydown.esc.stop.prevent="dismissContextMenu"
     >
       <button type="button" @click="removeElement(contextMenu.index)">{{ text.removeElement }}</button>
       <button type="button" @click="moveElement(contextMenu.index, contextMenu.index - 1)">{{ text.moveUp }}</button>
