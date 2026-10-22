@@ -35,6 +35,10 @@ def acceptRollback(settings, planId, context: AuditWriteContext):
             return get_rename_rollback_plan(settings, planId)
         if row["executable_count"] <= 0:
             raise ValueError("回滚计划没有可执行条目")
+        from app.service.cloud_directory_guard import requireNoDirectoryExecution
+        from app.service.cloud_directory_path_service import requireFreshFileTask
+        requireNoDirectoryExecution(connection)
+        requireFreshFileTask(connection, "rollback_plan", planId)
         if connection.execute(
             "SELECT 1 FROM rename_rollback_items mine JOIN rename_rollback_items other "
             "ON other.operation_item_id=mine.operation_item_id JOIN rename_rollback_plans active ON active.id=other.plan_id "

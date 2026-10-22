@@ -1,7 +1,10 @@
 """System settings API."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, StrictInt, Field
+from app.service.cloud_drive_configuration_service import (
+    CloudConfigurationError, getCloudDriveConfiguration, saveCloudDriveConfiguration,
+)
 
 from app.api.auth import require_authenticated_user, require_permission
 from app.service.audit_service import AuditWriteContext, record_audit_event, sanitize_audit_detail
@@ -46,6 +49,35 @@ class UpdateSettingsRequest(BaseModel):
     """Hot settings update payload."""
 
     values: dict[str, object]
+
+
+class CloudDriveConfigurationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    values: dict[str, object]
+    expectedRevision: StrictInt = Field(ge=0, lt=2**63 - 1)
+
+
+@router.get("/cloud-drive")
+def get_cloud_drive_configuration(request: Request, _user=Depends(require_permission("settings:write"))):
+    try:
+        return getCloudDriveConfiguration(request.app.state.settings)
+    except CloudConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=exc.code) from None
+
+
+@router.put("/cloud-drive")
+def save_cloud_drive_configuration(payload: CloudDriveConfigurationRequest, request: Request,
+                                  user=Depends(require_permission("settings:write"))):
+    try:
+        return saveCloudDriveConfiguration(request.app.state.settings, values=payload.values,
+            expectedRevision=payload.expectedRevision, auditContext=AuditWriteContext(actor=user,
+                ipAddress=request.client.host if request.client else None, userAgent=request.headers.get("user-agent")))
+    except CloudConfigurationError as exc:
+        status = 409 if exc.code in {"configuration_changed", "cloud_work_or_unknown_pending"} else 503 if exc.code in {
+            "configuration_unavailable", "configuration_storage_failed"} else 400
+        if exc.code == "configuration_permission_denied":
+            status = 403
+        raise HTTPException(status_code=status, detail=exc.code) from None
 
 
 class SaveTmdbTestResultRequest(BaseModel):

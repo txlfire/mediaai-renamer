@@ -42,6 +42,7 @@ import {
   updateUser,
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
+import CloudDriveSettingsPanel from "../components/CloudDriveSettingsPanel.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import TablePagination from "../components/TablePagination.vue";
 import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
@@ -250,6 +251,7 @@ const categories = computed(() => [
   { key: "naming", label: pageText.categories.naming },
   { key: "scan", label: pageText.categories.scan },
   { key: "shared", label: pageText.categories.shared },
+  { key: "cloudDrive", label: messages.cloudDriveSettings.category },
   { key: "users", label: pageText.categories.users },
   { key: "audit", label: pageText.categories.audit },
   // 通用设置固定在最下方；后续新增设置分类应插入到它上方。
@@ -3445,6 +3447,7 @@ onBeforeUnmount(() => {
           </div>
         </el-form>
 
+        <CloudDriveSettingsPanel v-else-if="activeCategory === 'cloudDrive'" />
         <div v-else-if="activeCategory === 'users'" class="settings-form">
           <div class="settings-config-card settings-user-card">
             <div class="settings-page-notice">

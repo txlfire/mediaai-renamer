@@ -10,6 +10,7 @@ import sqlite3
 from urllib.parse import quote, unquote, urlparse
 
 from app.core.config import AppSettings
+from app.service.cloud_directory_probe_service import directoryProbe
 from app.schema.media import RenameOperation, RenameOperationItem
 from app.service.media_source_service import get_media_source_protocol_context
 from app.service.operation_log_service import (
@@ -112,6 +113,9 @@ def _query_previews(connection: sqlite3.Connection, preview_ids: list[int]) -> l
     if not preview_ids:
         return []
     placeholders = ", ".join("?" for _ in preview_ids)
+    from app.service.cloud_directory_path_service import cloudPathEpoch
+    epoch = cloudPathEpoch(connection)
+    fence = " AND mf.scan_job_id>? " if epoch["revision"] else " "
     return connection.execute(
         "SELECT rp.id, rp.status, rp.suggested_name, rp.edited_name, mf.file_path, "
         "rp.updated_at AS preview_updated_at, mf.id AS media_file_id, mf.file_size, mf.modified_at, "
@@ -120,10 +124,10 @@ def _query_previews(connection: sqlite3.Connection, preview_ids: list[int]) -> l
         "FROM rename_previews rp "
         "JOIN media_files mf ON mf.id = rp.media_file_id "
         "JOIN media_sources ms ON ms.id = mf.media_source_id "
-        f"WHERE rp.id IN ({placeholders}) AND ms.deleted_at IS NULL "
+        f"WHERE rp.id IN ({placeholders}) AND ms.deleted_at IS NULL " + fence +
         "AND NOT EXISTS (SELECT 1 FROM scan_jobs job WHERE job.id = mf.scan_job_id AND job.source_invalidated_at IS NOT NULL) "
         "ORDER BY rp.id",
-        preview_ids,
+        [*preview_ids, epoch["max_scan_job_id"]] if epoch["revision"] else preview_ids,
     ).fetchall()
 
 
@@ -303,6 +307,7 @@ def _build_item_plan(
     return source_path_value, target_path_value, status, message
 
 
+@directoryProbe("rename_dry_run")
 def create_rename_dry_run(settings: AppSettings, rename_preview_ids: list[int], *, auditContext=None) -> RenameOperation:
     """慢探测不持数据库事务；发布干跑前短事务复核元数据和当前权限。"""
 

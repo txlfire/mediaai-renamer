@@ -41,6 +41,10 @@ def acceptRename(settings, operationId: int, context: AuditWriteContext):
             return get_rename_operation(settings, operationId)
         if not row["ready_count"]:
             raise ValueError("批次没有可执行项")
+        from app.service.cloud_directory_guard import requireNoDirectoryExecution
+        from app.service.cloud_directory_path_service import requireFreshFileTask
+        requireNoDirectoryExecution(connection)
+        requireFreshFileTask(connection, "rename_operation", operationId)
         if connection.execute(
             "SELECT 1 FROM rename_operation_items mine JOIN rename_operation_items other "
             "ON other.rename_preview_id=mine.rename_preview_id JOIN rename_operations active ON active.id=other.operation_id "

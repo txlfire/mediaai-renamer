@@ -12,6 +12,7 @@ import sqlite3
 from urllib.parse import unquote, urlparse
 
 from app.core.config import AppSettings
+from app.service.cloud_directory_probe_service import directoryProbe
 from app.service.audit_service import AuditWriteContext, record_audit_event
 from app.schema.media import RenameRollbackItem, RenameRollbackPlan
 from app.service.media_source_service import get_media_source_protocol_context
@@ -171,6 +172,10 @@ def create_rename_rollback_plan(
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("BEGIN IMMEDIATE")
+        from app.service.cloud_directory_guard import requireNoDirectoryExecution
+        from app.service.cloud_directory_path_service import requireFreshFileTask
+        requireNoDirectoryExecution(connection)
+        requireFreshFileTask(connection, "rename_operation", operation_id)
         operation_row = connection.execute(
             "SELECT id, status, execution_token FROM rename_operations WHERE id = ?",
             (operation_id,),
@@ -261,10 +266,16 @@ def _rollback_item_context(
 
 
 def _rollbackSnapshot(settings: AppSettings, connection: sqlite3.Connection, item: RenameRollbackItem) -> dict:
+    from app.service.cloud_directory_path_service import requireFreshScan, requireFreshFileTask
+    from app.service.cloud_directory_guard import requireNoDirectoryExecution
+    requireNoDirectoryExecution(connection)
     contextRow = _rollback_item_context(connection, item.operation_item_id)
     if (contextRow is None or not contextRow["enabled"] or contextRow["deleted_at"]
             or contextRow["source_invalidated_at"]):
         raise ValueError("回滚关联记录不存在或媒体源已禁用")
+    requireFreshScan(connection, contextRow["scan_job_id"])
+    operation = connection.execute("SELECT operation_id FROM rename_operation_items WHERE id=?", (item.operation_item_id,)).fetchone()
+    requireFreshFileTask(connection, "rename_operation", operation[0])
     if (contextRow["operation_item_status"] != "renamed" or contextRow["preview_status"] != "renamed"
             or contextRow["file_path"] != item.current_path
             or contextRow["target_path"] != item.current_path
@@ -339,6 +350,7 @@ def _rollbackDryRunDatabaseState(connection: sqlite3.Connection, planId: int):
     return dict(plan), [dict(item) for item in items], contexts, tuple(original) if original is not None else None
 
 
+@directoryProbe("rollback_dry_run")
 def dry_run_rename_rollback_plan(settings: AppSettings, plan_id: int, *,
                                  auditContext: AuditWriteContext | None = None) -> RenameRollbackPlan:
     """事务外探测，短写事务复核原计划与关联版本；不改动文件。"""

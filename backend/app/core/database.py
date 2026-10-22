@@ -8,6 +8,10 @@ from contextlib import closing
 import sqlite3
 
 from app.core.config import AppSettings
+from app.core.cloud_ad_review_schema import ensureCloudAdReviewSchema
+from app.core.cloud_quarantine_schema import ensureCloudQuarantinePlanSchema, ensureCloudQuarantineExecutionSchema, ensureCloudQuarantineRecoverySchema
+from app.core.cloud_drive_schema import ensureCloudDriveBudgetSchema, ensureCloudInventorySchema
+from app.core.cloud_directory_schema import ensureCloudDirectorySchema, ensureCloudDirectoryExecutionSchema, ensureCloudDirectoryItemSchema, ensureCloudDirectoryWorkerSchema, ensureCloudDirectoryPathSchema, ensureCloudDirectoryLogSchema, ensureCloudDirectoryRecoverySchema, ensureCloudDirectoryReverseSchema
 from app.core.logger import get_logger
 from app.service.media_source_secret import (
     CURRENT_CREDENTIAL_VERSION,
@@ -19,7 +23,7 @@ from app.service.media_source_secret import (
 
 logger = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 39
+CURRENT_SCHEMA_VERSION = 55
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -873,6 +877,53 @@ def _run_migrations(settings: AppSettings, connection: sqlite3.Connection) -> No
     connection.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_bytes ON background_jobs(result_bytes) "
         "WHERE result_cleared_at IS NULL AND result_bytes>0")
     if version < 39:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+
+    ensureCloudDriveBudgetSchema(connection)
+    if version < 40:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudInventorySchema(connection)
+    if version < 42:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectorySchema(connection)
+    if version < 43:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryExecutionSchema(connection)
+    if version < 44:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryItemSchema(connection)
+    if version < 45:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryWorkerSchema(connection)
+    if version < 46:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryPathSchema(connection)
+    if version < 47:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryLogSchema(connection)
+    if version < 48:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryRecoverySchema(connection)
+    if version < 49:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudDirectoryReverseSchema(connection)
+    if version < 50:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudAdReviewSchema(connection)
+    if version < 51:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudQuarantinePlanSchema(connection)
+    if version < 52:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudQuarantineExecutionSchema(connection)
+    if version < 53:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    ensureCloudQuarantineRecoverySchema(connection)
+    if version < 54:
+        _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
+    from app.core.cloud_drive_configuration_schema import ensureCloudDriveConfigurationSchema
+    ensureCloudDriveConfigurationSchema(connection)
+    if version < 55:
         _set_schema_version(connection, CURRENT_SCHEMA_VERSION)
 
 

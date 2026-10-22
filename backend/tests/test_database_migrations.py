@@ -110,6 +110,8 @@ class DatabaseMigrationTest(unittest.TestCase):
             settings = self.build_settings(Path(tempDir))
             ensure_database(settings)
             with closing(sqlite3.connect(settings.database_path)) as connection:
+                # 模拟v28时一并移除后续版本新增、依赖execution_token的索引。
+                connection.execute("DROP INDEX IF EXISTS idx_directory_active_scan")
                 for column in ("execution_token", "execution_expires_at", "audit_context_json", "execution_pid"):
                     connection.execute(f"ALTER TABLE scan_jobs DROP COLUMN {column}")
                 connection.execute("INSERT INTO scan_jobs(media_source_id,status,batch_size,batch_interval_seconds,created_at) VALUES(1,'completed',1,0,'old')")

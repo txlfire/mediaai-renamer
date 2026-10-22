@@ -10,6 +10,10 @@
 - 启动后**不能只以端口可连接判定成功**：须核对后端健康接口与前端代理健康接口均 `status=ok` 且 `version` 一致，并检查 `.codex/run-logs/backend.pid`、`frontend.pid` 与两个启动错误日志。
 - 端口冲突时先执行 `stop` 与 `status`，再用 `Get-NetTCPConnection` 与 `Get-CimInstance Win32_Process` 核对占用进程命令行；**归属不明确时不强杀**，改用独立端口。
 
+## 广告线索离线统计
+
+`evaluate-ad-labels.py` 对冻结人工标签与规则结果生成匿名分组统计，不访问应用、云端、数据库或媒体。字段、命令、退出码见[操作说明](../docs/manuals/cd2-ad-label-evaluation.md)；测试命令为 `.venv/Scripts/python.exe -m unittest discover -s scripts/tests -p test_evaluate_ad_labels.py -v`。受保护review单列待核对，统计不授权隔离/删除。
+
 ## 开发服务启停
 
 ### `dev-windows.ps1`

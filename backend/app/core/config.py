@@ -9,6 +9,9 @@ import math
 from pathlib import Path
 import os
 import tomllib
+import unicodedata
+
+from app.utils.cloud_drive_paths import approvedCloudRoot, canonicalCd2Target
 
 
 @dataclass(frozen=True)
@@ -161,11 +164,86 @@ def backgroundJobSettingsFromDict(values: dict) -> BackgroundJobSettings:
 
 
 @dataclass(frozen=True)
+class CloudDriveSettings:
+    """离线范围及CD2准入政策，不代表令牌授权或真实连接已通过。"""
+
+    approvedRoot: str = ""
+    minIntervalSeconds: float = 2
+    failureCooldownSeconds: int = 300
+    webExecutionEnabled: bool = False
+    endpoint: str = ""
+    caCertificateFile: str = ""
+    directoryRenameEnabled: bool = False
+    directoryMappingRevision: str = ""
+    quarantineEnabled: bool = False
+    quarantineFolderName: str = "_MediaAI_Quarantine"
+    caCertificatePem: str = ""
+    configurationRevision: int | None = None
+
+    def __post_init__(self):
+        if not isinstance(self.approvedRoot, str):
+            raise ValueError("cloud_drive.approved_root须为字符串")
+        if self.approvedRoot:
+            object.__setattr__(self, "approvedRoot", approvedCloudRoot(self.approvedRoot))
+        if (isinstance(self.minIntervalSeconds, bool) or not isinstance(self.minIntervalSeconds, (int, float))
+                or not math.isfinite(self.minIntervalSeconds) or not 2 <= self.minIntervalSeconds <= 300):
+            raise ValueError("cloud_drive.min_interval_seconds须为2至300秒的有限数值")
+        if (isinstance(self.failureCooldownSeconds, bool) or not isinstance(self.failureCooldownSeconds, int)
+                or not 60 <= self.failureCooldownSeconds <= 86400):
+            raise ValueError("cloud_drive.failure_cooldown_seconds须为60至86400秒的整数")
+        if type(self.webExecutionEnabled) is not bool:
+            raise ValueError("cloud_drive.web_execution_enabled须为布尔值")
+        if not isinstance(self.endpoint, str) or len(self.endpoint) > 4096:
+            raise ValueError("cloud_drive.endpoint格式无效")
+        if self.endpoint:
+            canonicalCd2Target(self.endpoint)
+        if (not isinstance(self.caCertificateFile, str) or len(self.caCertificateFile) > 4096
+                or any(ord(char) < 32 for char in self.caCertificateFile)):
+            raise ValueError("cloud_drive.ca_certificate_file须为本机证书文件路径")
+        if self.webExecutionEnabled and (not self.endpoint or not self.approvedRoot):
+            raise ValueError("网页盘点须配置HTTPS端点及限定媒体根")
+        if type(self.directoryRenameEnabled) is not bool:
+            raise ValueError("cloud_drive.directory_rename_enabled须为布尔值")
+        if (not isinstance(self.directoryMappingRevision, str) or len(self.directoryMappingRevision) > 64
+                or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for char in self.directoryMappingRevision)):
+            raise ValueError("cloud_drive.directory_mapping_revision须为最多64字符的映射修订标识")
+        if self.directoryRenameEnabled and (not self.endpoint or not self.approvedRoot or not self.directoryMappingRevision):
+            raise ValueError("目录改名须配置HTTPS入口、批准根及映射修订")
+        if type(self.quarantineEnabled) is not bool:
+            raise ValueError("cloud_drive.quarantine_enabled须为布尔值")
+        name = self.quarantineFolderName
+        if (not isinstance(name, str) or not name or name != name.strip(" .")
+                or unicodedata.normalize("NFC", name) != name
+                or any(char in '/\\:*?"<>|' or unicodedata.category(char).startswith("C") for char in name)
+                or len(name.encode("utf-8")) > 240):
+            raise ValueError("cloud_drive.quarantine_folder_name须为安全的单层目录名")
+        compatible = unicodedata.normalize("NFKC", name)
+        reserved = {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}
+        if (compatible in {".", ".."} or compatible != compatible.strip(" .")
+                or any(char in '/\\:*?"<>|' for char in compatible) or compatible.split(".", 1)[0].upper() in reserved):
+            raise ValueError("cloud_drive.quarantine_folder_name须为安全的单层目录名")
+        if self.quarantineEnabled and (not self.endpoint or not self.approvedRoot or not self.directoryMappingRevision):
+            raise ValueError("受控隔离须配置HTTPS入口、批准根及映射修订")
+
+
+def cloudDriveSettingsFromDict(values: dict) -> CloudDriveSettings:
+    if not isinstance(values, dict) or set(values) - {"approved_root", "min_interval_seconds", "failure_cooldown_seconds",
+            "web_execution_enabled", "endpoint", "ca_certificate_file", "directory_rename_enabled", "directory_mapping_revision",
+            "quarantine_enabled", "quarantine_folder_name"}:
+        raise ValueError("云盘规划配置字段无效；此处不接收账号、密码或令牌")
+    return CloudDriveSettings(values.get("approved_root", ""), values.get("min_interval_seconds", 2),
+                              values.get("failure_cooldown_seconds", 300), values.get("web_execution_enabled", False),
+                              values.get("endpoint", ""), values.get("ca_certificate_file", ""),
+                              values.get("directory_rename_enabled", False), values.get("directory_mapping_revision", ""),
+                              values.get("quarantine_enabled", False), values.get("quarantine_folder_name", "_MediaAI_Quarantine"))
+
+
+@dataclass(frozen=True)
 class AppSettings:
     """应用运行配置。"""
 
     app_name: str = "MediaAI Renamer"
-    version: str = "1.3.0"
+    version: str = "1.4.0"
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()
@@ -174,6 +252,7 @@ class AppSettings:
     credential_key_file: Path | None = None
     external_requests: ExternalRequestSettings = field(default_factory=ExternalRequestSettings)
     background_jobs: BackgroundJobSettings = field(default_factory=BackgroundJobSettings)
+    cloudDrive: CloudDriveSettings = field(default_factory=CloudDriveSettings)
 
 
 DEFAULT_CONFIG_PATH = Path("config/config.toml")
@@ -252,5 +331,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         auth=auth,
         external_requests=externalRequestSettingsFromDict(config.get("external_requests", {})),
         background_jobs=backgroundJobSettingsFromDict(config.get("background_jobs", {})),
+        # CD2 持久配置仅由数据库管理，旧 TOML 不自动授权执行。
+        cloudDrive=CloudDriveSettings(),
         credential_key_file=(Path(str(paths_config["credential_key_file"])) if paths_config.get("credential_key_file") else None),
     )

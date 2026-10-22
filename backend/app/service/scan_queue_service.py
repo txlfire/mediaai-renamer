@@ -11,6 +11,7 @@ from app.service.audit_service import AuditWriteContext, record_audit_event
 from app.service.media_source_service import get_media_source
 from app.service.operation_log_service import record_operation_log
 from app.service.scan_service import SCAN_MODES, _fetch_scan_job, buildScanPolicy, requireScanLease, run_full_scan
+from app.service.cloud_directory_guard import directoryExecutionHeld, requireNoDirectoryExecution
 
 
 def _now() -> str:
@@ -39,6 +40,7 @@ def acceptScan(settings: AppSettings, sourceId: int, scanMode: str, context: Aud
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("BEGIN IMMEDIATE")
+        requireNoDirectoryExecution(connection)
         current = connection.execute("SELECT * FROM media_sources WHERE id=? AND deleted_at IS NULL", (sourceId,)).fetchone()
         if current is None or not current["enabled"] or current["updated_at"] != source.updated_at:
             raise ValueError("媒体源已变化，请刷新后重新发起扫描")
@@ -79,6 +81,8 @@ def claimScan(settings: AppSettings) -> tuple[int, str] | None:
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("BEGIN IMMEDIATE")
+        if directoryExecutionHeld(connection):
+            return None
         # 业务终态不代表进程已退出，所有未释放的执行令牌都占用槽位。
         if connection.execute("SELECT 1 FROM scan_jobs WHERE execution_token IS NOT NULL LIMIT 1").fetchone():
             return None

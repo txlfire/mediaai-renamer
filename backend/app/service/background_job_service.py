@@ -11,6 +11,7 @@ import sqlite3
 from uuid import UUID
 
 from app.service.audit_service import AuditWriteContext, record_audit_event
+from app.service.cloud_directory_guard import directoryExecutionHeld, requireNoDirectoryExecution
 from app.service.auth_service import _row_to_user
 from app.service.execution_guard_service import executionGuard
 from app.service.operation_log_service import record_operation_log
@@ -185,6 +186,7 @@ def acceptBackgroundJob(settings, kind, requestId, payload, context):
     with closing(_connect(settings)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         actor = context.actor
+        requireNoDirectoryExecution(connection)
         if actor is None:
             raise PermissionError("后台受理需要已认证用户")
         _actor(connection, actor.id, actor.username, kind)
@@ -252,6 +254,8 @@ def requireBackgroundJobLease(settings, connection, jobId, token, *, checkConfig
 def claimBackgroundJob(settings):
     with closing(_connect(settings)) as connection:
         connection.execute("BEGIN IMMEDIATE")
+        if directoryExecutionHeld(connection):
+            return None
         if connection.execute("SELECT 1 FROM background_jobs WHERE execution_token IS NOT NULL LIMIT 1").fetchone():
             return None
         row = connection.execute("SELECT id FROM background_jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()

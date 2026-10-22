@@ -16,7 +16,7 @@ jobs:
   verify:
     name: Tests and protocol release gate
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -43,6 +43,8 @@ jobs:
           npm run frontend:build
       - name: Backend tests
         run: bash scripts/run-backend-tests.sh
+      - name: Offline ad-label tool tests
+        run: python -m unittest discover -s scripts/tests -p test_evaluate_ad_labels.py -v
       - name: Encoding check
         shell: pwsh
         run: ./scripts/check-encoding.ps1

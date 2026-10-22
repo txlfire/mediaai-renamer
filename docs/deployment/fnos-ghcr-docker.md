@@ -1,10 +1,12 @@
 # fnOS Docker 镜像部署与更新
 
-类型：部署与维护手册。适用稳定版v1.3.0、schema39。固定制品、摘要及来源见[发布说明](../releases/v1.3.0.md)，验收边界见[项目状态](../development/project-status.md)。
+类型：部署与维护手册。本轮目标v1.4.0、schema55，发布状态、固定制品和来源见[发布说明](../releases/v1.4.0.md)，验收边界见[项目状态](../development/project-status.md)。旧v1.3.0为schema39。
+
+v1.4.0包含CD2数据库配置及受控目录整理，schema55。升级前必须核对任务/未知保护、worker退出、匹配备份及副本迁移，见[CD2接入与升级准备第6节](cd2-readonly-preflight.md#6-正式升级前核对与回退)；不能将新库交给旧版本回退。当前fnOS验收版不随公开发布自动切换，真实媒体动作仍需单独确认。
 
 ## 1. 运行形态
 
-镜像 `ghcr.io/txlfire/mediaai-renamer:v1.3.0` 当前发布 `linux/amd64`。正式Compose只有一个mediaai服务和一个mediaai-renamer容器，FastAPI同时提供Vue页面及API，长任务由隔离worker执行，不需要独立Nginx或在NAS上编译前端。
+目标镜像 `ghcr.io/txlfire/mediaai-renamer:v1.4.0`，CI默认平台为 `linux/amd64`，以标签CI及实际镜像核验为准。正式Compose只有一个mediaai服务和一个mediaai-renamer容器，FastAPI同时提供Vue页面及API，长任务由隔离worker执行，不需要独立Nginx或在NAS上编译前端。
 
 | 入口 | 地址 |
 | --- | --- |
@@ -49,7 +51,7 @@ mediaai-renamer/
 在同级 `.env` 设置固定版本，保留已有其他变量；以下是文件内容，不是shell命令：
 
 ```dotenv
-MEDIAAI_IMAGE_TAG=v1.3.0
+MEDIAAI_IMAGE_TAG=v1.4.0
 ```
 
 数据库和凭据密钥需持久化。默认密钥文件为 `data/secrets/credentials.key`；也可在已配置的独立挂载保存，环境秘密 `MEDIAAI_CREDENTIAL_KEY` 优先。更换路径或环境值不是密钥轮换，恢复必须使用匹配的原密钥。
@@ -83,7 +85,7 @@ docker compose -f docker-compose.ghcr.yml ps
 docker compose -f docker-compose.ghcr.yml logs --tail=100 mediaai
 ```
 
-预期：一个mediaai-renamer容器，状态running；两个健康入口均返回200、`status=ok`、`version=1.3.0`。仅容器running不等于应用健康，还需打开Web登录页。
+预期：一个mediaai-renamer容器，状态running；两个健康入口均返回200、`status=ok`、`version=1.4.0`。仅容器running不等于应用健康，还需打开Web登录页。CD2的Token交接另须可信HTTPS；普通HTTP入口不能绕过该门禁。
 
 首次无用户时从登录页初始化管理员。示例默认关闭自动创建；已有实例使用已保存账号，不保证admin/123456仍有效。不要删除数据库恢复密码，应按[用户手册](../manuals/MediaAI-Renamer-用户手册.md)的应急入口处理。
 
@@ -141,13 +143,14 @@ docker image inspect mediaai-renamer:local --format '{{json .Config.Env}}'
 
 ## 9. 历史版本升级与回退边界
 
-- 当前schema39。独立v3凭据自schema21引入，旧v1/v2密文依赖原database_path字符串，首次迁移前不能随意改路径；先在受控副本中复现原配置完成迁移验证。
+- v1.4.0为schema55（v1.3.0为39）。独立v3凭据自schema21引入，旧v1/v2密文依赖原database_path字符串，首次迁移前不能随意改路径；先在受控副本中复现原配置完成迁移验证。
 - schema22起的安全快照使旧dry-run需要重新生成；schema23～25增加本地意图/跨盘身份/回滚快照，schema27引入文件动作审计意图。迁移不会猜测历史请求是否成功。
 - schema31/32/34分别增加重命名、回滚和待处理迁移的后台执行信息；真实文件写共用FIFO。旧checked/running记录不自动放进新队列，扫描使用独立槽。遗留槽先通过只读恢复工具核对，实际释放需要停服确认及已知PID退出。
 - schema33引入跨进程HTTP预算：默认同数据库全局4实际请求、每origin1并发/2次每秒；等待计入超时。不自动重定向或重试未知请求，不将SQLite共享到多主机作为分布式限流。
 - schema39持久化后台探测/批量匹配任务及逐项结果；普通结果默认7天、单任务4MiB、总逻辑64MiB，清理不删除幂等UUID或重发任务。接口与维护见[后台任务手册](../development/background-jobs/api-and-maintenance.md)。
+- 本轮新增CD2预算/盘点、改名/恢复/隔离计划、路径水位与schema55数据库配置对象。旧TOML不自动导入，三项执行默认关闭；未知RPC和保护槽不因迁移、清理观察或配置保存被抹除。迁移前检查及回退顺序见[CD2部署核对](cd2-readonly-preflight.md)。
 - 迁移失败时停止并保留原库/密钥，不删库、不清凭据。升级后重新核对账户权限、凭据读取、分页、dry-run、旧任务与审计意图，不指向正式媒体试写。
 - 回退用旧镜像＋升级前数据库/配置/匹配密钥整套恢复，没有通用数据库降级工具。新版本已改名/MOVE/迁移时先核对文件意图与真实身份，不能只恢复旧库掩盖文件事实。
 - 历史脱敏、意图核对等维护默认只读或要求显式确认，不由升级自动执行清理；未知/pending意图不为腾空间删除，安全审计不套用普通日志保留期，不在线VACUUM。
 
-恢复/维护命令见[完整手册](../manuals/MediaAI-Renamer-用户手册.md)及[WebDAV说明](webdav.md)。现有隔离包测试已验证新装、schema20→39及旧备份恢复；标签CI已通过Linux回归、独立真实TLS和隔离容器门禁。它们不代表用户正式实例、真实NFS硬阻塞或每个NAS写端点已通过验收。
+恢复/维护命令见[完整手册](../manuals/MediaAI-Renamer-用户手册.md)及[WebDAV说明](webdav.md)。此前v1.3.0隔离包已验新装、schema20→39及旧备份恢复、标签CI门禁；本轮1.4.0/schema55的独立结果见[发布记录](../work-logs/progress-2026-10-22-release-1.4.0.md)，不能沿用旧CI结果。它们不代表用户正式实例、真实NFS硬阻塞或每个NAS写端点已通过验收。

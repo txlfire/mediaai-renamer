@@ -86,6 +86,9 @@ def acceptPendingMove(settings, ids, targetDirectory, requestId, context, *, syn
         if synchronous:
             assertFileTaskSlotFree(connection, "pending_move", -1)
         rows = connection.execute(_SOURCE + f"WHERE p.id IN ({','.join('?' for _ in ids)}) ORDER BY p.id", ids).fetchall()
+        from app.service.cloud_directory_path_service import requireFreshScan
+        for row in rows:
+            requireFreshScan(connection, row["scan_job_id"])
         if len(rows) != len(ids) or any(row["status"] != "pending" or not row["source_enabled"]
                 or row["source_deleted_at"] or row["scan_invalidated"] or row["source_type"] == "webdav"
                 or "://" in row["file_path"] for row in rows):

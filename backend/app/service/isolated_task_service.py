@@ -35,7 +35,12 @@ def startTaskProcess(settings, module: str, payload: dict, persistPid: Callable,
     }
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
-    process = subprocess.Popen([sys.executable, "-m", module], stdin=subprocess.PIPE,
+    executable = sys.executable
+    if os.name == "nt" and sys.prefix != sys.base_prefix:
+        # 沿用CPython multiprocessing的venv启动方式，绕过额外启动器，保留环境且让PID对应真实worker。
+        executable = sys._base_executable
+        env["__PYVENV_LAUNCHER__"] = sys.executable
+    process = subprocess.Popen([executable, "-m", module], stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     try:
@@ -43,7 +48,8 @@ def startTaskProcess(settings, module: str, payload: dict, persistPid: Callable,
         persistPid(process.pid)
         process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
         process.stdin.close()
-    except Exception as exc:
+    except BaseException as exc:
+        # 启动交接被中断时也保留已创建进程，避免监督者误以为没有子进程需要回收。
         if not process.stdin.closed:
             try:
                 process.stdin.close()

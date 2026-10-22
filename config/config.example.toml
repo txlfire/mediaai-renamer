@@ -1,4 +1,4 @@
-# MediaAI Renamer v1.3.0 配置示例
+# MediaAI Renamer v1.4.0 配置示例
 
 [server]
 host = "0.0.0.0"
@@ -57,3 +57,6 @@ max_concurrency = 1
 # [external_requests.providers.tmdb]
 # requests_per_second = 4
 # max_concurrency = 2
+
+# CD2 / 115 目录整理配置在“系统设置”维护并保存于数据库。
+# 不再读取 [cloud_drive]，不在文件中保存端点、CA、云密码或临时Token。

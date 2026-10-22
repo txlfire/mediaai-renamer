@@ -9,6 +9,7 @@ import {
   SwitchButton,
   VideoCamera,
   Loading,
+  FolderChecked,
 } from "@element-plus/icons-vue";
 import { computed, onMounted, onUnmounted } from "vue";
 import { ElMessage } from "element-plus";
@@ -35,6 +36,7 @@ const menuItems = computed(() =>
     { path: "/scan-jobs", label: messages.app.menu.scanJobs, icon: Operation, visible: true },
     { path: "/scan-results", label: messages.app.menu.scanResults, icon: VideoCamera, visible: true },
     { path: "/rename-previews", label: messages.app.menu.renamePreviews, icon: EditPen, visible: true },
+    { path: "/cloud-inventory", label: messages.app.menu.cloudInventory, icon: FolderChecked, visible: authStore.hasPermission("scan:run") },
     { path: "/tasks", label: messages.app.menu.tasks, icon: Notebook, visible: authStore.hasPermission("task:manage") },
     { path: "/settings", label: messages.app.menu.settings, icon: Setting, visible: authStore.hasPermission("settings:write") },
   ].filter((item) => item.visible),

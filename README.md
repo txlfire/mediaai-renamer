@@ -7,11 +7,13 @@ MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、�
 [![Vue](https://img.shields.io/badge/Vue-3-42b883)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-4c566a)](LICENSE)
 
-当前源码版本为 `1.3.0`，发布包、镜像及发布状态以 [GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases) 和对应 CI 结果为准。
+当前源码版本为 `1.4.0`，本轮发布准备状态见[v1.4.0说明](docs/releases/v1.4.0.md)；发布包、镜像及发布状态以 [GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases) 和对应 CI 结果为准。
 
 v1.3.0增加六套完整主题、可滚动预览选择器，以及键盘、焦点和窄窗口布局修复；侧栏直接显示实际版本号。保留v1.2.0的分页、后台任务、外发保护与独立凭据密钥。详见[发布说明](docs/releases/v1.3.0.md)；真实组合缩放、NFS硬阻塞和正式实例回退不由本机测试替代。
 
 当前能力、已验证结果和剩余边界见[项目状态](docs/development/project-status.md)，全部公开资料见[文档索引](docs/README.md)。历史阶段文档和工作日志保留当时结论，不替代当前操作手册。
+
+v1.4.0纳入CD2/115小范围目录整理、目录改名及广告人工复核/受控隔离，数据库升级至schema55；不是v1.3.0包的能力。公司1.1.2及家庭1.1.3精确CD2/CLOUDAPI组合的小夹具产品链已验，执行默认关闭。fnOS验收版已包含家庭兼容与审查修复，账号及设置页已由用户确认，但不随公开发布自动升级。真实广告人工标签、其他物理显示/读屏、自启与证书续期仍留项，不含正文取样、永久删除或正式媒体写入授权。CD2配置在“系统设置 → 目录整理（CD2 / 115）”入库维护，不再读取TOML，见[配置说明](docs/manuals/cd2-settings.md)、[开发计划](docs/development/cloud-drive/c3-c4-implementation-plan.md)及[隔离恢复手册](docs/manuals/cd2-quarantine.md)。
 
 ## 核心能力
 
@@ -77,10 +79,10 @@ FTP、FTPS、SFTP、S3 / MinIO 和 HTTP WebDAV 当前未实现，不应按可用
 ```bash
 git clone https://github.com/txlfire/mediaai-renamer.git
 cd mediaai-renamer
-git checkout v1.3.0
+git checkout v1.4.0
 
 if [ ! -f config/config.toml ]; then cp config/config.example.toml config/config.toml; fi
-if [ ! -f .env ]; then printf "MEDIAAI_IMAGE_TAG=v1.3.0\n" > .env; fi
+if [ ! -f .env ]; then printf "MEDIAAI_IMAGE_TAG=v1.4.0\n" > .env; fi
 
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d

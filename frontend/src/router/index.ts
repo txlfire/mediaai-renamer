@@ -53,6 +53,12 @@ const router = createRouter({
       component: () => import("../views/TaskGovernanceView.vue"),
     },
     {
+      path: "/cloud-inventory",
+      name: "cloud-inventory",
+      component: () => import("../views/CloudInventoryView.vue"),
+      meta: { permission: "scan:run" },
+    },
+    {
       path: "/settings",
       name: "settings",
       component: () => import("../views/SettingsView.vue"),

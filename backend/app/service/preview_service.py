@@ -286,6 +286,11 @@ def _query_media_files(
         "NOT EXISTS (SELECT 1 FROM scan_jobs job WHERE job.id = mf.scan_job_id AND job.source_invalidated_at IS NOT NULL)",
     ]
     params: list[object] = []
+    from app.service.cloud_directory_path_service import cloudPathEpoch
+    epoch = cloudPathEpoch(connection)
+    if epoch["revision"]:
+        conditions.append("mf.scan_job_id>?")
+        params.append(epoch["max_scan_job_id"])
     if media_source_id is not None:
         conditions.append("mf.media_source_id = ?")
         params.append(media_source_id)
@@ -542,6 +547,12 @@ def _assertPreviewEditable(connection: sqlite3.Connection, previewId: int) -> No
     # 与批次认领串行化；查询和后续写入必须处于同一事务。
     if not connection.in_transaction:
         connection.execute("BEGIN IMMEDIATE")
+    from app.service.cloud_directory_guard import requireNoDirectoryExecution
+    from app.service.cloud_directory_path_service import requireFreshScan
+    requireNoDirectoryExecution(connection)
+    scan = connection.execute("SELECT f.scan_job_id FROM rename_previews p JOIN media_files f ON f.id=p.media_file_id WHERE p.id=?", (previewId,)).fetchone()
+    if scan:
+        requireFreshScan(connection, scan[0])
     historical = connection.execute(
         "SELECT 1 FROM rename_previews preview JOIN media_files file ON file.id = preview.media_file_id "
         "JOIN media_sources source ON source.id = file.media_source_id WHERE preview.id = ? "

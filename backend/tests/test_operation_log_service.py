@@ -21,6 +21,23 @@ from app.service.settings_service import update_setting_values
 class OperationLogServiceTest(unittest.TestCase):
     """任务运行日志服务。"""
 
+    def test_borrowed_transaction_sqlite_full_is_not_an_auxiliary_failure(self):
+        with closing(sqlite3.connect(":memory:")) as connection:
+            connection.row_factory=sqlite3.Row
+            connection.execute("CREATE TABLE operation_logs(id INTEGER PRIMARY KEY,task_type TEXT,task_id INTEGER,"
+                "level TEXT,stage TEXT,message TEXT,progress_current INTEGER,progress_total INTEGER,detail_json TEXT,approx_bytes INTEGER,created_at TEXT)")
+            connection.execute("CREATE TABLE business_state(value INTEGER)")
+            connection.execute("INSERT INTO business_state VALUES(0)")
+            connection.commit()
+            connection.execute("PRAGMA max_page_count=3")
+            connection.execute("UPDATE business_state SET value=1")
+            with self.assertRaises(sqlite3.OperationalError) as raised:
+                record_operation_log(None,task_type=TASK_TYPE_SCAN_JOB,task_id=1,level=LEVEL_INFO,stage="test",
+                    message="x"*131072,connection=connection)
+            self.assertEqual(sqlite3.SQLITE_FULL,raised.exception.sqlite_errorcode)
+            self.assertFalse(connection.in_transaction)
+            self.assertEqual(0,connection.execute("SELECT value FROM business_state").fetchone()[0])
+
     def build_settings(self, root: Path) -> AppSettings:
         return AppSettings(
             data_dir=root,

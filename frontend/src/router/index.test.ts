@@ -41,7 +41,7 @@ describe("lazy routes and authentication", () => {
   it("keeps existing paths and loads each view on demand", () => {
     const pages = state.config!.routes.filter((route) => route.component);
     expect(pages.map((route) => route.path)).toEqual([
-      "/login", "/media-sources", "/scan-jobs", "/scan-results", "/rename-previews", "/tasks", "/settings",
+      "/login", "/media-sources", "/scan-jobs", "/scan-results", "/rename-previews", "/tasks", "/cloud-inventory", "/settings",
     ]);
     expect(pages.every((route) => typeof route.component === "function")).toBe(true);
   });

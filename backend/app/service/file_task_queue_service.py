@@ -9,6 +9,8 @@ import sqlite3
 
 from app.service.audit_service import record_audit_event
 from app.service.operation_log_service import record_operation_log
+from app.service.cloud_directory_guard import requireNoDirectoryExecution
+from app.service.cloud_directory_path_service import requireFreshFileTask
 
 FILE_TASK_TIMEOUT_SECONDS = 3600
 PROCESS_INSTANCE_ID = secrets.token_urlsafe(18)
@@ -39,6 +41,7 @@ def _spec(kind):
 
 
 def requireFileTaskActor(connection, kind, actorId):
+    requireNoDirectoryExecution(connection)
     _, label, permission, _ = _spec(kind)
     if actorId is not None:
         actor = connection.execute("SELECT enabled,permissions_json FROM users WHERE id=?", (actorId,)).fetchone()
@@ -47,12 +50,14 @@ def requireFileTaskActor(connection, kind, actorId):
 
 
 def requireFileTaskLease(connection, kind, taskId, token, *, requireAuditIntent=True):
+    requireNoDirectoryExecution(connection)
     table, label, _, _ = _spec(kind)
     auditCondition = " AND audit_intent_id IS NOT NULL" if requireAuditIntent else ""
     row = connection.execute(f"SELECT * FROM {table} WHERE id=? AND status='running' AND execution_token=? "
         f"AND julianday(execution_expires_at)>julianday('now'){auditCondition}", (taskId, token)).fetchone()
     if row is None:
         raise FileTaskLeaseError(f"{label}执行授权已失效，请核对任务；不会自动重试")
+    requireFreshFileTask(connection, kind, taskId)
     requireFileTaskActor(connection, kind, row["actor_id"])
     return row
 
@@ -61,6 +66,8 @@ def assertFileTaskSlotFree(connection, kind, taskId, *, includeQueued=True):
     _spec(kind)
     if not connection.in_transaction:
         connection.execute("BEGIN IMMEDIATE")
+    requireNoDirectoryExecution(connection)
+    requireFreshFileTask(connection, kind, taskId)
     statuses = "('queued','running')" if includeQueued else "('running')"
     for otherKind, (table, _, _, _) in TASKS.items():
         exclude = " AND id<>?" if otherKind == kind else ""

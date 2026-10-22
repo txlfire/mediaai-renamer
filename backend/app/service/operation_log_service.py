@@ -139,6 +139,10 @@ def operation_log_page_to_dict(page: OperationLogPage) -> dict[str, Any]:
 
 
 def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -> bool:
+    if task_type == "cloud_quarantine_run":
+        return connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE log_id=?", (task_id,)).fetchone() is not None
+    if task_type == "cloud_directory_execution":
+        return connection.execute("SELECT 1 FROM cloud_directory_executions WHERE log_id=?", (task_id,)).fetchone() is not None
     if task_type == TASK_TYPE_SCAN_JOB:
         table = "scan_jobs"
     elif task_type == TASK_TYPE_RENAME_OPERATION:
@@ -156,6 +160,14 @@ def _task_exists(connection: sqlite3.Connection, task_type: str, task_id: int) -
 
 
 def _task_running(connection: sqlite3.Connection, task_type: str, task_id: int) -> bool:
+    if task_type == "cloud_quarantine_run":
+        row = connection.execute("SELECT status,worker_pid,expires_at FROM cloud_quarantine_runs WHERE log_id=?", (task_id,)).fetchone()
+        return bool(row and (row["status"] in {"accepted","running"} or row["worker_pid"] is not None)
+                    and datetime.now(timezone.utc).timestamp() < row["expires_at"])
+    if task_type == "cloud_directory_execution":
+        row = connection.execute("SELECT status,worker_pid,expires_at FROM cloud_directory_executions WHERE log_id=?", (task_id,)).fetchone()
+        return bool(row and (row["status"] in {"accepted", "running"} or row["worker_pid"] is not None)
+                    and datetime.now(timezone.utc).timestamp() < row["expires_at"])
     table = {
         TASK_TYPE_SCAN_JOB: "scan_jobs", TASK_TYPE_RENAME_OPERATION: "rename_operations",
         TASK_TYPE_ROLLBACK_PLAN: "rename_rollback_plans",
@@ -188,10 +200,11 @@ def record_operation_log(
     detail: dict[str, Any] | list[Any] | None = None,
     connection: sqlite3.Connection | None = None,
 ) -> OperationLogItem | None:
-    """写入任务运行日志；失败时只记录应用日志，不中断主流程。"""
+    """普通日志可降级；借用业务连接的整笔事务失效必须向调用者报告。"""
 
     owns_connection = connection is None
     target_connection = connection
+    borrowedTransaction = bool(connection is not None and connection.in_transaction)
     try:
         now = _utc_now_text()
         detail_json = (
@@ -229,6 +242,10 @@ def record_operation_log(
         item = _row_to_operation_log(row)
         return item
     except Exception as exc:  # noqa: BLE001 - 运行日志不能影响主业务。
+        if borrowedTransaction and not target_connection.in_transaction:
+            # SQLITE_FULL等错误可能撤销整笔业务事务，不能继续隐式开启新事务伪报成功。
+            _warnLogFailure(exc)
+            raise
         if owns_connection and target_connection is not None:
             try:
                 target_connection.rollback()

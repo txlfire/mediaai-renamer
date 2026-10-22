@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.api.auth import require_permission
 from app.service.operation_log_service import (
@@ -15,6 +15,21 @@ from app.service.operation_log_service import (
 router = APIRouter(prefix="/api/operation-logs", tags=["operation-logs"])
 
 
+def _authorizeDirectoryLogs(request, taskType, taskId, actorId):
+    if taskType in {"cloud_directory_execution","cloud_quarantine_run"}:
+        from app.service.cloud_directory_log_service import requireDirectoryLogOwner
+        from app.service.cloud_quarantine_log_service import requireQuarantineLogOwner
+        from app.service.cloud_directory_plan_service import CloudDirectoryError
+        from app.service.cloud_inventory_service import CloudInventoryError
+        try:
+            owner = requireQuarantineLogOwner if taskType == "cloud_quarantine_run" else requireDirectoryLogOwner
+            owner(request.app.state.settings, taskId, actorId)
+        except CloudDirectoryError as exc:
+            raise HTTPException(status_code=403 if exc.code == "permission_denied" else 404, detail="无权读取或日志任务不存在") from None
+        except CloudInventoryError:
+            raise HTTPException(status_code=409, detail="日志暂不可用，请稍后核对") from None
+
+
 @router.get("")
 def list_operation_logs_api(
     request: Request,
@@ -25,7 +40,7 @@ def list_operation_logs_api(
     _current_user=Depends(require_permission("audit:read")),
 ):
     """按任务读取运行日志。"""
-
+    _authorizeDirectoryLogs(request, task_type, task_id, _current_user.id)
     return operation_log_page_to_dict(
         list_operation_logs(
             request.app.state.settings,
@@ -45,7 +60,7 @@ def export_operation_logs_api(
     _current_user=Depends(require_permission("audit:read")),
 ):
     """导出指定任务运行日志。"""
-
+    _authorizeDirectoryLogs(request, task_type, task_id, _current_user.id)
     return Response(
         content=export_operation_logs_text(
             request.app.state.settings,

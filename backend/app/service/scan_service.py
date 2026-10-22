@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlparse
 from app.core.config import AppSettings
 from app.core.logger import get_logger
 from app.service.audit_service import AuditWriteContext, record_audit_event
+from app.service.cloud_directory_probe_service import directoryProbe
 from app.schema.media import MediaFile, ScanJob, ScanModeSuggestion
 from app.service.media_source_service import get_media_source, get_media_source_protocol_context
 from app.service.operation_log_service import (
@@ -514,6 +515,8 @@ def buildScanPolicy(settings: AppSettings, source, scanMode: str) -> dict:
 
 
 def requireScanLease(connection: sqlite3.Connection, jobId: int, token: str) -> sqlite3.Row:
+    from app.service.cloud_directory_guard import requireNoDirectoryExecution
+    requireNoDirectoryExecution(connection)
     row = connection.execute(
         "SELECT * FROM scan_jobs WHERE id=? AND status='running' AND execution_token=? "
         "AND execution_expires_at>? AND source_invalidated_at IS NULL", (jobId, token, _utc_now()),
@@ -533,6 +536,7 @@ def requireScanLease(connection: sqlite3.Connection, jobId: int, token: str) -> 
     return row
 
 
+@directoryProbe("scan")
 def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = SCAN_MODE_FULL,
                   *, auditContext: AuditWriteContext | None = None,
                   acceptedJobId: int | None = None, executionToken: str | None = None) -> ScanJob:
@@ -586,6 +590,8 @@ def run_full_scan(settings: AppSettings, media_source_id: int, scan_mode: str = 
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("BEGIN IMMEDIATE")
+        from app.service.cloud_directory_guard import requireNoDirectoryExecution
+        requireNoDirectoryExecution(connection)
         currentSource = connection.execute(
             "SELECT path, enabled, updated_at FROM media_sources WHERE id = ? AND deleted_at IS NULL", (source.id,),
         ).fetchone()

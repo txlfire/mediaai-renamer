@@ -32,6 +32,7 @@ from app.api.shared_protocols import router as shared_protocols_router
 from app.api.tasks import router as tasks_router
 from app.api.users import router as users_router
 from app.api.background_jobs import router as background_jobs_router
+from app.api.cloud_drive import router as cloud_drive_router
 from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
@@ -45,6 +46,9 @@ from app.service.pending_move_worker_service import runPendingMoveWorkerLoop
 from app.service.background_job_worker_service import runBackgroundJobLoop
 from app.service.scan_service import recover_interrupted_scan_jobs
 from app.service.settings_service import resolveRuntimeLogging
+from app.service.cloud_inventory_web_service import CloudInventoryWebRunner
+from app.service.cloud_directory_web_service import CloudDirectoryRunner
+from app.service.cloud_quarantine_web_service import CloudQuarantineRunner
 from app.web import mount_frontend
 
 logger = get_logger(__name__)
@@ -112,10 +116,16 @@ def create_app(
     recovered_scan_jobs = recover_interrupted_scan_jobs(settings)
     if recovered_scan_jobs:
         logger.warning("已将 %s 个无执行租约的遗留扫描任务标记失败；未重新执行", recovered_scan_jobs)
+    cloudInventoryRunner = CloudInventoryWebRunner(settings)
+    cloudDirectoryRunner = CloudDirectoryRunner(settings)
+    cloudQuarantineRunner = CloudQuarantineRunner(settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         stop = asyncio.Event()
+        cloudInventoryRunner.open()
+        cloudDirectoryRunner.open()
+        cloudQuarantineRunner.open()
         maintenance = asyncio.create_task(runMaintenanceLoop(settings, stop))
         scans = asyncio.create_task(runScanWorkerLoop(settings, stop))
         renames = asyncio.create_task(runRenameWorkerLoop(settings, stop))
@@ -126,12 +136,18 @@ def create_app(
             yield
         finally:
             stop.set()
+            await asyncio.to_thread(cloudInventoryRunner.close)
+            await asyncio.to_thread(cloudDirectoryRunner.close)
+            await asyncio.to_thread(cloudQuarantineRunner.close)
             # 等待本轮维护结束，不能取消线程后假称文件/数据库工作已停止。
             await asyncio.gather(maintenance, scans, renames, rollbacks, pendingMoves, backgroundJobs)
             shutdown_logging()
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
     app.state.settings = settings
+    app.state.cloudInventoryRunner = cloudInventoryRunner
+    app.state.cloudDirectoryRunner = cloudDirectoryRunner
+    app.state.cloudQuarantineRunner = cloudQuarantineRunner
     app.add_exception_handler(RequestValidationError, _validationExceptionHandler)
     app.add_exception_handler(StarletteHTTPException, _httpExceptionHandler)
     app.add_exception_handler(Exception, _unexpectedExceptionHandler)
@@ -140,6 +156,7 @@ def create_app(
     app.include_router(audit_router, dependencies=private_dependencies)
     app.include_router(users_router, dependencies=private_dependencies)
     app.include_router(background_jobs_router, dependencies=private_dependencies)
+    app.include_router(cloud_drive_router, dependencies=private_dependencies)
     app.include_router(health_router)
     app.include_router(media_sources_router, dependencies=private_dependencies)
     app.include_router(shared_protocols_router, dependencies=private_dependencies)
