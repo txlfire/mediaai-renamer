@@ -2,12 +2,12 @@
 
 MediaAI Renamer 是一套面向 NAS 和家庭媒体库的影视文件扫描、元数据匹配与安全重命名工具。它将媒体源管理、增量扫描、命名预览、外部元数据补充、真实重命名、回滚和审计集中在一个 Web 界面中。
 
-[![Release](https://img.shields.io/badge/release-v1.3.0-2f80ed)](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.3.0)
+[![Release](https://img.shields.io/badge/release-v1.4.0-2f80ed)](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.4.0)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776ab)](https://www.python.org/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-4c566a)](LICENSE)
 
-当前源码版本为 `1.4.0`，本轮发布准备状态见[v1.4.0说明](docs/releases/v1.4.0.md)；发布包、镜像及发布状态以 [GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases) 和对应 CI 结果为准。
+当前正式版本为 `1.4.0`，数据库schema55。固定制品、校验值与验证范围见[v1.4.0说明](docs/releases/v1.4.0.md)；发布包、镜像及发布状态以 [GitHub Releases](https://github.com/txlfire/mediaai-renamer/releases) 和对应 CI 结果为准。
 
 v1.3.0增加六套完整主题、可滚动预览选择器，以及键盘、焦点和窄窗口布局修复；侧栏直接显示实际版本号。保留v1.2.0的分页、后台任务、外发保护与独立凭据密钥。详见[发布说明](docs/releases/v1.3.0.md)；真实组合缩放、NFS硬阻塞和正式实例回退不由本机测试替代。
 
@@ -197,7 +197,8 @@ npm run check:encoding
 - [系统设计](docs/design/project-design.md)
 - [完整主题设计](docs/design/workbench-theme-design.md)与[实施及验收入口](docs/development/ui-refresh/implementation-plan.md)
 - [后台任务接口与维护](docs/development/background-jobs/api-and-maintenance.md)
-- [v1.3.0 发布说明](docs/releases/v1.3.0.md)
+- [v1.4.0 发布说明](docs/releases/v1.4.0.md)
+- [v1.3.0 历史发布说明](docs/releases/v1.3.0.md)
 - [v1.2.0 历史发布说明](docs/releases/v1.2.0.md)
 - [历史文档归档](docs/archive/README.md)
 

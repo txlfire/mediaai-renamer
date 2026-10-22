@@ -1,6 +1,6 @@
 # fnOS Docker 镜像部署与更新
 
-类型：部署与维护手册。本轮目标v1.4.0、schema55，发布状态、固定制品和来源见[发布说明](../releases/v1.4.0.md)，验收边界见[项目状态](../development/project-status.md)。旧v1.3.0为schema39。
+类型：部署与维护手册。当前稳定版v1.4.0、schema55，固定制品和来源见[发布说明](../releases/v1.4.0.md)，验收边界见[项目状态](../development/project-status.md)。旧v1.3.0为schema39。
 
 v1.4.0包含CD2数据库配置及受控目录整理，schema55。升级前必须核对任务/未知保护、worker退出、匹配备份及副本迁移，见[CD2接入与升级准备第6节](cd2-readonly-preflight.md#6-正式升级前核对与回退)；不能将新库交给旧版本回退。当前fnOS验收版不随公开发布自动切换，真实媒体动作仍需单独确认。
 

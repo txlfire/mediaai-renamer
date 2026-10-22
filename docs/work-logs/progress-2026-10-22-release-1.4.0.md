@@ -1,6 +1,6 @@
 # 2026-10-22 v1.4.0 发布记录
 
-类型：发布实施记录，执行中，不代表已发布。
+类型：发布实施记录。正式发布及制品核验已完成，后续仅同步证据文档。
 
 ## 已确认范围
 
@@ -39,3 +39,19 @@
 - 后端会话44886退出0，1235项1405.417秒，1223通过/12受控WebDAV跳过，无失败/错误。日志保留 `.codex/test-artifacts/review-20261022/release-backend.log`，末尾既有规模统计不影响unittest结论。
 - 前端455、类型构建、离线10及97浏览器场景均通过；手机/桌面最终截图已审阅。执行期间运行代码未再更改，452文件最终清单 `release-source-final.json` 比对无变化；相对初始清单仅CI超时调整，不覆盖旧证据。
 - ZIP再次核验哈希/文件白名单及隔离新装通过；编码与暂存diff检查通过。准备提交与推送，CI/GHCR/公开Release尚未完成，不提前将这些门禁写为成功。
+
+## 检查点 4：提交、标签与草稿资产
+
+- 运行源码提交 `424e480bc1f7dadc975ba7f6ad8069bb9b644077`，219文件；通过HTTPS命令级配置原子推送develop/main/v1.4.0，旧v1.3.0标签未移动。本地main仅快进引用，未切换工作区触发旧代码读取新库。
+- [main CI](https://github.com/txlfire/mediaai-renamer/actions/runs/39794205984)和[标签CI](https://github.com/txlfire/mediaai-renamer/actions/runs/39794205481)已创建，均绑定上述源码，目前执行中，尚无镜像成功结论。
+- 非公开Release草稿已创建，tagName=v1.4.0、isDraft=true、isPrerelease=false；上传ZIP资产ID666081409，GitHub回报size924054、digest与本地SHA256一致。草稿URL为临时untagged形式，不当作已公开正式入口。
+- 草稿下载及CI终态/镜像匿名核验继续进行；全部通过后才公开Release。后续仅补证据文档，不移动固定标签或覆盖同版运行制品。
+
+## 检查点 5：正式公开与来源核验通过
+
+- main运行39794205984、标签运行39794205481的attempt1均completed/success，固定head_sha424e480。main后端1235项/865.481秒，标签1235项/855.545秒，均17跳过：12受控集成和5Windows专属，1218通过；独立HTTPS WebDAV分别12项通过，标签1.994秒。离线10项、前端455/构建、编码、Compose和实际容器健康1.4.0/SPA/未登录401/schema55门禁通过。
+- 固定镜像匿名读取manifest与config成功，Linux/amd64、OCI版本1.4.0、revision424e480匹配；digest `sha256:4c41ee03433b4bd1ea229f6a9fdd2b16b50d71a31b99a14855ce616b1f373c80`。本机未执行完整Docker拉取，不把元数据核验说成全层拉取；CI真实运行单列。
+- 已将草稿公开并标latest，发布于2026-10-22 22:43（北京时间），isDraft=false/isPrerelease=false，latest API返回v1.4.0；正式入口为 https://github.com/txlfire/mediaai-renamer/releases/tag/v1.4.0 。公开匿名下载ZIP再次校验，与本地及GitHub资产digest一致，未覆盖上传或重建。
+- 必要本地全量、构建、浏览器、双CI watch与日志下载会话均已退出。后续文档提交使用明确的skip-ci标记避免相同源码重复构建；不移动tag、不覆盖固定ZIP/镜像。README/文档索引/用户手册/部署说明/项目状态及C4最新结论同步正式发布，保留历史阶段证据。
+- 本轮发布范围完成；NAS仍保留1.3.0-c4-review-validation及旧数据/证书/备份，本地5173/8970保持。真实广告独立标签、其他物理显示/读屏、部署自启/证书续期仍待处理，不因发布勾选完成，也不新增CD2/115请求。
+- 最终补记8份文档/213公开相对引用通过候选检查，452文件源码清单无变化，编码与diff通过。GitHub Release正文中的本地相对链接已转换成仓库公开绝对链接，不把Release页当成仓库docs目录；未修改固定标签或资产。

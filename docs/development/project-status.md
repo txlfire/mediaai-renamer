@@ -2,7 +2,7 @@
 
 类型：规划与进度。核对日期：2026-10-22；发布依据为固定源码、配置、CI 和验收记录；未发布工作单独列示。
 
-v1.4.0发布执行中：用户已确认提交推送develop、合入main、打标签、发布ZIP/GHCR及Release；源码版本已同步1.4.0、schema55，最终回归及制品核验进行中，尚不将稳定基线改为已发布。范围及进度见[发布说明](../releases/v1.4.0.md)和[发布记录](../work-logs/progress-2026-10-22-release-1.4.0.md)。NAS保持现有验收版，真实广告样本保留待验，不自动开放云写。
+v1.4.0已正式发布：运行源码及固定标签为424e480，ZIP与GHCR公开，main和标签CI首次执行均成功，公开ZIP下载哈希与镜像OCI来源/版本/平台核验通过。Windows后端1223通过/12跳过，标签Linux1218通过/17平台或集成跳过，独立HTTPS WebDAV12项、前端455及构建、离线10项、97浏览器场景通过。范围和证据见[发布说明](../releases/v1.4.0.md)和[发布记录](../work-logs/progress-2026-10-22-release-1.4.0.md)。develop/main后续仅文档补记不移动标签。NAS保持现有验收版，真实广告样本保留待验，不自动开放云写；下方“未提交/未发布”为各历史检查点。
 
 C4离线核验补充：冻结人工标签与规则结果的[统计工具](../manuals/cd2-ad-label-evaluation.md)已实现，10项合成测试通过；不访问运行库或云端，未产生真实误判率。仍需独立人工标签和来源有效的小范围匿名样本，详见[阶段记录](../work-logs/progress-2026-10-22-c4-offline-labels.md)。不改变下述NAS制品或原产品验证基线。
 
@@ -26,9 +26,9 @@ fnOS目标实际曾运行本地构建的1.0.1/schema20旧实例；用户确认�
 
 ## 1. 发布基线
 
-- 当前稳定版：**v1.3.0**，数据库 schema **39**；[GitHub Release](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.3.0)为正式版本，不是预览版。
-- 固定标签源码：`162395d4d1b12a007e60198b8ca22aab6723b1ac`。后续文档同步不移动标签、不覆盖同版 ZIP 或固定镜像。
-- 镜像：`ghcr.io/txlfire/mediaai-renamer:v1.3.0`，当前发布平台为 `linux/amd64`。制品哈希、镜像 digest 与 CI 来源见[发布说明](../releases/v1.3.0.md)。
+- 当前稳定版：**v1.4.0**，数据库 schema **55**；[GitHub Release](https://github.com/txlfire/mediaai-renamer/releases/tag/v1.4.0)为正式版本，不是预览版。
+- 固定标签源码：`424e480bc1f7dadc975ba7f6ad8069bb9b644077`。后续文档同步不移动标签、不覆盖同版 ZIP 或固定镜像。
+- 镜像：`ghcr.io/txlfire/mediaai-renamer:v1.4.0`，当前发布平台为 `linux/amd64`。制品哈希、镜像 digest 与 CI 来源见[发布说明](../releases/v1.4.0.md)。
 - `develop` 用于维护，`main` 为公开发布分支；分支上的后续文档可能比固定版本包更新。部署固定版本，不以可变 `main/latest` 代替版本锁定。
 
 ## 2. 已交付
@@ -73,7 +73,9 @@ fnOS目标实际曾运行本地构建的1.0.1/schema20旧实例；用户确认�
 - Docker 与历史版本迁移见[部署说明](../deployment/fnos-ghcr-docker.md)，后台任务和清理见[维护手册](background-jobs/api-and-maintenance.md)。
 - 全部公开文档入口见[文档索引](../README.md)。本机互审记录不是公开导航或发布验收的唯一依据。
 
-## 6. 未发布开发
+## 6. CD2 实施历程
+
+以下保留C0至C4的阶段顺序与当时门禁；其中已实现功能现已纳入v1.4.0，历史“未发布/未提交”不代表当前发布状态，未放行能力仍按各项限制执行。
 
 CD2 / 115 分类目录整理已实现离线范围规划 API、内部受限只读连接器及[持久化预算](cloud-drive/c0-budget-implementation.md)：全实例单槽、批准总量、暂停/恢复及本机未决核对。
 

@@ -1,6 +1,6 @@
 # 文档索引
 
-类型：文档导航。更新日期：2026-10-22；本轮发布目标：`v1.4.0`，数据库 schema `55`，状态以[发布记录](work-logs/progress-2026-10-22-release-1.4.0.md)和Release/CI为准；旧v1.3.0为schema39。
+类型：文档导航。更新日期：2026-10-22；当前稳定版：`v1.4.0`，数据库 schema `55`，公开Release、固定镜像与校验结果见[发布记录](work-logs/progress-2026-10-22-release-1.4.0.md)；旧v1.3.0为schema39。
 
 最新入口：[v1.4.0说明](releases/v1.4.0.md)、[CD2配置](manuals/cd2-settings.md)、[盘点](manuals/cd2-inventory.md)、[目录改名](manuals/cd2-directory-rename.md)、[广告复核](manuals/cd2-ad-review.md)、[隔离恢复](manuals/cd2-quarantine.md)。本轮审查修复及fnOS验收版更新通过，三个执行开关关闭；真实广告标签用户选择保留待验。下方阶段计数、未发布和NAS未更新描述保留历史语境，当前门禁以[项目状态](development/project-status.md)为准。
 
