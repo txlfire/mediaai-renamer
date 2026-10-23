@@ -206,6 +206,8 @@ ROLLBACK;
 
 ### 7.4 专用证书与先初始化方案
 
+当前部署与运维核验已于2026-10-23推进至固定v1.4.0、unless-stopped和一次容器重启，见[最新记录](../work-logs/progress-2026-10-23-fnos-stable.md)；下方初始化顺序与restart=no候选结果保留历史，不表示当前仍为候选。宿主重启及故障回退未验，证书采用人工维护规程而非自动续期。
+
 本次fnOS部署准备已确认采用直接Uvicorn TLS、MediaAI专用私有CA及服务器证书，不复用CD2私钥、不新装反向代理，显式设置`--no-proxy-headers`。Uvicorn原生支持证书/私钥参数；是否启用及是否生效须检查实际容器CLI和TLS，而不是仅凭文档推断。[Uvicorn部署说明](https://www.uvicorn.org/deployment/)
 
 1. 私有CA及服务器私钥只在NAS专用受限目录生成和保留，目录700/私钥600；应用仅只读挂载服务器证书/私钥与公开CA，不挂CA私钥。服务器证书SAN必须覆盖实际入口IP或域名，保持链、用途、有效期及IP校验，不关闭浏览器或客户端验证。
@@ -215,6 +217,8 @@ ROLLBACK;
 5. 初始化确认后，再按已批准范围切换LAN绑定并重新检查TLS、登录/退出、持久化、审计和云开关。候选使用新目录及未发布验证镜像，不等于正式版本已发布；发布、版本和运行策略仍单独核对。
 
 本次CA有效期1095天、服务器证书365天，实际开始/到期及指纹记录在证书和受限验收报告。当前无自动续期交付，运维需在到期前预留续签窗口；续签不得借机更改CD2信任、正式媒体权限或关闭验证。证书与匹配私钥应纳入受限备份与恢复验收，不仅备份数据库。
+
+人工检查、服务证书续签、CA轮换及吊销状态未确认的处理顺序见[证书维护规程](mediaai-certificate-maintenance.md)。此规程不表示已经启用自动任务或换证。
 
 本轮操作结果：本人初始化、关闭bootstrap和审计、LAN HTTPS入口、客户端严格信任及备份副本真实启动均已核对；另经用户明确同意，仅向当前Windows用户Root导入匹配的公开CA，未改LocalMachine或导入私钥。Windows支持在当前用户Root保存信任证书，具体存储说明见[Microsoft证书导入文档](https://learn.microsoft.com/en-us/powershell/module/pki/import-certificate?view=windowsserver2025-ps)。用户已确认浏览器无警告并登录成功。
 

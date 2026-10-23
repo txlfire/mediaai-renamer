@@ -6,6 +6,8 @@
 
 ## 使用与维护
 
+2026-10-23运维更新：fnOS已切换固定v1.4.0并验证一次容器重启，见[部署记录](work-logs/progress-2026-10-23-fnos-stable.md)；证书有效期检查及[人工维护规程](deployment/mediaai-certificate-maintenance.md)已补齐，不代表NAS整机开机或自动续期通过。下方较早NAS未升级表述为历史。
+
 | 需要做什么 | 文档 |
 | --- | --- |
 | 查看已交付能力、证据和剩余边界 | [当前项目状态](development/project-status.md) |
