@@ -1072,6 +1072,7 @@ body.el-popup-parent--hidden {
   height: 100vh;
   min-height: 0;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   padding: 16px 20px;
 }

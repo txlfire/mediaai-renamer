@@ -2362,7 +2362,12 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="pendingMoveDialogVisible" :title="messages.renamePreviews.pendingFiles.moveDialog.title" width="560px">
+    <el-dialog
+      v-model="pendingMoveDialogVisible"
+      :title="messages.renamePreviews.pendingFiles.moveDialog.title"
+      width="min(560px, calc(100vw - 24px))"
+      align-center
+    >
       <el-form label-position="top">
         <el-form-item :label="messages.renamePreviews.pendingFiles.targetDirectory">
           <el-input
@@ -2379,10 +2384,22 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="pendingMoveResultVisible" :title="messages.renamePreviews.pendingFiles.resultTitle" width="800px"
-      :style="{ maxWidth: 'calc(100vw - 32px)' }">
-      <p v-if="pendingFileStore.currentMoveTask?.error_message" class="pending-move-error">{{ pendingFileStore.currentMoveTask.error_message }}</p>
-      <el-table :data="pendingFileStore.currentMoveTask?.items ?? []" max-height="460" class="data-table">
+    <el-dialog
+      v-model="pendingMoveResultVisible"
+      :title="messages.renamePreviews.pendingFiles.resultTitle"
+      width="min(800px, calc(100vw - 24px))"
+      align-center
+    >
+      <p v-if="pendingFileStore.currentMoveTask?.error_message" class="pending-move-error" tabindex="0">
+        {{ pendingFileStore.currentMoveTask.error_message }}
+      </p>
+      <el-table
+        :data="pendingFileStore.currentMoveTask?.items ?? []"
+        class="data-table pending-move-result-table"
+        table-layout="fixed"
+        max-height="clamp(140px, calc(100dvh - 260px), 460px)"
+        scrollbar-always-on
+      >
         <el-table-column prop="pending_file_id" label="ID" width="80" align="center" />
         <el-table-column :label="messages.common.status" width="128" align="center">
           <template #default="{ row }">{{ messages.renamePreviews.pendingFiles.itemStatuses[row.status as keyof typeof messages.renamePreviews.pendingFiles.itemStatuses] || row.status }}</template>
@@ -2905,8 +2922,21 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 .pending-move-error {
+  max-height: 3rem;
+  margin: 0 0 0.5rem;
+  overflow-y: auto;
   color: var(--el-color-danger);
   overflow-wrap: anywhere;
+}
+
+.pending-move-result-table {
+  min-width: 0;
+}
+
+.pending-move-result-table :deep(.el-table__header .cell) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
 }
 .metadata-candidate-expanded {
   display: flex;
