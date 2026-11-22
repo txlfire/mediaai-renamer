@@ -1,8 +1,8 @@
 # 文档索引
 
-类型：文档导航。更新日期：2026-10-22；当前稳定版：`v1.4.0`，数据库 schema `55`，公开Release、固定镜像与校验结果见[发布记录](work-logs/progress-2026-10-22-release-1.4.0.md)；旧v1.3.0为schema39。
+类型：文档导航。更新日期：2026-11-22；当前稳定版：`v1.4.1`，数据库 schema 仍为 `55`。制品与校验入口见[发布说明](releases/v1.4.1.md)。
 
-最新入口：[v1.4.0说明](releases/v1.4.0.md)、[CD2配置](manuals/cd2-settings.md)、[盘点](manuals/cd2-inventory.md)、[目录改名](manuals/cd2-directory-rename.md)、[广告复核](manuals/cd2-ad-review.md)、[隔离恢复](manuals/cd2-quarantine.md)。本轮审查修复及fnOS验收版更新通过，三个执行开关关闭；真实广告标签用户选择保留待验。下方阶段计数、未发布和NAS未更新描述保留历史语境，当前门禁以[项目状态](development/project-status.md)为准。
+常用入口：[v1.4.1 说明](releases/v1.4.1.md)、[CD2配置](manuals/cd2-settings.md)、[盘点](manuals/cd2-inventory.md)、[目录改名](manuals/cd2-directory-rename.md)、[广告复核](manuals/cd2-ad-review.md)、[隔离恢复](manuals/cd2-quarantine.md)。v1.4.1 不改变 CD2、权限或云执行开关，不自动更新 fnOS。
 
 ## 使用与维护
 
@@ -17,7 +17,7 @@
 | 为未发布 CD2 接入及升级准备安全通道、受限令牌与匹配备份 | [CD2 接入与升级准备](deployment/cd2-readonly-preflight.md) |
 | 准备真实广告线索人工标签及统计口径（尚无真实误判率） | [C4 广告线索标注验证](development/cloud-drive/c4-ad-label-validation.md) |
 | 查看后台任务接口、状态、容量和清理 | [后台任务接口及维护](development/background-jobs/api-and-maintenance.md) |
-| 查看本轮制品、校验值与发布状态 | [v1.4.0 发布说明](releases/v1.4.0.md) |
+| 查看本轮制品、校验值与发布状态 | [v1.4.1 发布说明](releases/v1.4.1.md) |
 
 ## 开发与设计
 

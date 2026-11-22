@@ -243,7 +243,8 @@ class AppSettings:
     """应用运行配置。"""
 
     app_name: str = "MediaAI Renamer"
-    version: str = "1.4.0"
+    # 用于健康接口和界面展示；未显式配置时与当前发布标签同步。
+    version: str = "1.4.1"
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()
