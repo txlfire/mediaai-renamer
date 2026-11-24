@@ -1,13 +1,14 @@
 import { createRenderer, nextTick, reactive, ssrContextKey } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DirectoryRecovery, DirectoryExecution, DirectoryPlan } from "../api/cloudDirectory";
+import type { DirectoryRecovery, DirectoryExecution, DirectoryPlan, DirectoryRecoveryInput } from "../api/cloudDirectory";
 import { invalidateSessionRequests } from "../utils/sessionGeneration";
 
-const mocks = vi.hoisted(() => ({ start: vi.fn(), find: vi.fn(), cancel: vi.fn(), commit: vi.fn(), review: vi.fn(), persist: vi.fn(), confirm: vi.fn(), permission: vi.fn() }));
+const mocks = vi.hoisted(() => ({ start: vi.fn(), find: vi.fn(), cancel: vi.fn(), commit: vi.fn(), review: vi.fn(), persist: vi.fn(), confirm: vi.fn(), permission: vi.fn(), boundStart: vi.fn() }));
 vi.mock("../api/cloudDirectory", () => ({ startDirectoryRecovery: mocks.start, findDirectoryRecovery: mocks.find,
   cancelDirectoryRecovery: mocks.cancel, commitDirectoryRecovery: mocks.commit, reviewDirectoryRecoveryWorker: mocks.review }));
 vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: mocks.permission }) }));
 vi.mock("element-plus", () => ({ ElMessageBox: { confirm: mocks.confirm } }));
+vi.mock("../api/cloudBoundActions", () => ({ startBoundDirectoryRecovery: mocks.boundStart }));
 import DirectoryRecoveryDialog from "./DirectoryRecoveryDialog.vue";
 
 type Node = { children: Node[] };
@@ -29,6 +30,12 @@ const recovery: DirectoryRecovery = { id: recoveryId, requestId, planId, attempt
   originalOutcomeRewritten: false, networkAccess: false, replayed: false };
 const ready: DirectoryRecovery = { ...recovery, revision: 10, status: "ready", workerSlotHeld: false, recoverySlotHeld: false, pollingRecommended: false,
   items: [{ ...recovery.items[0]!, position: "at_target" }] };
+const source = { connectionId: "42345678-1234-1234-1234-123456789abc", directoryProfileId: "52345678-1234-1234-1234-123456789abc", selectedPath: plan.parentPath,
+  connectionName: "原公司", directoryName: "原电影", currentConnectionName: "公司", currentDirectoryName: "电影" };
+const nativeContext = "62345678-1234-1234-1234-123456789abc";
+const boundPlan: DirectoryPlan = { ...plan, bindingState: "bound", contextId: planId, source };
+const boundExecution: DirectoryExecution = { ...execution, contextId: planId, source };
+const boundRecovery: DirectoryRecovery = { ...recovery, contextId: nativeContext, source };
 type State = { tokenValue: string; maintenance: boolean; remoteIdle: boolean; positionsConfirmed: boolean; requestId: string;
   reviewForm: boolean; clientsStopped: boolean; reviewRemoteIdle: boolean; canReviewWorker: boolean; canSubmitReview: boolean;
   openWorkerReview: () => void; reviewWorker: () => Promise<void>;
@@ -36,6 +43,7 @@ type State = { tokenValue: string; maintenance: boolean; remoteIdle: boolean; po
   start: () => Promise<void>; lookup: () => Promise<void>; act: (kind: "cancel" | "commit") => Promise<void>;
   prepareNext: () => Promise<void>; close: () => void };
 let app: ReturnType<typeof renderer.createApp>, state: State;
+let sentStart: DirectoryRecoveryInput | null;
 let grants: { manage: boolean };
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick(); };
 function mount(overrides = {}) {
@@ -51,7 +59,8 @@ describe("independent readonly directory recovery dialog", () => {
     grants = reactive({ manage: true });
     mocks.permission.mockReset().mockImplementation(name => name === "settings:write" ? grants.manage : true); mocks.persist.mockReset().mockResolvedValue(undefined); mocks.confirm.mockResolvedValue("confirm");
     mocks.review.mockReset().mockResolvedValue({ ...recovery, revision: 1, status: "review", workerSlotHeld: false, recoverySlotHeld: false, pollingRecommended: false });
-    mocks.start.mockReset().mockResolvedValue(recovery); mocks.find.mockReset().mockResolvedValue(recovery);
+    sentStart = null; mocks.start.mockReset().mockImplementation(async (_id, input) => { sentStart = { ...input }; return recovery; }); mocks.find.mockReset().mockResolvedValue(recovery);
+    mocks.boundStart.mockReset().mockResolvedValue({ id: recoveryId, contextId: nativeContext });
     mocks.commit.mockReset().mockResolvedValue({ ...ready, status: "committed", revision: 11 });
     mocks.cancel.mockReset().mockResolvedValue({ ...recovery, cancelRequested: true, revision: 1 }); mount();
   });
@@ -62,7 +71,8 @@ describe("independent readonly directory recovery dialog", () => {
     await state.start(); expect(mocks.persist).toHaveBeenCalledExactlyOnceWith(requestId);
     expect(mocks.persist.mock.invocationCallOrder[0]).toBeLessThan(mocks.start.mock.invocationCallOrder[0]!);
     expect(mocks.start).toHaveBeenCalledExactlyOnceWith(planId, { requestId, expectedRevision: 8,
-      confirmMaintenance: true, confirmRemoteIdle: true, apiToken: "synthetic-read-token" });
+      confirmMaintenance: true, confirmRemoteIdle: true, apiToken: "" });
+    expect(sentStart).toEqual({ requestId, expectedRevision: 8, confirmMaintenance: true, confirmRemoteIdle: true, apiToken: "synthetic-read-token" });
     expect(state.tokenValue).toBe(""); await state.start(); expect(mocks.start).toHaveBeenCalledTimes(1);
   });
   it("never hands off after a failed navigation marker and never resends after lost response", async () => {
@@ -71,10 +81,39 @@ describe("independent readonly directory recovery dialog", () => {
     await state.start(); await state.lookup(); expect(mocks.start).toHaveBeenCalledTimes(1);
     expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId); expect(state.errorText).not.toContain("synthetic-secret");
   });
-  it("does not auto-start or auto-query a previous recovery when reopened", async () => {
+  it("多连接只核对原计划/原执行来源，按本轮新UUID读取完整恢复状态", async () => {
+    app.unmount(); mocks.find.mockResolvedValue(boundRecovery); mount({ plan: boundPlan, execution: boundExecution }); fill();
+    let sent: Record<string, unknown> | null = null; mocks.boundStart.mockImplementationOnce(async (_id, _source, input) => { sent = { ...input }; return { id: recoveryId, contextId: nativeContext }; });
+    await state.start(); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.boundStart).toHaveBeenCalledExactlyOnceWith(planId, source,
+      { requestId, expectedRevision: 8, confirmMaintenance: true, confirmRemoteIdle: true, apiToken: "" });
+    expect(sent).toMatchObject({ apiToken: "synthetic-read-token" }); expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId); expect(state.recovery?.contextId).toBe(nativeContext);
+  });
+  it("未绑定历史及计划与原执行来源不符时不交接", async () => {
+    app.unmount(); mount({ plan: { ...plan, bindingState: "legacy_unbound", contextId: null, source: null } }); fill(); await state.start(); expect(state.canStart).toBe(false);
+    app.unmount(); mount({ plan: boundPlan, execution: { ...boundExecution, source: { ...source, connectionId: nativeContext } } }); fill(); await state.start();
+    expect(state.canStart).toBe(false); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.boundStart).not.toHaveBeenCalled();
+  });
+  it("恢复回执与查询context不一致时保留编号，不显示成核对成功", async () => {
+    app.unmount(); mocks.find.mockResolvedValueOnce({ ...boundRecovery, contextId: planId }); mount({ plan: boundPlan, execution: boundExecution }); fill(); await state.start();
+    expect(state.recovery).toBeNull(); expect(state.errorText).not.toBe(""); expect(state.requestId).toBe(requestId);
+  });
+  it("新恢复受理未知后只查询原编号，不重交接", async () => {
+    app.unmount(); mocks.boundStart.mockRejectedValueOnce(new Error("synthetic-read-token")); mocks.find.mockResolvedValue(boundRecovery); mount({ plan: boundPlan, execution: boundExecution });
+    fill(); await state.start(); await state.start(); await state.lookup(); expect(mocks.boundStart).toHaveBeenCalledOnce(); expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId); expect(state.errorText).not.toContain("synthetic-read-token");
+  });
+  it("does not auto-start or auto-query a previous recovery on initial mount", async () => {
     app.unmount(); mount({ execution: { ...execution, latestRecovery: recovery } }); await flush();
     expect(state.requestId).toBe(requestId); expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.find).not.toHaveBeenCalled();
     await state.lookup(); expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId);
+  });
+  it("reopening reads the previous recovery without starting another one", async () => {
+    app.unmount(); mount({ visible: false, execution: { ...execution, latestRecovery: recovery } });
+    await flush(); expect(mocks.find).not.toHaveBeenCalled();
+    app._instance!.props.visible = true; await flush();
+    expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId);
+    expect(state.recovery?.status).toBe("accepted");
+    expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.boundStart).not.toHaveBeenCalled();
+    expect(mocks.persist).not.toHaveBeenCalled();
   });
   it("bounds polling and preserves original freeze without any write command", async () => {
     fill(); await state.start(); await vi.advanceTimersByTimeAsync(1499); expect(mocks.find).not.toHaveBeenCalled();

@@ -22,12 +22,14 @@ import {
   type FileActionAuditIntentStatus,
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
+import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import MediaSourceSelect from "../components/MediaSourceSelect.vue";
 import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { zhCnMessages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
@@ -38,7 +40,10 @@ const authStore = useAuthStore();
 const canReadLogs = computed(() => authStore.hasPermission("audit:read"));
 const paginationStore = usePaginationStore();
 const tableSortStore = useTableSortStore();
-const pageText = messages.tasks;
+const { messages } = useInterfaceLanguage();
+const pageText = computed(() => messages.value.tasks);
+// 归档原因是写入任务记录的固定值，不随界面语言变化。
+const archiveReason = zhCnMessages.tasks.archiveReason;
 const activeTab = ref<"tasks" | "webdav" | "auditIntents">("tasks");
 const tasks = ref<TaskGovernanceItem[]>([]);
 const loading = ref(false);
@@ -116,7 +121,7 @@ async function loadTasks() {
     if (version !== taskRequestVersion) return;
     tasks.value = [];
     taskTotal.value = 0;
-    ElMessage.error(error instanceof Error ? error.message : pageText.loadFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.loadFailed);
   } finally {
     if (version === taskRequestVersion) loading.value = false;
   }
@@ -148,7 +153,7 @@ async function loadRemoteOperations() {
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (version !== remoteRequestVersion) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.webdav.loadFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.webdav.loadFailed);
   } finally {
     if (version === remoteRequestVersion) remoteLoading.value = false;
   }
@@ -209,7 +214,7 @@ async function loadAuditIntents() {
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (version !== auditIntentRequestVersion) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.auditIntents.loadFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.auditIntents.loadFailed);
   } finally {
     if (version === auditIntentRequestVersion) auditIntentLoading.value = false;
   }
@@ -226,7 +231,7 @@ function resetAuditIntentFilters() {
 }
 
 function auditIntentStatusLabel(status: FileActionAuditIntentStatus) {
-  return pageText.auditIntents.statuses[status];
+  return pageText.value.auditIntents.statuses[status];
 }
 
 function auditIntentStatusType(status: FileActionAuditIntentStatus) {
@@ -245,7 +250,7 @@ function openCloseIntentDialog(row: FileActionAuditIntent) {
 
 async function submitCloseIntent() {
   if (!closeDialog.intent || !closeDialog.reason.trim() || !closeDialog.evidence.trim()) {
-    ElMessage.warning(pageText.auditIntents.closeRequired);
+    ElMessage.warning(pageText.value.auditIntents.closeRequired);
     return;
   }
   closeDialog.submitting = true;
@@ -255,11 +260,11 @@ async function submitCloseIntent() {
       evidence: closeDialog.evidence.trim(),
     });
     closeDialog.visible = false;
-    ElMessage.success(pageText.auditIntents.closeSuccess);
+    ElMessage.success(pageText.value.auditIntents.closeSuccess);
     await loadAuditIntents();
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.auditIntents.closeFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.auditIntents.closeFailed);
   } finally {
     closeDialog.submitting = false;
   }
@@ -274,14 +279,14 @@ const auditCapacityPercent = computed(() =>
 );
 
 function taskTypeLabel(value: string) {
-  return pageText.taskTypes[value as keyof typeof pageText.taskTypes] || value;
+  return pageText.value.taskTypes[value as keyof typeof pageText.value.taskTypes] || value;
 }
 
 function statusLabel(row: TaskGovernanceItem) {
   if (row.task_type === "scan_job") {
     return formatScanJobStatus(row.status);
   }
-  return pageText.statuses[row.status as keyof typeof pageText.statuses] || row.status;
+  return pageText.value.statuses[row.status as keyof typeof pageText.value.statuses] || row.status;
 }
 
 function statusTagType(status: string) {
@@ -298,7 +303,7 @@ function statusTagType(status: string) {
 }
 
 function remoteStatusLabel(status: RemoteOperationStatus) {
-  return pageText.webdav.statuses[status] || status;
+  return pageText.value.webdav.statuses[status] || status;
 }
 
 function remoteStatusTagType(status: RemoteOperationStatus) {
@@ -318,7 +323,7 @@ function remoteStatusTagType(status: RemoteOperationStatus) {
 }
 
 function remoteOperationTypeLabel(operationType: RemoteOperationType) {
-  return pageText.webdav.operationTypes[operationType] || operationType;
+  return pageText.value.webdav.operationTypes[operationType] || operationType;
 }
 
 function canRecoverRemoteOperation(row: RemoteOperationItem) {
@@ -345,14 +350,14 @@ function setRecovering(itemId: number, recovering: boolean) {
 
 function showRemoteOperationDetail(row: RemoteOperationItem) {
   const detailRows = [
-    [pageText.webdav.columns.operationId, String(row.id)],
-    [pageText.webdav.columns.mediaSource, row.media_source_name || "-"],
-    [pageText.webdav.columns.operationType, remoteOperationTypeLabel(row.operation_type)],
-    [pageText.webdav.columns.sourcePath, row.source_path],
-    [pageText.webdav.columns.targetPath, row.target_path || "-"],
-    [messages.common.status, remoteStatusLabel(row.status)],
-    [pageText.webdav.columns.errorMessage, row.error_message || "-"],
-    [pageText.webdav.columns.updatedAt, formatDateTime(row.updated_at)],
+    [pageText.value.webdav.columns.operationId, String(row.id)],
+    [pageText.value.webdav.columns.mediaSource, row.media_source_name || "-"],
+    [pageText.value.webdav.columns.operationType, remoteOperationTypeLabel(row.operation_type)],
+    [pageText.value.webdav.columns.sourcePath, row.source_path],
+    [pageText.value.webdav.columns.targetPath, row.target_path || "-"],
+    [messages.value.common.status, remoteStatusLabel(row.status)],
+    [pageText.value.webdav.columns.errorMessage, row.error_message || "-"],
+    [pageText.value.webdav.columns.updatedAt, formatDateTime(row.updated_at)],
   ];
   void ElMessageBox.alert(
     h(
@@ -365,26 +370,26 @@ function showRemoteOperationDetail(row: RemoteOperationItem) {
         ]),
       ),
     ),
-    pageText.webdav.detailTitle,
-    { confirmButtonText: messages.common.confirm },
+    pageText.value.webdav.detailTitle,
+    { confirmButtonText: messages.value.common.confirm },
   );
 }
 
 async function handleRecoverRemoteOperation(row: RemoteOperationItem) {
   if (!hasRecoveryPermission(row)) {
-    ElMessage.warning(messages.auth.permissionDenied);
+    ElMessage.warning(messages.value.auth.permissionDenied);
     return;
   }
   try {
     await ElMessageBox.confirm(
-      pageText.webdav.recoverConfirmMessage,
-      pageText.webdav.recoverConfirmTitle,
+      pageText.value.webdav.recoverConfirmMessage,
+      pageText.value.webdav.recoverConfirmTitle,
       { type: "warning" },
     );
     setRecovering(row.id, true);
     const result = await recoverRemoteOperation(row.id);
     const successMessage =
-      pageText.webdav.recoverActions[result.action as keyof typeof pageText.webdav.recoverActions] ||
+      pageText.value.webdav.recoverActions[result.action as keyof typeof pageText.value.webdav.recoverActions] ||
       result.message;
     ElMessage.success(successMessage);
     await loadRemoteOperations();
@@ -393,7 +398,7 @@ async function handleRecoverRemoteOperation(row: RemoteOperationItem) {
     if (error === "cancel" || error === "close") {
       return;
     }
-    ElMessage.error(error instanceof Error ? error.message : pageText.webdav.recoverFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.webdav.recoverFailed);
     await loadRemoteOperations();
   } finally {
     setRecovering(row.id, false);
@@ -407,7 +412,7 @@ function handleSortChange(event: { prop: string; order: "ascending" | "descendin
 
 function openTaskTarget(row: TaskGovernanceItem) {
   if (!row.target_route) {
-    ElMessage.warning(pageText.noTarget);
+    ElMessage.warning(pageText.value.noTarget);
     return;
   }
   const query = Object.fromEntries(Object.entries(row.target_query).filter(([, value]) => value));
@@ -424,22 +429,22 @@ async function toggleTaskArchive(row: TaskGovernanceItem) {
   const nextArchived = !row.archived;
   try {
     await ElMessageBox.confirm(
-      nextArchived ? pageText.archiveConfirmMessage : pageText.restoreConfirmMessage,
-      pageText.archiveConfirmTitle,
+      nextArchived ? pageText.value.archiveConfirmMessage : pageText.value.restoreConfirmMessage,
+      pageText.value.archiveConfirmTitle,
       { type: nextArchived ? "warning" : "info" },
     );
     await archiveTask(row.task_type, row.task_id, {
       archived: nextArchived,
-      reason: nextArchived ? pageText.archiveReason : undefined,
+      reason: nextArchived ? archiveReason : undefined,
     });
-    ElMessage.success(nextArchived ? pageText.archiveSuccess : pageText.restoreSuccess);
+    ElMessage.success(nextArchived ? pageText.value.archiveSuccess : pageText.value.restoreSuccess);
     await loadTasks();
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (error === "cancel" || error === "close") {
       return;
     }
-    ElMessage.error(error instanceof Error ? error.message : pageText.archiveFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.archiveFailed);
   }
 }
 
@@ -456,7 +461,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ListPageLayout :title="pageText.title" :description="pageText.description">
+  <ListPageLayout class="task-governance-page" :title="pageText.title" :description="pageText.description">
     <template #filters>
       <template v-if="activeTab === 'tasks'">
         <el-select v-model="filters.taskType" class="source-select" clearable :placeholder="pageText.filters.taskType">
@@ -469,7 +474,7 @@ onBeforeUnmount(() => {
         <el-select v-model="filters.status" class="source-select" clearable :placeholder="pageText.filters.status">
           <el-option v-for="item in pageText.statusOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <MediaSourceSelect v-model="filters.mediaSourceId" class="source-select" :placeholder="pageText.filters.mediaSource" />
+        <MediaSourceSelect v-model="filters.mediaSourceId" class="source-select" />
         <el-date-picker
           v-model="filters.dateRange"
           class="task-date-range"
@@ -490,7 +495,6 @@ onBeforeUnmount(() => {
         <MediaSourceSelect
           v-model="remoteFilters.mediaSourceId"
           class="source-select"
-          :placeholder="pageText.webdav.filters.mediaSource"
         />
         <el-select
           v-model="remoteFilters.operationType"
@@ -556,8 +560,9 @@ onBeforeUnmount(() => {
     </template>
 
     <template #table>
+      <FullscreenTablePanel variant="tab-header">
       <div class="task-governance-table">
-        <el-tabs v-model="activeTab" class="task-governance-tabs" @tab-change="handleTabChange">
+        <el-tabs v-model="activeTab" class="task-governance-tabs workbench-table-tabs" @tab-change="handleTabChange">
           <el-tab-pane :label="pageText.tabs.tasks" name="tasks" />
           <el-tab-pane :label="pageText.tabs.webdav" name="webdav" />
           <el-tab-pane :label="pageText.tabs.auditIntents" name="auditIntents" />
@@ -567,17 +572,17 @@ onBeforeUnmount(() => {
           :data="pagedTasks"
           class="data-table"
           height="100%"
-          table-layout="auto"
+          table-layout="fixed"
           :default-sort="defaultSort"
           @sort-change="handleSortChange"
         >
         <el-table-column prop="task_id" :label="pageText.columns.taskId" width="96" align="center" header-align="center" sortable="custom" />
-        <el-table-column :label="pageText.columns.taskType" width="120" align="center" header-align="center">
+        <el-table-column :label="pageText.columns.taskType" width="112" align="center" header-align="center">
           <template #default="{ row }">
             <el-tag effect="light">{{ taskTypeLabel(row.task_type) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="messages.common.status" width="112" align="center" header-align="center" sortable="custom" prop="status">
+        <el-table-column :label="messages.common.status" width="104" align="center" header-align="center" sortable="custom" prop="status">
           <template #default="{ row }">
             <div class="task-status-cell">
               <el-tag :type="statusTagType(row.status)" effect="light">{{ statusLabel(row) }}</el-tag>
@@ -585,29 +590,29 @@ onBeforeUnmount(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="pageText.columns.title" min-width="170" align="left" header-align="left">
+        <el-table-column :label="pageText.columns.title" min-width="116" align="left" header-align="left">
           <template #default="{ row }">
             <TextCell :value="row.title" :max-length="tableDisplayConfig.tableTextMaxBytes" />
           </template>
         </el-table-column>
-        <el-table-column :label="pageText.columns.mediaSource" min-width="140" align="left" header-align="left">
+        <el-table-column :label="pageText.columns.mediaSource" min-width="106" align="left" header-align="left">
           <template #default="{ row }">
             <TextCell :value="row.media_source_name || '-'" :max-length="tableDisplayConfig.tableTextMaxBytes" />
           </template>
         </el-table-column>
-        <el-table-column prop="total_count" :label="messages.common.total" width="84" align="center" header-align="center" sortable="custom" />
-        <el-table-column prop="success_count" :label="pageText.columns.success" width="84" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="total_count" :label="messages.common.total" width="69" align="center" header-align="center" sortable="custom" />
+        <el-table-column prop="success_count" :label="pageText.columns.success" width="76" align="center" header-align="center" sortable="custom" />
         <el-table-column prop="warning_count" :label="pageText.columns.warning" width="84" align="center" header-align="center" sortable="custom" />
-        <el-table-column prop="failed_count" :label="pageText.columns.failed" width="84" align="center" header-align="center" sortable="custom" />
-        <el-table-column :label="pageText.columns.summary" min-width="260" align="left" header-align="left">
+        <el-table-column prop="failed_count" :label="pageText.columns.failed" width="70" align="center" header-align="center" sortable="custom" />
+        <el-table-column :label="pageText.columns.summary" min-width="134" align="left" header-align="left">
           <template #default="{ row }">
             <TextCell :value="row.summary" :max-length="tableDisplayConfig.tableTextMaxBytes" />
           </template>
         </el-table-column>
-        <el-table-column prop="updated_at" :label="pageText.columns.updatedAt" width="168" align="center" header-align="center" sortable="custom">
-          <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
+        <el-table-column prop="updated_at" :label="pageText.columns.updatedAt" min-width="146" align="center" header-align="center" sortable="custom">
+          <template #default="{ row }"><span :title="formatDateTime(row.updated_at)">{{ formatDateTime(row.updated_at) }}</span></template>
         </el-table-column>
-        <el-table-column :label="messages.common.actions" width="168" align="center" header-align="center" fixed="right">
+        <el-table-column :label="messages.common.actions" width="124" align="center" header-align="center" fixed="right">
           <template #default="{ row }">
             <div class="table-actions">
               <el-tooltip :trigger-keys="[]" :content="pageText.openTarget" placement="top">
@@ -803,9 +808,6 @@ onBeforeUnmount(() => {
           </el-table>
         </div>
       </div>
-    </template>
-
-    <template #pagination>
       <TablePagination
         v-if="activeTab === 'tasks'"
         pagination-key="task-governance"
@@ -818,7 +820,6 @@ onBeforeUnmount(() => {
         v-else-if="activeTab === 'webdav'"
         pagination-key="webdav-recovery"
         :total="remoteTotal"
-        :pager-count="3"
         server
         @page-change="loadRemoteOperations"
         @page-size-change="loadRemoteOperations"
@@ -827,11 +828,11 @@ onBeforeUnmount(() => {
         v-else
         pagination-key="audit-intents"
         :total="auditIntentTotal"
-        :pager-count="3"
         server
         @page-change="loadAuditIntents"
         @page-size-change="loadAuditIntents"
       />
+      </FullscreenTablePanel>
     </template>
 
     <OperationLogDrawer
@@ -843,7 +844,8 @@ onBeforeUnmount(() => {
     <el-dialog
       v-model="closeDialog.visible"
       :title="pageText.auditIntents.closeTitle"
-      width="min(560px, 92vw)"
+      width="min(560px, calc(100vw - 24px))"
+      align-center
       destroy-on-close
     >
       <p class="audit-close-warning">{{ pageText.auditIntents.closeWarning }}</p>
@@ -856,10 +858,12 @@ onBeforeUnmount(() => {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="closeDialog.visible = false">{{ messages.common.cancel }}</el-button>
-        <el-button type="danger" :loading="closeDialog.submitting" @click="submitCloseIntent">
-          {{ pageText.auditIntents.confirmClose }}
-        </el-button>
+        <div class="audit-close-actions">
+          <el-button @click="closeDialog.visible = false">{{ messages.common.cancel }}</el-button>
+          <el-button type="danger" :loading="closeDialog.submitting" @click="submitCloseIntent">
+            {{ pageText.auditIntents.confirmClose }}
+          </el-button>
+        </div>
       </template>
     </el-dialog>
   </ListPageLayout>
@@ -887,12 +891,20 @@ onBeforeUnmount(() => {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.task-governance-tabs {
-  min-width: 0;
+@media (max-height: 560px) {
+  .task-governance-page > :deep(.list-table-card) {
+    flex: 0 0 18rem;
+  }
 }
 
-.task-governance-tabs :deep(.el-tabs__header) {
-  margin: 0 0 0.5rem;
+@media (min-width: 901px) and (max-height: 560px) {
+  .task-governance-page {
+    overflow-y: auto;
+  }
+}
+
+.task-governance-tabs {
+  min-width: 0;
 }
 
 .task-governance-tabs :deep(.el-tabs__content) {
@@ -916,6 +928,23 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.audit-close-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.audit-close-actions :deep(.el-button) {
+  max-width: 100%;
+  height: auto;
+  margin-left: 0;
+  padding-block: 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 :global(.remote-operation-detail) {

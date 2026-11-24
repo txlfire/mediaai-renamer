@@ -79,16 +79,21 @@ def findDirectoryExecutionRequest(settings, requestId, actorId):
 def requestDirectoryCancel(settings, planId, *, expectedRevision, auditContext):
     _revision(expectedRevision)
     with inventoryDb(settings, write=True) as connection:
-        _owned(connection, planId, auditContext.actor.id)
-        row = _row(connection, planId)
-        if row["cancel_requested"] or row["status"] in {"completed", "cancelled"}:
-            return _view(connection, row)
-        if row["revision"] != expectedRevision:
-            raise CloudDirectoryError("revision_conflict")
-        connection.execute("UPDATE cloud_directory_executions SET cancel_requested=1,revision=revision+1,updated_at=? WHERE plan_id=?", (time.time(), planId))
-        _audit(settings, connection, row, "cancel_requested", context=auditContext,
-               detail={"remoteOutcomeNotAssumed": True, "replayed": False})
-        return _view(connection, _row(connection, planId))
+        return requestDirectoryCancelTx(settings, connection, planId, expectedRevision=expectedRevision, auditContext=auditContext)
+
+
+def requestDirectoryCancelTx(settings, connection, planId, *, expectedRevision, auditContext):
+    _revision(expectedRevision)
+    _owned(connection, planId, auditContext.actor.id)
+    row = _row(connection, planId)
+    if row['cancel_requested'] or row['status'] in {'completed', 'cancelled'}:
+        return _view(connection, row)
+    if row['revision'] != expectedRevision:
+        raise CloudDirectoryError('revision_conflict')
+    connection.execute('UPDATE cloud_directory_executions SET cancel_requested=1,revision=revision+1,updated_at=? WHERE plan_id=?', (time.time(), planId))
+    _audit(settings, connection, row, 'cancel_requested', context=auditContext,
+        detail={'remoteOutcomeNotAssumed': True, 'replayed': False})
+    return _view(connection, _row(connection, planId))
 
 
 class CloudDirectoryRunner:
@@ -147,6 +152,37 @@ class CloudDirectoryRunner:
             with self._lock:
                 self._thread = None
 
+    def startBound(self, planId, *, requestId, expectedRevision, apiToken, policyHash, confirmMaintenance,
+                   confirmGlobalFence, accessToken, auditContext):
+        from app.service import cloud_connection_store as store
+        from app.service.cloud_bound_directory_service import _acceptBoundDirectoryExecution
+        from app.service.cloud_bound_native_runtime_service import nativeRuntimeTx
+        if (not isinstance(apiToken, str) or not 1 <= len(apiToken) <= 8192
+                or any(not 33 <= ord(char) <= 126 for char in apiToken)):
+            raise store.CloudConnectionError('invalid_fields')
+        with self._lock:
+            if not self._opened or self._stop.is_set():
+                raise CloudDirectoryError('web_runner_unavailable')
+            if self._thread is not None:
+                raise CloudDirectoryError('worker_slot_busy')
+            receipt, token = _acceptBoundDirectoryExecution(self.settings, planId, requestId=requestId,
+                expectedRevision=expectedRevision, policyHash=policyHash, confirmMaintenance=confirmMaintenance,
+                confirmGlobalFence=confirmGlobalFence, accessToken=accessToken, auditContext=auditContext)
+            if token is None:
+                return receipt
+            with store.connectionDb(self.settings) as connection:
+                runtime = nativeRuntimeTx(self.settings, connection, receipt['contextId'], token)
+            try:
+                thread = threading.Thread(target=self._execute, args=(runtime, planId, token, apiToken, auditContext.actor.id),
+                    name='cloud-bound-directory-supervisor', daemon=False)
+                self._thread = thread
+                thread.start()
+            except Exception:
+                self._thread = None
+                finishDirectoryWorker(runtime, planId, token, None, stopReason='worker_start_failed')
+                raise CloudDirectoryError('worker_start_failed') from None
+            return receipt | {'networkAccess': None, 'operationState': 'accepted', 'retryAutomatically': False}
+
     def startRecovery(self, planId, *, requestId, expectedRevision, apiToken, confirmMaintenance, confirmRemoteIdle, auditContext):
         settings = resolveCloudDriveSettings(self.settings)
         from app.service.cloud_directory_recovery_service import approveDirectoryRecovery
@@ -181,6 +217,38 @@ class CloudDirectoryRunner:
             apiToken = ""
             with self._lock:
                 self._thread = None
+
+    def startBoundRecovery(self, planId, *, requestId, expectedRevision, apiToken, confirmMaintenance,
+                           confirmRemoteIdle, accessToken, auditContext):
+        from app.service import cloud_connection_store as store
+        from app.service.cloud_bound_directory_recovery_service import _acceptBoundDirectoryRecovery
+        from app.service.cloud_bound_native_runtime_service import nativeRuntimeTx
+        from app.service.cloud_directory_recovery_worker_service import finishRecoveryWorker
+        if (not isinstance(apiToken, str) or not 1 <= len(apiToken) <= 8192
+                or any(not 33 <= ord(char) <= 126 for char in apiToken)):
+            raise store.CloudConnectionError('invalid_fields')
+        with self._lock:
+            if not self._opened or self._stop.is_set():
+                raise CloudDirectoryError('web_runner_unavailable')
+            if self._thread is not None:
+                raise CloudDirectoryError('worker_slot_busy')
+            receipt, token = _acceptBoundDirectoryRecovery(self.settings, planId, requestId=requestId,
+                expectedRevision=expectedRevision, confirmMaintenance=confirmMaintenance, confirmRemoteIdle=confirmRemoteIdle,
+                accessToken=accessToken, auditContext=auditContext)
+            if token is None:
+                return receipt
+            with store.connectionDb(self.settings) as connection:
+                runtime = nativeRuntimeTx(self.settings, connection, receipt['contextId'], token)
+            try:
+                thread = threading.Thread(target=self._recover, args=(runtime, receipt['id'], token, apiToken),
+                    name='cloud-bound-directory-read-recovery', daemon=False)
+                self._thread = thread
+                thread.start()
+            except Exception:
+                self._thread = None
+                finishRecoveryWorker(runtime, receipt['id'], token, None, reason='worker_start_failed')
+                raise CloudDirectoryError('worker_start_failed') from None
+            return receipt | {'networkAccess': None, 'operationState': 'accepted', 'retryAutomatically': False}
 
     def close(self):
         with self._lock:

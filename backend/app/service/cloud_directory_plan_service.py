@@ -152,6 +152,16 @@ def _owned(connection, planId, actorId):
     row = connection.execute("SELECT * FROM cloud_directory_plans WHERE id=? AND actor_id=?", (planId, actorId)).fetchone()
     if row is None:
         raise CloudDirectoryError("not_found")
+    if 'binding_state' in row.keys() and row['binding_state'] == 'bound':
+        from app.service.cloud_task_context_service import _loadContextTx, _currentContentGrant
+        from app.service.cloud_connection_store import CloudConnectionError
+        try:
+            snapshot = _loadContextTx(connection, row['context_id'])
+            if snapshot.resourceKind not in {'directory_plan', 'directory_reverse'} or snapshot.resourceId != planId:
+                raise CloudConnectionError('storage_unavailable')
+            _currentContentGrant(connection, actorId, snapshot.values)
+        except CloudConnectionError as exc:
+            raise CloudDirectoryError('not_found' if exc.code == 'resource_not_found' else 'storage_unavailable') from None
     return row
 
 
@@ -188,9 +198,9 @@ def _valid(connection, settings, row, items):
     return None
 
 
-def _view(connection, settings, row):
+def _view(connection, settings, row, *, forceInvalidReason=None):
     items = _items(connection, row["id"])
-    reason = _valid(connection, settings, row, items)
+    reason = forceInvalidReason if forceInvalidReason is not None else _valid(connection, settings, row, items)
     return {"id": row["id"], "requestId": row["request_id"], "inventoryJobId": row["inventory_job_id"],
         "inventoryRevision": row["inventory_revision"], "revision": row["revision"], "status": row["status"],
         "valid": reason is None, "invalidReason": reason, "policyHash": row["policy_hash"], "rulesHash": row["rules_hash"],
@@ -199,17 +209,24 @@ def _view(connection, settings, row):
         "createdAt": row["created_at"], "expiresAt": row["expires_at"], "networkAccess": False, "writeAvailable": False}
 
 
+def normalizeDirectoryPlanInput(entryIds, folderTerms):
+    if (not isinstance(entryIds, list) or not 1 <= len(entryIds) <= MAX_ITEMS
+            or any(type(item) is not int or not 1 <= item <= 2**63 - 1 for item in entryIds)
+            or len(set(entryIds)) != len(entryIds)):
+        raise ValueError('须明确选择一至五个不同目录')
+    terms = _terms(folderTerms)
+    if any(unicodedata.category(char).startswith("C") for term in terms for char in term):
+        raise ValueError("净化词不能包含控制、格式或代理字符")
+    return terms
+
+
 def createDirectoryPlan(settings, *, requestId, jobId, expectedRevision, entryIds, folderTerms, auditContext):
     inventoryId(requestId)
     inventoryId(jobId)
     _revision(expectedRevision)
-    if (not isinstance(entryIds, list) or not 1 <= len(entryIds) <= MAX_ITEMS
-            or any(type(item) is not int or not 1 <= item <= 2**63 - 1 for item in entryIds)
-            or len(set(entryIds)) != len(entryIds) or auditContext.actor is None):
-        raise ValueError("须明确选择一至五个不同目录并关联用户")
-    terms = _terms(folderTerms)
-    if any(unicodedata.category(char).startswith("C") for term in terms for char in term):
-        raise ValueError("净化词不能包含控制、格式或代理字符")
+    terms = normalizeDirectoryPlanInput(entryIds, folderTerms)
+    if auditContext.actor is None:
+        raise ValueError('须关联当前用户')
     actorId = auditContext.actor.id
     requestHash = _digest([actorId, jobId, expectedRevision, sorted(entryIds), terms])
     with inventoryDb(settings, write=True) as connection:
@@ -220,26 +237,39 @@ def createDirectoryPlan(settings, *, requestId, jobId, expectedRevision, entryId
             if old["actor_id"] != actorId or old["request_hash"] != requestHash:
                 raise CloudDirectoryError("request_conflict")
             return _view(connection, settings, old)
-        policy = directoryPolicyHash(settings)
-        root, parent, items = _snapshot(connection, settings, jobId, actorId, expectedRevision, entryIds, terms)
-        if connection.execute("SELECT COUNT(*) FROM cloud_directory_plans").fetchone()[0] >= PLAN_LIMIT:
-            raise CloudDirectoryError("plan_capacity")
         planId, now = str(uuid4()), time.time()
-        rulesHash = _digest([RULE_VERSION, terms, sorted(entryIds)])
-        connection.execute("INSERT INTO cloud_directory_plans "
-            "(id,request_id,request_hash,actor_id,inventory_job_id,inventory_revision,policy_hash,rules_hash,rule_version,"
-            "terms_json,root_path,parent_path,snapshot_hash,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (planId, requestId, requestHash, actorId, jobId, expectedRevision, policy, rulesHash, RULE_VERSION,
-                json.dumps(terms, ensure_ascii=False), root, parent, _digest(items), now, now + PLAN_SECONDS, now))
-        connection.executemany("INSERT INTO cloud_directory_plan_items "
-            "(plan_id,ordinal,entry_id,observation_generation,remote_id,source_path,source_name,target_name,target_path) "
-            "VALUES(?,?,?,?,?,?,?,?,?)", [(planId, index, item["entryId"], item["generation"], item["remoteId"],
-                item["sourcePath"], item["sourceName"], item["targetName"], item["targetPath"]) for index, item in enumerate(items, 1)])
-        record_audit_event(settings, event_type="cloud_directory.plan", action="prepare", result="success",
-            summary="固定本地目录改名计划；未发送云请求", target_type="cloud_directory_plan", target_id=planId,
-            actor=auditContext.actor, ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent,
-            detail={"itemCount": len(items), "ruleVersion": RULE_VERSION, "snapshotHash": _digest(items)}, connection=connection)
+        insertDirectoryPlanTx(settings, connection, planId=planId, requestId=requestId, requestHash=requestHash,
+            jobId=jobId, expectedRevision=expectedRevision, entryIds=entryIds, terms=terms, now=now, auditContext=auditContext)
         return _view(connection, settings, _owned(connection, planId, actorId))
+
+
+def insertDirectoryPlanTx(settings, connection, *, planId, requestId, requestHash, jobId,
+                          expectedRevision, entryIds, terms, now, auditContext, contextId=None):
+    """共用固定计划写入；调用者负责同事务的来源授权与意图登记。"""
+    actorId = auditContext.actor.id
+    _permission(connection, actorId)
+    requireNoDirectoryExecution(connection)
+    policy = directoryPolicyHash(settings)
+    root, parent, items = _snapshot(connection, settings, jobId, actorId, expectedRevision, entryIds, terms)
+    if connection.execute('SELECT COUNT(*) FROM cloud_directory_plans').fetchone()[0] >= PLAN_LIMIT:
+        raise CloudDirectoryError('plan_capacity')
+    columns = ('id,request_id,request_hash,actor_id,inventory_job_id,inventory_revision,policy_hash,rules_hash,rule_version,'
+               'terms_json,root_path,parent_path,snapshot_hash,created_at,expires_at,updated_at')
+    values = (planId, requestId, requestHash, actorId, jobId, expectedRevision, policy,
+        _digest([RULE_VERSION, terms, sorted(entryIds)]), RULE_VERSION, json.dumps(terms, ensure_ascii=False),
+        root, parent, _digest(items), now, now + PLAN_SECONDS, now)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_directory_plans ({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    connection.executemany('INSERT INTO cloud_directory_plan_items '
+        '(plan_id,ordinal,entry_id,observation_generation,remote_id,source_path,source_name,target_name,target_path) VALUES(?,?,?,?,?,?,?,?,?)',
+        [(planId, index, item['entryId'], item['generation'], item['remoteId'], item['sourcePath'], item['sourceName'],
+          item['targetName'], item['targetPath']) for index, item in enumerate(items, 1)])
+    record_audit_event(settings, event_type='cloud_directory.plan', action='prepare', result='success',
+        summary='固定本地目录改名计划；未发送云请求', target_type='cloud_directory_plan', target_id=planId,
+        actor=auditContext.actor, ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent,
+        detail={'itemCount': len(items), 'ruleVersion': RULE_VERSION, 'snapshotHash': _digest(items)}, connection=connection)
 
 
 def getDirectoryPlan(settings, planId, actorId):
@@ -284,13 +314,21 @@ def cancelDirectoryPlan(settings, planId, *, expectedRevision, auditContext):
     _revision(expectedRevision)
     with inventoryDb(settings, write=True) as connection:
         row = _owned(connection, planId, auditContext.actor.id)
-        if connection.execute("SELECT 1 FROM cloud_directory_executions WHERE plan_id=?", (planId,)).fetchone():
-            raise CloudDirectoryError("execution_accepted")
-        if row["revision"] != expectedRevision or row["status"] != "prepared":
-            raise CloudDirectoryError("revision_conflict")
-        connection.execute("UPDATE cloud_directory_plans SET status='cancelled',revision=revision+1,updated_at=? WHERE id=?",
-                           (time.time(), planId))
-        record_audit_event(settings, event_type="cloud_directory.plan", action="cancel", result="success",
-            summary="取消本地目录改名计划；未发送云请求", target_type="cloud_directory_plan", target_id=planId,
-            actor=auditContext.actor, connection=connection)
+        cancelDirectoryPlanTx(settings, connection, row, expectedRevision=expectedRevision, auditContext=auditContext)
         return _view(connection, settings, _owned(connection, planId, auditContext.actor.id))
+
+
+def cancelDirectoryPlanTx(settings, connection, row, *, expectedRevision, auditContext):
+    _revision(expectedRevision)
+    planId = row['id']
+    if connection.execute('SELECT 1 FROM cloud_directory_executions WHERE plan_id=?', (planId,)).fetchone():
+        raise CloudDirectoryError('execution_accepted')
+    if row['revision'] != expectedRevision or row['status'] != 'prepared':
+        raise CloudDirectoryError('revision_conflict')
+    if expectedRevision >= 2**63 - 2:
+        raise CloudDirectoryError('plan_capacity')
+    connection.execute("UPDATE cloud_directory_plans SET status='cancelled',revision=?,updated_at=? WHERE id=?",
+                       (expectedRevision + 1, time.time(), planId))
+    record_audit_event(settings, event_type='cloud_directory.plan', action='cancel', result='success',
+        summary='取消本地目录改名计划；未发送云请求', target_type='cloud_directory_plan', target_id=planId,
+        actor=auditContext.actor, connection=connection)

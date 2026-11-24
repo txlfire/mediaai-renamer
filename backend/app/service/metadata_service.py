@@ -9,7 +9,7 @@ from app.schema.media import ParsedMediaName
 from app.schema.metadata import MetadataCandidate, MetadataMatchSummary
 from app.service.metadata_matcher import MATCH_STATUS_FAILED, score_metadata_candidate
 from app.service.settings_service import get_effective_settings
-from app.service.tmdb_client import TmdbClient
+from app.service.tmdb_client import TmdbClient, checkTmdbBatchFailure
 from app.service.external_request_budget_service import ExternalRequestBudget, ExternalBudgetWaitError, ExternalBudgetUnavailable, transportDeadline
 
 logger = get_logger(__name__)
@@ -125,8 +125,10 @@ def _match_metadata_candidates(
             candidates = v4_client.search(parsed)
             return _build_supplemented_summary(effective, parsed, candidates, "TMDB (V4)", imdb_provider)
         except (ExternalBudgetWaitError, ExternalBudgetUnavailable) as exc:
+            checkTmdbBatchFailure(exc)
             return _failed(str(exc))
         except Exception as exc:
+            checkTmdbBatchFailure(exc, allowAuthFallback=bool(api_key))
             logger.warning("V4 请求失败，准备降级至 V3: %s", exc)
 
     if api_key:
@@ -142,6 +144,7 @@ def _match_metadata_candidates(
             channel = "TMDB (V3)" if v4_token else "TMDB (V3-only)"
             return _build_supplemented_summary(effective, parsed, candidates, channel, imdb_provider)
         except Exception as exc:
+            checkTmdbBatchFailure(exc)
             logger.error("V3 搜索也失败: %s", exc)
             return _failed(f"TMDB 搜索失败: {exc}")
 

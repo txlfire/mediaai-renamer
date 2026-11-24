@@ -25,10 +25,16 @@ def main():
                 level=payload["log_level"], max_size_mb=payload["log_max_size_mb"], backup_count=payload["log_backup_count"], console_output=False))
         setup_logging(settings.logging)
         recoveryId, token = inventoryId(payload["recovery_id"]), inventoryId(payload["worker_token"])
-        revision = payload["configuration_revision"]
-        if type(revision) is not int or revision < 0:
-            raise ValueError("配置修订无效")
-        settings = resolveCloudDriveSettings(settings, expectedRevision=revision)
+        if 'context_id' in payload:
+            if any(key in payload for key in ('configuration_revision', 'endpoint', 'caCertificatePem', 'connectionId', 'directoryProfileId')):
+                raise ValueError('固定来源不能接受配置覆盖')
+            from app.service.cloud_bound_native_runtime_service import loadNativeDirectoryWorker
+            settings = loadNativeDirectoryWorker(settings, payload['context_id'], recoveryId, token)
+        else:
+            revision = payload['configuration_revision']
+            if type(revision) is not int or revision < 0:
+                raise ValueError('配置修订无效')
+            settings = resolveCloudDriveSettings(settings, expectedRevision=revision)
         executeDirectoryRecovery(settings, recoveryId, token, payload.pop("api_token"))
         return 0
     except Exception as exc:

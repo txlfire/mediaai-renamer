@@ -2,8 +2,10 @@
 import { Connection, FolderOpened, Refresh, Setting } from "@element-plus/icons-vue";
 import { computed, onMounted } from "vue";
 
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { useAppStore } from "../stores/app";
+
+const { messages } = useInterfaceLanguage();
 
 const appStore = useAppStore();
 
@@ -21,14 +23,14 @@ const statusType = computed(() => {
 
 const statusLabel = computed(() => {
   if (appStore.connectionState === "online") {
-    return messages.home.connected;
+    return messages.value.home.connected;
   }
 
   if (appStore.connectionState === "loading") {
-    return messages.home.checking;
+    return messages.value.home.checking;
   }
 
-  return messages.home.disconnected;
+  return messages.value.home.disconnected;
 });
 
 onMounted(() => {

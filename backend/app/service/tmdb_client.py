@@ -1,5 +1,7 @@
 """TMDB metadata search client."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -17,10 +19,41 @@ from app.service.external_request_budget_service import openExternalRequest, cli
 
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
 MAX_TMDB_RESPONSE_BYTES = 4 * 1024 * 1024
+_strictBatch = ContextVar("strict_tmdb_batch", default=False)
 
 
 class InvalidTmdbResponseError(RuntimeError):
     """外部 TMDB 响应格式无效，不携带原始正文。"""
+
+
+class TmdbBatchFailure(RuntimeError):
+    """后台匹配停止本条外发，区分明确拒绝与结果未确认。"""
+
+    def __init__(self, unknown: bool):
+        super().__init__("TMDB 请求结果未确认，未继续外发" if unknown else "TMDB 请求被拒绝或未获得发送预算")
+        self.unknown = unknown
+
+
+@contextmanager
+def strictTmdbBatch():
+    token = _strictBatch.set(True)
+    try:
+        yield
+    finally:
+        _strictBatch.reset(token)
+
+
+def checkTmdbBatchFailure(exc: Exception, *, allowAuthFallback: bool = False):
+    if not _strictBatch.get():
+        return
+    if isinstance(exc, (TmdbBatchFailure, ValueError)):
+        raise exc
+    cause = exc.__cause__ or exc
+    status = cause.code if isinstance(cause, HTTPError) else None
+    if allowAuthFallback and status in {401, 403}:
+        return
+    rejected = isinstance(exc, (ExternalBudgetWaitError, ExternalBudgetUnavailable)) or bool(status and 400 <= status < 500)
+    raise TmdbBatchFailure(unknown=not rejected) from exc
 
 
 def recordTmdbDiagnostic(exc: Exception, *, channel: str, phase: str, providerId: int | None = None) -> dict:
@@ -167,6 +200,7 @@ class TmdbClient:
                 {"append_to_response": "credits,external_ids,translations"},
             )
         except Exception as exc:
+            checkTmdbBatchFailure(exc)
             diagnostic = recordTmdbDiagnostic(exc, channel="v4" if self.v4_token else "v3", phase="detail",
                                               providerId=provider_id if isinstance(provider_id, int) else None)
             return {"metadata_diagnostics": [diagnostic]}

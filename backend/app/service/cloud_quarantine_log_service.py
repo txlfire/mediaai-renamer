@@ -49,3 +49,32 @@ def requireQuarantineLogOwner(settings, taskId, actorId):
         if row is None:
             raise actions.QuarantineError("not_found")
         actions._owned(connection,row[0],actorId)
+
+
+def readAuthorizedQuarantineLogs(settings, taskId, *, accessToken, auditContext, afterId=0, limit=100, export=False):
+    from app.service import cloud_connection_store as store
+    from app.core.cloud_connection_schema import cloudMultiStoragePresent, cloudMultiStorageReady
+    from app.service.cloud_task_context_service import resolveCloudAuthSessionTx
+    from app.service.cloud_bound_quarantine_service import _ownedRunTx
+    from app.service import cloud_quarantine_execution_service as actions
+    from app.service.cloud_inventory_service import _limit
+    from app.service.operation_log_service import list_operation_logs, export_operation_logs_text, operation_log_page_to_dict
+    _limit(taskId, 1, 2**63-1)
+    with inventoryDb(settings) as connection:
+        connection.execute('BEGIN')
+        actorId = store.requireActor(connection, auditContext, 'audit:read')
+        resolveCloudAuthSessionTx(connection, actorId, accessToken)
+        multi = cloudMultiStoragePresent(connection)
+        if multi and not cloudMultiStorageReady(connection):
+            raise store.CloudConnectionError('storage_version_unsupported')
+        row = connection.execute('SELECT id FROM cloud_quarantine_runs WHERE log_id=? AND actor_id=?', (taskId, actorId)).fetchone()
+        if row is None:
+            raise actions.QuarantineError('not_found')
+        if multi:
+            _ownedRunTx(connection, row['id'], accessToken=accessToken, auditContext=auditContext)
+        else:
+            actions._owned(connection, row['id'], actorId)
+        if export:
+            return export_operation_logs_text(settings, task_type=TASK_TYPE, task_id=taskId, connection=connection)
+        return operation_log_page_to_dict(list_operation_logs(settings, task_type=TASK_TYPE, task_id=taskId,
+            after_id=afterId, limit=limit, connection=connection))

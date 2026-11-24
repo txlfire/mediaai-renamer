@@ -13,7 +13,7 @@ from urllib.request import Request
 from urllib.error import URLError
 from pathlib import Path
 
-from app.core.config import AppSettings, LoggingSettings
+from app.core.config import AppSettings, LoggingSettings, DEFAULT_BACKGROUND_JOB_LIMIT, MAX_BACKGROUND_JOB_LIMIT
 from app.service.external_request_budget_service import ExternalRequestBudget, ExternalBudgetWaitError, ExternalBudgetUnavailable
 from app.schema.settings import PageTestResult, SettingValue
 from app.service.ai_provider import AiProvider, AiProviderConfig, DeepSeekProvider, OpenAiCompatibleProvider
@@ -567,6 +567,16 @@ SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
         default=True,
         value_type="bool",
         description="Persist failure detail",
+    ),
+    # 后台队列活跃任务数；通用设置优先，数据库配置缺失或损坏时回退到启动配置。
+    "background_jobs.max_queued": SettingDefinition(
+        key="background_jobs.max_queued",
+        category="operations",
+        default=DEFAULT_BACKGROUND_JOB_LIMIT,
+        value_type="int",
+        description="后台任务队列上限（条，含排队、运行和未释放执行槽）",
+        min_value=1,
+        max_value=MAX_BACKGROUND_JOB_LIMIT,
     ),
     "operations.batch_limit": SettingDefinition(
         key="operations.batch_limit",
@@ -1536,6 +1546,10 @@ def _instanceDefinition(settings: AppSettings, definition: SettingDefinition) ->
         return replace(definition, default=str(settings.logging.log_dir))
     if definition.key == "logging.level":
         return replace(definition, default=settings.logging.level)
+    if definition.key == "background_jobs.max_queued":
+        value = settings.background_jobs.max_queued
+        if type(value) is int and 1 <= value <= MAX_BACKGROUND_JOB_LIMIT:
+            return replace(definition, default=value)
     return definition
 
 

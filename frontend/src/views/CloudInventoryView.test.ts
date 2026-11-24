@@ -1,4 +1,4 @@
-import { createRenderer, nextTick, ssrContextKey } from "vue";
+import { createRenderer, nextTick, reactive, ssrContextKey } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InventoryAdvicePage, InventoryDirectoryPage, InventorySummary } from "../api/cloudInventory";
 
@@ -6,9 +6,10 @@ const mocks = vi.hoisted(() => ({ jobs: vi.fn(), summary: vi.fn(), advice: vi.fn
   route: { query: {} as Record<string, string> }, replace: vi.fn() }));
 vi.mock("../api/cloudInventory", () => ({ fetchInventoryJobs: mocks.jobs, fetchInventorySummary: mocks.summary,
   fetchInventoryAdvice: mocks.advice, fetchInventoryDirectories: mocks.directories, cancelInventoryJob: mocks.cancel, setInventoryKeep: mocks.keep, clearInventoryCache: mocks.clear,
+  inventoryDirectoryPageSize: 50,
   inventoryRequestId: (value: unknown) => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value) ? value : "" }));
 vi.mock("vue-router", () => ({ useRoute: () => mocks.route, useRouter: () => ({ replace: mocks.replace }) }));
-vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: () => true }) }));
+vi.mock("../stores/auth", () => ({ useAuthStore: () => auth }));
 vi.mock("element-plus", () => ({ ElMessage: { info: mocks.info }, ElMessageBox: { confirm: mocks.confirm } }));
 vi.mock("../components/ListPageLayout.vue", () => ({ default: { render: () => null } }));
 import CloudInventoryView from "./CloudInventoryView.vue";
@@ -36,22 +37,35 @@ const page: InventoryAdvicePage = { items: [{ id: 1, name: "[论坛推广] 电�
   jobRevision: 1, ruleVersion: "metadata-advice-v1", rulesHash: "synthetic", freshness: "unknown", contentReadBytes: 0,
   externalSubmission: false, writeAvailable: false, keepExceptionsPersisted: false };
 type State = { selectedJobId: string; summary: InventorySummary | null; pageData: InventoryAdvicePage | null;
+  jobs: InventorySummary[]; loadJobs: () => Promise<void>; refreshWorkspace: () => void;
   folderTerms: string[]; selectedFolders: number[]; afterIds: number[]; activeTab: string; rows: InventoryAdvicePage["items"];
   errorText: string; dirty: boolean; loading: boolean; cancelling: boolean; detailVisible: boolean;
-  loadCurrent: (analyze?: boolean) => Promise<void>; analyzePage: () => Promise<void>; changePage: (next: boolean) => void;
+  loadCurrent: (analyze?: boolean, page?: number) => Promise<void>; analyzePage: () => Promise<void>; changePage: (next: boolean) => void;
+  changeAdvicePageSize: (size: number) => void; changeDirectoryPageSize: (size: number) => void;
   cancelTask: () => Promise<void>; pollSummary: () => Promise<void>; clearCache: () => Promise<void>;
   toggleKeep: () => Promise<void>; detail: InventoryAdvicePage["items"][number] | null; clearing: boolean; keeping: boolean;
   scopeVisible: boolean; scopeTab: string; directoryPage: InventoryDirectoryPage | null; directoryAfterIds: number[];
   directoryError: string; openScope: () => void; loadDirectories: () => Promise<void>; changeDirectoryPage: (next: boolean) => void;
   reasonText: (reason: string | null | undefined) => string; exportPage: () => void;
-  applySummary: (value: InventorySummary) => void; persistAdReviewRequest: (id: string) => Promise<void> };
+  applySummary: (value: InventorySummary) => void; persistAdReviewRequest: (id: string) => Promise<void>;
+  persistDiagnosticRequest: (id: string) => Promise<void>;
+  persistInventoryRequest: (id: string) => Promise<void>; persistDirectoryRequest: (id: string) => Promise<void>;
+  persistDirectoryExecutionRequest: (id: string) => Promise<void>; persistDirectoryRecoveryRequest: (id: string) => Promise<void> };
 let app: ReturnType<typeof renderer.createApp>, state: State;
+let pageDocument: EventTarget & { hidden: boolean }, pageWindow: EventTarget;
+const auth = reactive({ currentUser: { id: 1 }, scan: true, hasPermission: (name: string) => name !== "scan:run" || auth.scan });
 const flush = async () => { for (let index = 0; index < 10; index++) await Promise.resolve(); await nextTick(); };
 
 describe("local cloud inventory workspace", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    auth.currentUser = { id: 1 };
+    auth.scan = true;
+    pageDocument = Object.assign(new EventTarget(), { hidden: false });
+    pageWindow = new EventTarget();
+    vi.stubGlobal("document", pageDocument);
+    vi.stubGlobal("window", pageWindow);
     mocks.route.query = {};
     mocks.replace.mockReset().mockImplementation(async ({ query }) => { mocks.route.query = query; });
     mocks.jobs.mockReset().mockResolvedValue({ items: [summary], total: 1, page: 1, pageSize: 20 });
@@ -79,12 +93,134 @@ describe("local cloud inventory workspace", () => {
     state.activeTab = "review";
     expect(state.rows.map(item => item.id)).toEqual([2]);
   });
+
+  it("更改每页条数后重置数字页及选择，不重复加载未改变的值", async () => {
+    mocks.summary.mockResolvedValue({ ...summary, numberedPagination: true });
+    mocks.advice.mockResolvedValueOnce({ ...page, pagination: { page: 3, pageSize: 100, total: 230 } });
+    await state.loadCurrent(false, 3);
+    state.selectedFolders = [1];
+    mocks.advice.mockResolvedValueOnce({ ...page, pagination: { page: 1, pageSize: 50, total: 230 } });
+    state.changeAdvicePageSize(50); await flush();
+    expect(mocks.advice).toHaveBeenLastCalledWith(jobId, { page: 1, limit: 50, folderTerms: [], folderEntryIds: [] });
+    expect(state.selectedFolders).toEqual([]);
+    const calls = mocks.advice.mock.calls.length;
+    state.changeAdvicePageSize(50); state.changeAdvicePageSize(200);
+    expect(mocks.advice).toHaveBeenCalledTimes(calls);
+  });
+
+  it("更改逐页浏览的每页条数会重置旧游标", async () => {
+    state.changePage(true); await flush();
+    expect(state.afterIds).toEqual([0, 2]);
+    state.changeAdvicePageSize(10); await flush();
+    expect(state.afterIds).toEqual([0]);
+    expect(mocks.advice).toHaveBeenLastCalledWith(jobId, { afterId: 0, limit: 10, folderTerms: [], folderEntryIds: [] });
+  });
+
+  it("撤销扫描权限后清空记录并拦截迟到摘要，不发下一段建议请求", async () => {
+    let done!: (value: InventorySummary) => void;
+    mocks.summary.mockImplementationOnce(() => new Promise(resolve => { done = resolve; }));
+    const pending = state.loadCurrent();
+    auth.scan = false;
+    expect(state.summary).toBeNull();
+    expect(state.pageData).toBeNull();
+    expect(state.jobs).toEqual([]);
+    done(summary);
+    await pending;
+    await state.loadJobs();
+    expect(state.summary).toBeNull();
+    expect(state.loading).toBe(false);
+    expect(mocks.advice).toHaveBeenCalledTimes(1);
+    expect(mocks.jobs).toHaveBeenCalledTimes(1);
+  });
+
+  it("隐藏页面拒绝迟到建议、保留原编号，返回后只按明确刷新读取", async () => {
+    mocks.route.query = { inventory_request_id: jobId };
+    let done!: (value: InventoryAdvicePage) => void;
+    mocks.advice.mockImplementationOnce(() => new Promise(resolve => { done = resolve; }));
+    const pending = state.loadCurrent();
+    await flush();
+    pageDocument.hidden = true;
+    pageDocument.dispatchEvent(new Event("visibilitychange"));
+    pageDocument.hidden = false;
+    pageDocument.dispatchEvent(new Event("visibilitychange"));
+    done(page);
+    await pending;
+    expect(state.summary).toBeNull();
+    expect(state.pageData).toBeNull();
+    expect(state.selectedJobId).toBe(jobId);
+    expect(mocks.route.query.inventory_request_id).toBe(jobId);
+    expect(mocks.summary).toHaveBeenCalledTimes(2);
+    state.refreshWorkspace();
+    await flush();
+    expect(state.summary?.id).toBe(jobId);
+    expect(state.rows).toHaveLength(2);
+    expect(state.jobs.map(item => item.id)).toEqual([jobId]);
+  });
+
+  it("切换用户时清掉覆盖明细并停止摘要轮询", async () => {
+    let done!: (value: InventoryDirectoryPage) => void;
+    mocks.directories.mockImplementationOnce(() => new Promise(resolve => { done = resolve; }));
+    state.openScope();
+    const pending = state.loadDirectories();
+    state.applySummary({ ...summary, status: "running", workerSlotHeld: true, revision: 2 });
+    auth.currentUser = { id: 2 };
+    done({ items: [], hasMore: false, nextId: 0, jobRevision: 1, networkAccess: false });
+    await pending;
+    await state.pollSummary();
+    expect(state.directoryPage).toBeNull();
+    expect(state.scopeVisible).toBe(false);
+    expect(mocks.summary).toHaveBeenCalledTimes(1);
+  });
+
+  it("会话失效时作废未确认的取消操作，保留原请求编号", async () => {
+    mocks.route.query = { inventory_request_id: jobId };
+    state.applySummary({ ...summary, status: "running", revision: 2 });
+    let confirm!: () => void;
+    mocks.confirm.mockImplementationOnce(() => new Promise<void>(resolve => { confirm = resolve; }));
+    const pending = state.cancelTask();
+    pageWindow.dispatchEvent(new Event("mediaai:auth-expired"));
+    confirm();
+    await pending;
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect(state.cancelling).toBe(false);
+    expect(mocks.route.query.inventory_request_id).toBe(jobId);
+  });
+
+  it.each([403, 404])("后端拒绝当前来源后清除旧结果和路径：%s", async status => {
+    mocks.summary.mockRejectedValueOnce({ response: { status } });
+    await state.loadCurrent();
+    expect(state.summary).toBeNull();
+    expect(state.pageData).toBeNull();
+    expect(state.jobs).toEqual([]);
+    expect(state.errorText).toBeTruthy();
+    expect(mocks.advice).toHaveBeenCalledTimes(1);
+  });
   it("accepts unchanged ad review markers without duplicated navigation", async () => {
     mocks.replace.mockResolvedValue({ type: 16 });
     await expect(state.persistAdReviewRequest("")).resolves.toBeUndefined();
     mocks.route.query = { ad_review_request_id: jobId, other: "keep" };
     await expect(state.persistAdReviewRequest(jobId)).resolves.toBeUndefined();
     expect(mocks.replace).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["persistDiagnosticRequest", "diagnostic_request_id"],
+    ["persistInventoryRequest", "inventory_request_id"], ["persistDirectoryRequest", "directory_request_id"],
+    ["persistDirectoryExecutionRequest", "directory_execution_request_id"], ["persistDirectoryRecoveryRequest", "directory_recovery_request_id"],
+  ] as const)("相同或已空编号不导航，避免结束核对被重复导航阻断 %s", async (method, key) => {
+    mocks.replace.mockResolvedValue({ type: 16 }); mocks.route.query = { other: "keep" };
+    await expect(state[method]("")).resolves.toBeUndefined();
+    mocks.route.query = { [key]: jobId, other: "keep" };
+    await expect(state[method](jobId)).resolves.toBeUndefined(); expect(mocks.replace).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["persistDiagnosticRequest", "diagnostic_request_id"],
+    ["persistInventoryRequest", "inventory_request_id"], ["persistDirectoryRequest", "directory_request_id"],
+    ["persistDirectoryExecutionRequest", "directory_execution_request_id"], ["persistDirectoryRecoveryRequest", "directory_recovery_request_id"],
+  ] as const)("真正导航失败仍拒绝，不覆盖其他任务编号 %s", async (method, key) => {
+    mocks.route.query = { other: "keep", unrelated_request_id: otherId }; mocks.replace.mockResolvedValueOnce({ type: 4 });
+    await expect(state[method](jobId)).rejects.toThrow(); expect(mocks.route.query[key]).toBeUndefined();
+    await state[method](jobId); expect(mocks.route.query).toEqual({ other: "keep", unrelated_request_id: otherId, [key]: jobId });
+    await state[method](""); expect(mocks.route.query).toEqual({ other: "keep", unrelated_request_id: otherId });
   });
   it("rejects actual marker navigation failures and preserves unrelated query values", async () => {
     mocks.route.query = { other: "keep" };
@@ -110,10 +246,13 @@ describe("local cloud inventory workspace", () => {
     state.scopeTab = "budget"; await flush();
     expect(mocks.directories).not.toHaveBeenCalled();
     state.scopeTab = "coverage"; await flush();
-    expect(mocks.directories).toHaveBeenLastCalledWith(jobId, 0);
+    expect(mocks.directories).toHaveBeenLastCalledWith(jobId, 0, undefined, 50);
     state.changeDirectoryPage(true); await flush();
-    expect(mocks.directories).toHaveBeenLastCalledWith(jobId, 1);
+    expect(mocks.directories).toHaveBeenLastCalledWith(jobId, 1, undefined, 50);
     expect(state.directoryAfterIds).toEqual([0, 1]);
+    state.changeDirectoryPageSize(100); await flush();
+    expect(state.directoryAfterIds).toEqual([0]);
+    expect(mocks.directories).toHaveBeenLastCalledWith(jobId, 0, undefined, 100);
   });
   it("ignores late coverage after closing or switching and never queries cleared observations", async () => {
     state.openScope();
@@ -189,7 +328,7 @@ describe("local cloud inventory workspace", () => {
     const pending = state.loadCurrent(); await flush();
     app.unmount();
     resolve({ ...page, items: [] }); await pending;
-    expect(state.pageData?.items).toHaveLength(2);
+    expect(state.pageData).toBeNull();
   });
   it("polls summary only and does not fetch another directory page", async () => {
     state.summary = { ...summary, status: "running", workerSlotHeld: true };

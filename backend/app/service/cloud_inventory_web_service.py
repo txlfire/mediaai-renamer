@@ -1,6 +1,7 @@
 """网页受控盘点：本地确认固定预算，内存交接秘密，不循环领取或重放任务。"""
 
 from hashlib import sha256
+from dataclasses import replace
 import json
 from pathlib import Path
 import ssl
@@ -21,7 +22,8 @@ _LIMITS = {"rpc": 4, "seconds": 30, "entries": 100, "bytes": 1024 * 1024, "direc
 
 
 def _trustedCa(settings):
-    if settings.cloudDrive.configurationRevision is not None:
+    # 多连接固定版本不伪造单例修订；数据库PEM同样是明确的信任来源。
+    if settings.cloudDrive.configurationRevision is not None or settings.cloudDrive.caCertificatePem:
         pem = settings.cloudDrive.caCertificatePem
         return pem.encode("ascii") if pem else None
     path = settings.cloudDrive.caCertificateFile
@@ -127,6 +129,12 @@ def startCloudInventoryWebJob(settings, runner, jobId, *, actorId, expectedRevis
     return cloudInventorySummary(settings, jobId, actorId)
 
 
+def startBoundCloudInventoryWebJob(settings, runner, jobId, *, accessToken, auditContext,
+                                   expectedRevision, apiToken, policyHash, confirmRead):
+    return runner.startBound(jobId, accessToken=accessToken, auditContext=auditContext,
+        expectedRevision=expectedRevision, apiToken=apiToken, policyHash=policyHash, confirmRead=confirmRead)
+
+
 class CloudInventoryWebRunner:
     def __init__(self, settings):
         self.settings = settings
@@ -149,12 +157,44 @@ class CloudInventoryWebRunner:
             raise ValueError("CD2受限令牌格式无效")
         ca = _requirePolicy(settings, policyHash)
         validateCloudInventoryWebJob(settings, jobId, actorId)
+        self._launch(settings, jobId, actorId, expectedRevision, apiToken, ca)
+
+    def startBound(self, jobId, *, accessToken, auditContext, expectedRevision, apiToken, policyHash, confirmRead):
+        from app.service import cloud_connection_store as store
+        from app.service.cloud_bound_inventory_service import _ownedJobTx
+        from app.service.cloud_bound_runtime_service import boundRuntimeTx, requireBoundSendTx
+        if confirmRead is not True:
+            raise store.CloudConnectionError('confirmation_required')
+        if (not isinstance(apiToken, str) or not 1 <= len(apiToken) <= 8192
+                or any(not 33 <= ord(char) <= 126 for char in apiToken)):
+            raise store.CloudConnectionError('invalid_fields')
+        with store.connectionDb(self.settings) as connection:
+            row, snapshot = _ownedJobTx(connection, jobId, accessToken=accessToken, auditContext=auditContext)
+            if snapshot is None:
+                raise store.CloudConnectionError('legacy_unbound')
+            if policyHash != snapshot.values['policy_hash']:
+                raise store.CloudConnectionError('context_stale')
+            runtime = boundRuntimeTx(self.settings, connection, snapshot)
+            requireBoundSendTx(runtime, connection)
+            # 必须由原登录会话确认，不能新登录后仅靠拥有者重启旧受理。
+            from app.service.cloud_task_context_service import resolveCloudAuthSessionTx
+            if resolveCloudAuthSessionTx(connection, row['actor_id'], accessToken) != snapshot.values['auth_session_id']:
+                raise store.CloudConnectionError('context_stale')
+        self._launch(runtime, jobId, row['actor_id'], expectedRevision, apiToken,
+                     runtime.cloudDrive.caCertificatePem.encode('ascii') or None)
+        return {'id': jobId, 'contextId': snapshot.values['id'], 'requestId': snapshot.requestId,
+                'operationState': 'accepted', 'retryAutomatically': False}
+
+    def _launch(self, settings, jobId, actorId, expectedRevision, apiToken, ca):
         with self._lock:
             if not self._open or self._stop.is_set():
                 raise CloudInventoryError("web_runner_unavailable")
             if self._thread is not None:
                 raise CloudInventoryError("worker_slot_busy")
             token = claimCloudInventoryJob(settings, jobId, actorId=actorId, expectedRevision=expectedRevision)
+            from app.service.cloud_bound_runtime_service import BoundCloudSettings
+            if isinstance(settings, BoundCloudSettings):
+                settings = replace(settings, workerToken=token)
             thread = threading.Thread(target=self._execute, args=(settings, jobId, token, apiToken, ca),
                                       name="cloud-inventory-supervisor", daemon=False)
             self._thread = thread

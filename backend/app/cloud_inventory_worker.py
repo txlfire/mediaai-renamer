@@ -26,13 +26,20 @@ def main():
                 max_size_mb=payload["log_max_size_mb"], backup_count=payload["log_backup_count"], console_output=False))
         setup_logging(settings.logging)
         jobId, workerToken = inventoryId(payload["job_id"]), inventoryId(payload["worker_token"])
-        revision = payload["configuration_revision"]
-        if type(revision) is not int or revision < 0:
-            raise ValueError("配置修订无效")
-        settings = resolveCloudDriveSettings(settings, expectedRevision=revision)
+        if 'context_id' in payload:
+            from app.service.cloud_bound_runtime_service import loadBoundInventoryWorker
+            settings = loadBoundInventoryWorker(settings, contextId=payload['context_id'],
+                                                jobId=jobId, workerToken=workerToken)
+        else:
+            revision = payload["configuration_revision"]
+            if type(revision) is not int or revision < 0:
+                raise ValueError("配置修订无效")
+            settings = resolveCloudDriveSettings(settings, expectedRevision=revision)
         with inventoryDb(settings) as connection:
             job = _active(connection, jobId, workerToken)
             sessionId, root = job["session_id"], job["root_path"]
+            from app.service.cloud_bound_runtime_service import requireBoundSend
+            requireBoundSend(settings, connection, sessionId)
         ca = settings.cloudDrive.caCertificatePem.encode("ascii") or None
         get_logger(__name__).info("CD2盘点量子开始 job_id=%s", job["id"])
         with createBudgetedCd2Client(settings, sessionId, endpoint=settings.cloudDrive.endpoint, token=payload["api_token"],

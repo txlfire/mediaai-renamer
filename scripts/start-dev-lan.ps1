@@ -1,6 +1,6 @@
 param(
-    [int]$FrontendPort = 5173,
-    [int]$BackendPort = 8970
+    [Nullable[int]]$FrontendPort,
+    [Nullable[int]]$BackendPort
 )
 
 # Purpose: start FastAPI backend and Vite frontend for local/LAN development.
@@ -69,19 +69,6 @@ function Wait-DevHttpReady {
     throw "Development service readiness timed out: $Url. Check .codex/run-logs."
 }
 
-function Stop-PortProcess {
-    param([int]$Port)
-
-    # Clear target ports before startup to avoid stale uvicorn/vite listeners.
-    $Connections = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-    $ProcessIds = $Connections | Select-Object -ExpandProperty OwningProcess -Unique
-    foreach ($ProcessId in $ProcessIds) {
-        if ($ProcessId -and $ProcessId -ne $PID) {
-            Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
 function Assert-DevDependencies {
     param([string]$RootPath)
 
@@ -106,11 +93,16 @@ function Assert-DevDependencies {
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $Root
+. (Join-Path $PSScriptRoot "dev-port-config.ps1")
 
 # Resolve the project root, validate dependencies, and reuse the stop script for cleanup.
 Normalize-ProcessPathVariable
 $Python = Assert-DevDependencies -RootPath $Root
-& (Join-Path $Root "scripts\stop-dev-lan.ps1") -FrontendPort $FrontendPort -BackendPort $BackendPort
+$Ports = Get-ConfiguredDevPorts -RootPath $Root -FrontendPort $FrontendPort -BackendPort $BackendPort
+$FrontendPort = $Ports.frontendPort
+$BackendPort = $Ports.backendPort
+& (Join-Path $Root "scripts\stop-dev-lan.ps1") -OwnedOnly
+if ($LASTEXITCODE -ne 0) { throw "Could not stop the previous development services." }
 
 $PortReleaseDeadline = (Get-Date).AddSeconds(10)
 do {
@@ -123,6 +115,7 @@ do {
 if ($RemainingListeners) {
     throw "Development ports are still occupied. Startup aborted; no new services were launched."
 }
+$null = Get-ConfiguredDevPorts -RootPath $Root -FrontendPort $FrontendPort -BackendPort $BackendPort -CheckBind
 
 # Store dev logs and PID files under .codex/run-logs for diagnostics and cleanup.
 $LogDir = Join-Path $Root ".codex\run-logs"
@@ -136,12 +129,15 @@ $FrontendErr = Join-Path $LogDir "frontend-vite.err.log"
 $env:PYTHONPATH = "backend"
 $env:CI = "true"
 $env:VITE_BACKEND_URL = "http://127.0.0.1:$BackendPort"
+$env:MEDIAAI_DEV_FRONTEND_PORT = "$FrontendPort"
+$env:MEDIAAI_DEV_BACKEND_PORT = "$BackendPort"
+$BindHost = if ($env:MEDIAAI_DEV_LOOPBACK_ONLY -eq "1") { "127.0.0.1" } else { "0.0.0.0" }
 
 # Start backend in a hidden background process with split stdout/stderr logs.
-$Backend = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$BackendPort", "--reload", "--reload-dir", "backend/app", "--app-dir", "backend") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $BackendOut -RedirectStandardError $BackendErr -PassThru
+$Backend = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", $BindHost, "--port", "$BackendPort", "--reload", "--reload-dir", "backend/app", "--app-dir", "backend") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $BackendOut -RedirectStandardError $BackendErr -PassThru
 
 # Start frontend in a hidden background process by invoking the local Vite entry directly.
-$Frontend = Start-Process -FilePath $script:Node -ArgumentList @("node_modules\vite\bin\vite.js", "--host", "0.0.0.0", "--port", "$FrontendPort", "--config", "frontend/vite.config.ts") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $FrontendOut -RedirectStandardError $FrontendErr -PassThru
+$Frontend = Start-Process -FilePath $script:Node -ArgumentList @("node_modules\vite\bin\vite.js", "--host", $BindHost, "--port", "$FrontendPort", "--strictPort", "--config", "frontend/vite.config.ts") -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $FrontendOut -RedirectStandardError $FrontendErr -PassThru
 
 # Save PID files so the stop script can terminate the exact processes first.
 Set-Content -Path (Join-Path $LogDir "backend.pid") -Value $Backend.Id -Encoding ascii
@@ -150,8 +146,9 @@ Set-Content -Path (Join-Path $LogDir "frontend.pid") -Value $Frontend.Id -Encodi
 Wait-DevHttpReady -Url "http://127.0.0.1:$BackendPort/api/health"
 Wait-DevHttpReady -Url "http://127.0.0.1:$FrontendPort/"
 Wait-DevHttpReady -Url "http://127.0.0.1:$FrontendPort/api/health"
+$Ports | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $LogDir "dev-ports.json") -Encoding ascii
 
 Write-Host "Backend started. PID: $($Backend.Id), URL: http://127.0.0.1:$BackendPort/api/health"
 Write-Host "Frontend started. PID: $($Frontend.Id), URL: http://127.0.0.1:$FrontendPort"
-Write-Host "LAN URL: http://<this-machine-lan-ip>:$FrontendPort"
+if ($BindHost -eq "0.0.0.0") { Write-Host "LAN URL: http://<this-machine-lan-ip>:$FrontendPort" }
 Write-Host "Logs: $LogDir"

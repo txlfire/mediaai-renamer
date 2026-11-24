@@ -25,7 +25,7 @@ import {
   type TmdbConnectionTestHistory,
   type TmdbConnectionTestResult,
 } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
@@ -48,7 +48,7 @@ export const useSettingsStore = defineStore("settings", {
         this.settings = await sessionRequest(fetchSettings(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.loadFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.loadFailed;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
           this.loading = false;
@@ -64,7 +64,7 @@ export const useSettingsStore = defineStore("settings", {
         this.settings = await sessionRequest(updateSettings(values), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.saveFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.saveFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -81,7 +81,7 @@ export const useSettingsStore = defineStore("settings", {
         this.metadataProviders = await sessionRequest(fetchMetadataProviderConfigs(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.metadataProviders.loadFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.metadataProviders.loadFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -109,7 +109,7 @@ export const useSettingsStore = defineStore("settings", {
         return updated;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.metadataProviders.saveFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.metadataProviders.saveFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -126,7 +126,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(testMetadataProviderConfig(provider), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.metadataProviders.testFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.metadataProviders.testFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -143,7 +143,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(testTmdbSettings(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.tmdb.testFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.tmdb.testFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -162,7 +162,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(fetchTmdbTestResult(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.tmdb.loadTestResultFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.tmdb.loadTestResultFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -183,7 +183,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(fetchImdbTestResult(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.imdb.loadTestResultFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.imdb.loadTestResultFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -202,7 +202,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(testImdbSettings(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.imdb.testFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.imdb.testFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -221,7 +221,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(fetchAiTestResult(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.ai.loadTestResultFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.ai.loadTestResultFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {
@@ -240,7 +240,7 @@ export const useSettingsStore = defineStore("settings", {
         return await sessionRequest(testAiSettings(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.settings.ai.testFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().settings.ai.testFailed;
         throw error;
       } finally {
         if (sessionGeneration === getSessionGeneration()) {

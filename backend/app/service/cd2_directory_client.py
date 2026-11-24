@@ -18,15 +18,10 @@ from app.service.cloud_directory_plan_service import CloudDirectoryError
 from app.service.cloud_inventory_service import inventoryDb
 from app.service.cloud_inventory_web_service import _trustedCa
 from app.utils.cloud_drive_paths import canonicalCd2Target, canonicalCloudPath
+from app.service.cd2_runtime_versions import SUPPORTED_RUNTIME as _SUPPORTED_RUNTIME, SUPPORTED_RUNTIMES as _SUPPORTED_RUNTIMES
 
 _SERVICE = "/clouddrive.CloudDriveFileSrv/"
 _PERMISSIONS = {"allow_list", "allow_rename", "allow_view_runtime_info"}
-_SUPPORTED_RUNTIME = ("1.1.2 Build 26-10-06 23:48:14", "1.1.2 Build 26-10-06 23:48:12")
-# CD2与CLOUDAPI必须整组命中已验构建，不能按主版本或分别匹配。
-_SUPPORTED_RUNTIMES = frozenset({
-    _SUPPORTED_RUNTIME,
-    ("1.1.3 Build 26-10-17 17:13:11", "1.1.3 Build 26-10-17 17:13:00"),
-})
 
 
 class Cd2DirectoryError(CloudDirectoryError):

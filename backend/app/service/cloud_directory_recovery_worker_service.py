@@ -74,30 +74,36 @@ def _finishRecoveryState(settings, connection, row, reason, *, reviewed=False):
 
 def reviewDirectoryRecoveryWorker(settings, recoveryId, *, expectedRevision, confirmClientsStopped, confirmRemoteIdle, auditContext):
     """显式回收孤儿只读核对槽，不接管旧进程、不重发或释放原目录保护。"""
+    with inventoryDb(settings, write=True) as connection:
+        return reviewDirectoryRecoveryWorkerTx(settings, connection, recoveryId, expectedRevision=expectedRevision,
+            confirmClientsStopped=confirmClientsStopped, confirmRemoteIdle=confirmRemoteIdle, auditContext=auditContext)
+
+
+def reviewDirectoryRecoveryWorkerTx(settings, connection, recoveryId, *, expectedRevision, confirmClientsStopped,
+                                    confirmRemoteIdle, auditContext):
     inventoryId(recoveryId)
     _revision(expectedRevision)
     if confirmClientsStopped is not True or confirmRemoteIdle is not True or auditContext.actor is None:
         raise ValueError("须确认旧客户端退出及相关远端静止；不自动发送新的核对请求")
-    with inventoryDb(settings, write=True) as connection:
-        row = _row(connection, recoveryId)
-        if row["actor_id"] != auditContext.actor.id:
-            raise CloudDirectoryError("not_found")
-        _owned(connection, row["plan_id"], auditContext.actor.id)
-        _permission(connection, auditContext.actor.id, "cloud-directory:execute")
-        _permission(connection, auditContext.actor.id, "settings:write")
-        if row["revision"] != expectedRevision or not row["slot_held"]:
-            raise CloudDirectoryError("revision_conflict")
-        try:
-            if (row["owner_host"] != cloudDriveHostKey() or type(row["owner_pid"]) is not int
-                    or not 1 <= row["owner_pid"] <= 2**31 - 1 or isProcessAlive(row["owner_pid"])):
-                raise CloudDirectoryError("worker_exit_unconfirmed")
-            if row["worker_pid"] is not None and (type(row["worker_pid"]) is not int
-                    or not 1 <= row["worker_pid"] <= 2**31 - 1 or isProcessAlive(row["worker_pid"])):
-                raise CloudDirectoryError("worker_exit_unconfirmed")
-        except (ValueError, TypeError, OSError):
-            raise CloudDirectoryError("worker_exit_unconfirmed") from None
-        _finishRecoveryState(settings, connection, row, "worker_interrupted", reviewed=True)
-        return recoveryView(connection, _row(connection, recoveryId))
+    row = _row(connection, recoveryId)
+    if row['actor_id'] != auditContext.actor.id:
+        raise CloudDirectoryError('not_found')
+    _owned(connection, row['plan_id'], auditContext.actor.id)
+    _permission(connection, auditContext.actor.id, 'cloud-directory:execute')
+    _permission(connection, auditContext.actor.id, 'settings:write')
+    if row['revision'] != expectedRevision or not row['slot_held']:
+        raise CloudDirectoryError('revision_conflict')
+    try:
+        if (row['owner_host'] != cloudDriveHostKey() or type(row['owner_pid']) is not int
+                or not 1 <= row['owner_pid'] <= 2**31 - 1 or isProcessAlive(row['owner_pid'])):
+            raise CloudDirectoryError('worker_exit_unconfirmed')
+        if row['worker_pid'] is not None and (type(row['worker_pid']) is not int
+                or not 1 <= row['worker_pid'] <= 2**31 - 1 or isProcessAlive(row['worker_pid'])):
+            raise CloudDirectoryError('worker_exit_unconfirmed')
+    except (ValueError, TypeError, OSError):
+        raise CloudDirectoryError('worker_exit_unconfirmed') from None
+    _finishRecoveryState(settings, connection, row, 'worker_interrupted', reviewed=True)
+    return recoveryView(connection, _row(connection, recoveryId))
 
 
 def superviseDirectoryRecovery(settings, recoveryId, token, apiToken, *, stop=None):
@@ -106,12 +112,18 @@ def superviseDirectoryRecovery(settings, recoveryId, token, apiToken, *, stop=No
     try:
         with inventoryDb(settings) as connection:
             row = _row(connection, recoveryId)
+            from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+            if isinstance(settings, BoundNativeCloudSettings):
+                requireNativeSendTx(settings, connection)
             remaining = row["expires_at"] - time.time()
         if remaining <= 0 or stop is not None and stop.is_set():
             return
         deadline = time.monotonic() + min(90, remaining)
-        payload = {"recovery_id": recoveryId, "worker_token": token, "api_token": apiToken,
-            "configuration_revision": cloudConfigurationReference(settings)}
+        payload = {'recovery_id': recoveryId, 'worker_token': token, 'api_token': apiToken}
+        if isinstance(settings, BoundNativeCloudSettings):
+            payload['context_id'] = settings.contextId
+        else:
+            payload['configuration_revision'] = cloudConfigurationReference(settings)
         try:
             process = startTaskProcess(settings, "app.cloud_directory_recovery_worker", payload,
                 lambda pid: bindRecoveryWorker(settings, recoveryId, token, pid))
@@ -122,13 +134,7 @@ def superviseDirectoryRecovery(settings, recoveryId, token, apiToken, *, stop=No
             payload.pop("api_token", None)
             apiToken = ""
         while process.poll() is None:
-            with inventoryDb(settings) as connection:
-                row = _row(connection, recoveryId)
-                try:
-                    _active(settings, connection, row, time.time())
-                    permitted = True
-                except CloudDirectoryError:
-                    permitted = False
+            row, permitted = _readSupervisionState(settings, recoveryId, deadline=deadline, stop=stop)
             if not permitted or stop is not None and stop.is_set() or time.monotonic() >= deadline:
                 reason = "cancel_requested" if row["cancel_requested"] else "deadline_exceeded" if time.monotonic() >= deadline else "worker_interrupted"
                 break
@@ -144,3 +150,17 @@ def superviseDirectoryRecovery(settings, recoveryId, token, apiToken, *, stop=No
                 process.kill()
             process.wait()
         finishRecoveryWorker(settings, recoveryId, token, process.pid if process else None, reason=reason)
+
+
+def _readSupervisionState(settings, recoveryId, *, deadline, stop=None):
+    from app.service.cloud_worker_read_service import readCloudSupervision
+    def read():
+        with inventoryDb(settings) as connection:
+            row = _row(connection, recoveryId)
+            try:
+                _active(settings, connection, row, time.time())
+                permitted = True
+            except (CloudDirectoryError, ValueError):
+                permitted = False
+            return row, permitted
+    return readCloudSupervision(read, deadline=deadline, stop=stop)

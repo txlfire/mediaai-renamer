@@ -30,13 +30,15 @@ _REASONS = {"quantum_boundary", "entry_budget", "byte_budget", "directory_budget
     "duplicate_entry", "out_of_scope_or_unsupported_entry", "invalid_entry_path", "storage_unavailable",
     "scope_complete", "directory_incomplete", "worker_ownership_lost", "token_root_mismatch", "unknown_token_permissions",
     "configuration_changed", "configuration_unavailable", "configuration_unbound",
+    "context_stale", "authentication_required", "action_permission_denied", "resource_not_found",
     "overprivileged_or_missing_list_permission", "invalid_runtime_version", "invalid_response", "resource_exhausted"} | CD2_RPC_FAILURE_CODES
 
 
 class CloudInventoryError(RuntimeError):
-    def __init__(self, code):
+    def __init__(self, code, *, sqliteErrorCode=None):
         super().__init__(f"CD2盘点停止：{code}；不会自动重扫或扩大范围")
         self.code = code
+        self.sqliteErrorCode = sqliteErrorCode if type(sqliteErrorCode) is int else None
 
 
 def inventoryId(value):
@@ -77,7 +79,7 @@ def inventoryDb(settings, *, write=False):
         code = getattr(exc, "sqlite_errorcode", None)
         get_logger(__name__).warning("CD2本地事务停止 mode=%s error_type=%s sqlite_code=%s",
                                     "write" if write else "read", type(exc).__name__, code if type(code) is int else None)
-        raise CloudInventoryError("storage_unavailable") from None
+        raise CloudInventoryError("storage_unavailable", sqliteErrorCode=code) from None
 
 
 def _audit(settings, connection, row, action, *, context=None, result="success"):
@@ -98,10 +100,13 @@ def _row(connection, jobId):
     return row
 
 
-def _active(connection, jobId, workerToken):
+def _active(connection, jobId, workerToken, *, receivedFact=False):
     row = _row(connection, jobId)
     if row["status"] != "running" or row["worker_token"] != workerToken or row["worker_pid"] != os.getpid():
         raise CloudInventoryError("worker_ownership_lost")
+    if receivedFact and 'context_id' in row.keys() and row['context_id'] is not None:
+        # 调用方事务已核对原worker能力；已接收计数不因撤权、取消或到期消失。
+        return row
     requireCloudActor(connection, row["actor_id"])
     if row["cancel_requested"]:
         raise CloudInventoryError("cancel_requested")
@@ -122,6 +127,32 @@ def _change(settings, connection, row, status, reason, context=None):
     current = _row(connection, row["id"])
     failed = status == "interrupted" or (status == "paused" and reason != "quantum_boundary")
     _audit(settings, connection, current, "inventory_" + status, context=context, result="failed" if failed else "success")
+
+
+def insertCloudInventoryJobTx(settings, connection, *, jobId, requestId, requestHash, session, plan,
+                              exclusions, mode, maxEntries, maxBytes, maxDirectories, maxDepth,
+                              quantumDirectories, now, auditContext, contextId=None):
+    """复用队列写入，不打开连接、不提交；绑定上下文由外层原子受理提供。"""
+    if connection.execute("SELECT 1 FROM cloud_drive_inventory_jobs WHERE session_id=?", (session['id'],)).fetchone():
+        raise CloudInventoryError("session_already_bound")
+    if connection.execute("SELECT COUNT(*) FROM cloud_drive_inventory_jobs").fetchone()[0] >= 1000:
+        raise CloudInventoryError("queue_capacity")
+    if connection.execute("SELECT COUNT(*) FROM cloud_drive_inventory_directories").fetchone()[0] + len(plan['scopes']) > MAX_DIRECTORY_ROWS:
+        raise CloudInventoryError("queue_capacity")
+    columns = ("id,request_id,request_hash,session_id,actor_id,root_path,mode,exclusions_json,max_entries,max_bytes,"
+               "max_directories,max_depth,quantum_directories,status,expires_at,created_at,updated_at,selected_json,path_epoch")
+    values = (jobId, requestId, requestHash, session['id'], session['actor_id'], session['root_path'], mode,
+              exclusions, maxEntries, maxBytes, maxDirectories, maxDepth, quantumDirectories, 'queued',
+              session['expires_at'], now, now, json.dumps([scope['path'] for scope in plan['scopes']], ensure_ascii=False),
+              cloudPathEpoch(connection)['revision'])
+    if contextId is not None:
+        columns += ",context_id,binding_state"
+        values += (contextId, 'bound')
+    connection.execute(f"INSERT INTO cloud_drive_inventory_jobs ({columns}) VALUES({','.join('?' for _ in values)})", values)
+    connection.executemany("INSERT INTO cloud_drive_inventory_directories(job_id,path,depth,status) VALUES(?,?,0,'pending')",
+                           [(jobId, scope['path']) for scope in plan['scopes']])
+    _audit(settings, connection, _row(connection, jobId), "inventory_approve", context=auditContext)
+    return jobId
 
 
 def createCloudInventoryJob(settings, *, requestId, sessionId, selectedPaths, excludedPaths,
@@ -153,26 +184,12 @@ def createCloudInventoryJob(settings, *, requestId, sessionId, selectedPaths, ex
                 raise CloudInventoryError("request_conflict")
             return existing["id"]
         requireCloudSessionForWork(settings, connection, sessionId)
-        if connection.execute("SELECT 1 FROM cloud_drive_inventory_jobs WHERE session_id=?", (sessionId,)).fetchone():
-            raise CloudInventoryError("session_already_bound")
-        if connection.execute("SELECT COUNT(*) FROM cloud_drive_inventory_jobs").fetchone()[0] >= 1000:
-            raise CloudInventoryError("queue_capacity")
-        if connection.execute("SELECT COUNT(*) FROM cloud_drive_inventory_directories").fetchone()[0] + len(plan["scopes"]) > MAX_DIRECTORY_ROWS:
-            raise CloudInventoryError("queue_capacity")
         jobId = str(uuid4())
         now = time.time()
-        connection.execute("INSERT INTO cloud_drive_inventory_jobs "
-            "(id,request_id,request_hash,session_id,actor_id,root_path,mode,exclusions_json,max_entries,max_bytes,"
-            "max_directories,max_depth,quantum_directories,status,expires_at,created_at,updated_at,selected_json) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)", (jobId, requestId, digest, sessionId,
-                session["actor_id"], session["root_path"], mode, exclusions, maxEntries, maxBytes, maxDirectories,
-                maxDepth, quantumDirectories, session["expires_at"], now, now,
-                json.dumps([scope["path"] for scope in plan["scopes"]], ensure_ascii=False)))
-        connection.executemany("INSERT INTO cloud_drive_inventory_directories(job_id,path,depth,status) VALUES(?,?,0,'pending')",
-                               [(jobId, scope["path"]) for scope in plan["scopes"]])
-        connection.execute("UPDATE cloud_drive_inventory_jobs SET path_epoch=? WHERE id=?", (cloudPathEpoch(connection)["revision"], jobId))
-        _audit(settings, connection, _row(connection, jobId), "inventory_approve", context=auditContext)
-        return jobId
+        return insertCloudInventoryJobTx(settings, connection, jobId=jobId, requestId=requestId, requestHash=digest,
+            session=session, plan=plan, exclusions=exclusions, mode=mode, maxEntries=maxEntries, maxBytes=maxBytes,
+            maxDirectories=maxDirectories, maxDepth=maxDepth, quantumDirectories=quantumDirectories,
+            now=now, auditContext=auditContext)
 
 
 def claimCloudInventoryJob(settings, jobId, *, actorId=None, expectedRevision=None):
@@ -241,7 +258,7 @@ class InventoryDirectorySink:
 
     def messageReceived(self, entries, byteCount):
         with inventoryDb(self.settings, write=True) as connection:
-            job = _active(connection, self.jobId, self.token)
+            job = _active(connection, self.jobId, self.token, receivedFact=True)
             count, size = job["received_entries"] + entries, job["received_bytes"] + byteCount
             connection.execute("UPDATE cloud_drive_inventory_jobs SET received_entries=?,received_bytes=?,updated_at=? WHERE id=?",
                                (count, size, time.time(), self.jobId))
@@ -254,7 +271,7 @@ class InventoryDirectorySink:
         if len(entries) > 128:
             raise CloudInventoryError("cache_capacity")
         with inventoryDb(self.settings, write=True) as connection:
-            job = _active(connection, self.jobId, self.token)
+            job = _active(connection, self.jobId, self.token, receivedFact=True)
             exclusions = json.loads(job["exclusions_json"])
             totalCount, totalBytes = connection.execute("SELECT COALESCE(SUM(stored_entries),0),COALESCE(SUM(stored_bytes),0) "
                                                        "FROM cloud_drive_inventory_jobs").fetchone()
@@ -376,12 +393,20 @@ def cloudInventorySummary(settings, jobId, actorId):
         if row["actor_id"] != actorId:
             raise CloudInventoryError("job_not_found")
         requireCloudActor(connection, actorId)
-        counts = dict(connection.execute("SELECT status,COUNT(*) FROM cloud_drive_inventory_directories WHERE job_id=? GROUP BY status", (jobId,)))
-        selected = json.loads(row["selected_json"])
-        rpcHeld = bool(connection.execute("SELECT 1 FROM cloud_drive_rpc_lease WHERE session_id=?", (row["session_id"],)).fetchone())
-        directoryHeld = directoryExecutionHeld(connection)
-        pathCurrent = row["path_epoch"] == cloudPathEpoch(connection)["revision"]
-        budget = connection.execute("SELECT max_rpc,used_rpc,status,expires_at FROM cloud_drive_read_sessions WHERE id=?", (row["session_id"],)).fetchone()
+        return cloudInventorySummaryTx(connection, row)
+
+
+def cloudInventorySummaryTx(connection, row):
+    """在上层已核对所有者/来源授权的同一快照内组装摘要。"""
+    jobId = row['id']
+    counts = dict(connection.execute("SELECT status,COUNT(*) FROM cloud_drive_inventory_directories WHERE job_id=? GROUP BY status", (jobId,)))
+    selected = json.loads(row["selected_json"])
+    rpcHeld = bool(connection.execute("SELECT 1 FROM cloud_drive_rpc_lease WHERE session_id=?", (row["session_id"],)).fetchone())
+    directoryHeld = directoryExecutionHeld(connection)
+    pathCurrent = row["path_epoch"] == cloudPathEpoch(connection)["revision"]
+    budget = connection.execute("SELECT max_rpc,used_rpc,status,expires_at FROM cloud_drive_read_sessions WHERE id=?", (row["session_id"],)).fetchone()
+    if budget is None:
+        raise CloudInventoryError('storage_unavailable')
     return {"id": jobId, "status": row["status"], "reason": row["reason"], "revision": row["revision"],
         "mode": row["mode"], "approvedRoot": row["root_path"], "cancelRequested": bool(row["cancel_requested"]),
         "selectedPaths": selected, "excludedPaths": json.loads(row["exclusions_json"]), "freshness": "unknown",
@@ -397,6 +422,7 @@ def cloudInventorySummary(settings, jobId, actorId):
         "limits": {"entries": row["max_entries"], "bytes": row["max_bytes"], "directories": row["max_directories"], "depth": row["max_depth"]},
         "scopeComplete": row["status"] == "completed", "workerSlotHeld": row["worker_token"] is not None,
         "cacheState": row["cache_state"], "clearedAt": row["cleared_at"],
+        "numberedPagination": _numberedInventoryAvailable(row),
         "pathCurrent": pathCurrent,
         "cacheClearAvailable": row["status"] in {"completed", "cancelled", "interrupted"}
             and row["worker_token"] is None and not rpcHeld and not directoryHeld and row["cache_state"] != "cleared",
@@ -426,18 +452,48 @@ def cloudInventoryEntries(settings, jobId, actorId, *, afterId=0, limit=100):
         if job["actor_id"] != actorId:
             raise CloudInventoryError("job_not_found")
         requireCloudActor(connection, actorId)
-        if job["cache_state"] != "available":
-            raise CloudInventoryError("observations_" + job["cache_state"])
-        rows = connection.execute("SELECT e.*,d.status AS directory_status,d.generation AS directory_generation "
-            "FROM cloud_drive_inventory_entries e JOIN cloud_drive_inventory_directories d ON d.id=e.directory_id "
-            "WHERE e.job_id=? AND e.id>? ORDER BY e.id LIMIT ?", (jobId, afterId, limit + 1)).fetchall()
+        return cloudInventoryEntriesTx(connection, job, afterId=afterId, limit=limit)
+
+
+def _numberedInventoryAvailable(job):
+    return (job["status"] in {"completed", "cancelled"} and job["worker_token"] is None
+            and job["cache_state"] == "available")
+
+
+def inventoryPageWindowTx(connection, job, *, afterId, limit, page, directories=False):
+    if page is None:
+        return afterId, {}
+    _limit(page, 1, MAX_CACHE_ENTRIES)
+    _limit(limit, 1, 200)
+    if afterId != 0:
+        raise ValueError("页码与游标不能同时使用")
+    if not _numberedInventoryAvailable(job):
+        raise CloudInventoryError("numbered_pagination_unavailable")
+    table = "cloud_drive_inventory_directories" if directories else "cloud_drive_inventory_entries"
+    total = connection.execute(f"SELECT COUNT(*) FROM {table} WHERE job_id=?", (job["id"],)).fetchone()[0]
+    page = min(page, max(1, (total + limit - 1) // limit))
+    if page > 1:
+        # 只定位页首之前的 ID，随后继续走原有游标读取和本页校验。
+        afterId = connection.execute(f"SELECT id FROM {table} WHERE job_id=? ORDER BY id LIMIT 1 OFFSET ?",
+            (job["id"], (page - 1) * limit - 1)).fetchone()[0]
+    return afterId, {"pagination": {"page": page, "pageSize": limit, "total": total}}
+
+
+def cloudInventoryEntriesTx(connection, job, *, afterId, limit):
+    _limit(afterId, 0, 2**63 - 1)
+    _limit(limit, 1, 200)
+    if job["cache_state"] != "available":
+        raise CloudInventoryError("observations_" + job["cache_state"])
+    rows = connection.execute("SELECT e.*,d.status AS directory_status,d.generation AS directory_generation "
+        "FROM cloud_drive_inventory_entries e JOIN cloud_drive_inventory_directories d ON d.id=e.directory_id "
+        "WHERE e.job_id=? AND e.id>? ORDER BY e.id LIMIT ?", (job['id'], afterId, limit + 1)).fetchall()
     return {"items": [{"id": row["id"], "name": row["name"], "relativePath": row["path"][len(job["root_path"]) + 1:],
                        "isDirectory": bool(row["is_directory"]), "size": row["size"], "directoryComplete": row["directory_status"] == "complete"}
                       for row in rows[:limit]], "hasMore": len(rows) > limit,
             "nextId": rows[min(limit, len(rows)) - 1]["id"] if rows else afterId, "networkAccess": False}
 
 
-def cloudInventoryDirectories(settings, jobId, actorId, *, afterId=0, limit=50):
+def cloudInventoryDirectories(settings, jobId, actorId, *, afterId=0, limit=50, page=None):
     _limit(afterId, 0, 2**63 - 1)
     _limit(limit, 1, 200)
     inventoryId(jobId)
@@ -447,14 +503,21 @@ def cloudInventoryDirectories(settings, jobId, actorId, *, afterId=0, limit=50):
         if job["actor_id"] != actorId:
             raise CloudInventoryError("job_not_found")
         requireCloudActor(connection, actorId)
-        if job["cache_state"] != "available":
-            raise CloudInventoryError("observations_" + job["cache_state"])
-        rows = connection.execute("SELECT id,path,depth,status FROM cloud_drive_inventory_directories "
-            "WHERE job_id=? AND id>? ORDER BY id LIMIT ?", (jobId, afterId, limit + 1)).fetchall()
+        return cloudInventoryDirectoriesTx(connection, job, afterId=afterId, limit=limit, page=page)
+
+
+def cloudInventoryDirectoriesTx(connection, job, *, afterId, limit, page=None):
+    _limit(afterId, 0, 2**63 - 1)
+    _limit(limit, 1, 200)
+    if job["cache_state"] != "available":
+        raise CloudInventoryError("observations_" + job["cache_state"])
+    afterId, pagination = inventoryPageWindowTx(connection, job, afterId=afterId, limit=limit, page=page, directories=True)
+    rows = connection.execute("SELECT id,path,depth,status FROM cloud_drive_inventory_directories "
+        "WHERE job_id=? AND id>? ORDER BY id LIMIT ?", (job['id'], afterId, limit + 1)).fetchall()
     return {"items": [{"id": row["id"], "relativePath": "" if row["path"] == job["root_path"] else row["path"][len(job["root_path"]) + 1:],
             "depth": row["depth"], "status": row["status"]} for row in rows[:limit]],
         "hasMore": len(rows) > limit, "nextId": rows[min(limit, len(rows)) - 1]["id"] if rows else afterId,
-        "jobRevision": job["revision"], "networkAccess": False}
+        "jobRevision": job["revision"], "networkAccess": False, **pagination}
 
 
 def cancelCloudInventoryJob(settings, jobId, *, auditContext):
@@ -464,10 +527,14 @@ def cancelCloudInventoryJob(settings, jobId, *, auditContext):
         if auditContext.actor is None or row["actor_id"] != auditContext.actor.id:
             raise CloudInventoryError("job_not_found")
         requireCloudActor(connection, row["actor_id"])
-        if row["status"] not in {"completed", "cancelled"}:
-            connection.execute("UPDATE cloud_drive_inventory_jobs SET cancel_requested=1,revision=revision+1 WHERE id=?", (jobId,))
-            if row["worker_token"] is None:
-                _change(settings, connection, row, "cancelled", "cancel_requested", auditContext)
-            else:
-                _audit(settings, connection, _row(connection, jobId), "inventory_cancel_requested", context=auditContext)
+        cancelCloudInventoryJobTx(settings, connection, row, auditContext=auditContext)
     return cloudInventorySummary(settings, jobId, auditContext.actor.id)
+
+
+def cancelCloudInventoryJobTx(settings, connection, row, *, auditContext):
+    if row["status"] not in {"completed", "cancelled"}:
+        connection.execute("UPDATE cloud_drive_inventory_jobs SET cancel_requested=1,revision=revision+1 WHERE id=?", (row['id'],))
+        if row["worker_token"] is None:
+            _change(settings, connection, row, "cancelled", "cancel_requested", auditContext)
+        else:
+            _audit(settings, connection, _row(connection, row['id']), "inventory_cancel_requested", context=auditContext)

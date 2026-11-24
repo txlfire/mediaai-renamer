@@ -4,7 +4,10 @@ from hashlib import sha256
 import json
 import re
 
-from app.service.cloud_inventory_service import CloudInventoryError, cloudInventoryEntries, cloudInventorySummary, inventoryDb
+from app.service.cloud_inventory_service import (
+    CloudInventoryError, inventoryDb, inventoryId, inventoryPageWindowTx, _row, cloudInventoryEntriesTx, cloudInventorySummaryTx,
+)
+from app.service.cloud_drive_budget_service import requireCloudActor
 
 RULE_VERSION = "metadata-advice-v1"
 _PROTECTED_EXTENSIONS = {"srt", "ass", "ssa", "sub", "idx", "vtt", "sup", "nfo", "sfv", "md5",
@@ -85,51 +88,60 @@ def _folderSuggestion(item, approved, terms, protection):
 
 
 def buildCloudInventoryAdvice(settings, jobId, actorId, *, afterId=0, limit=100,
-                              folderEntryIds=None, folderTerms=None, keepEntryIds=None):
+                              folderEntryIds=None, folderTerms=None, keepEntryIds=None, page=None):
+    inventoryId(jobId)
+    with inventoryDb(settings) as connection:
+        connection.execute('BEGIN')
+        job = _row(connection, jobId)
+        if job['actor_id'] != actorId:
+            raise CloudInventoryError('job_not_found')
+        requireCloudActor(connection, actorId)
+        return cloudInventoryAdviceTx(connection, job, afterId=afterId, limit=limit,
+            folderEntryIds=folderEntryIds, folderTerms=folderTerms, keepEntryIds=keepEntryIds, page=page)
+
+
+def cloudInventoryAdviceTx(connection, job, *, afterId=0, limit=100,
+                           folderEntryIds=None, folderTerms=None, keepEntryIds=None, page=None):
+    """上层在同一只读快照核对原任务和当前授权；规则不另建副本。"""
+    jobId = job['id']
     approved = _ids([] if folderEntryIds is None else folderEntryIds)
     kept = _ids([] if keepEntryIds is None else keepEntryIds)
     terms = _terms([] if folderTerms is None else folderTerms)
-    page = cloudInventoryEntries(settings, jobId, actorId, afterId=afterId, limit=limit)
-    summary = cloudInventorySummary(settings, jobId, actorId)
-    pageIds = {item["id"] for item in page["items"]}
-    if not approved.issubset({item["id"] for item in page["items"] if item["isDirectory"]}) or not kept.issubset(pageIds):
+    afterId, pagination = inventoryPageWindowTx(connection, job, afterId=afterId, limit=limit, page=page)
+    observations = cloudInventoryEntriesTx(connection, job, afterId=afterId, limit=limit)
+    summary = cloudInventorySummaryTx(connection, job)
+    pageIds = {item["id"] for item in observations["items"]}
+    if not approved.issubset({item["id"] for item in observations["items"] if item["isDirectory"]}) or not kept.issubset(pageIds):
         raise ValueError("明确选中的目录及保留例外须属于本页观察")
     items = []
-    with inventoryDb(settings) as connection:
-        connection.execute("BEGIN")
-        current = connection.execute("SELECT revision,cache_state FROM cloud_drive_inventory_jobs WHERE id=?", (jobId,)).fetchone()
-        if current["cache_state"] != "available":
-            raise CloudInventoryError("observations_" + current["cache_state"])
-        if current["revision"] != summary["revision"]:
-            raise CloudInventoryError("revision_conflict")
-        persisted = {row[0] for row in connection.execute("SELECT entry_id FROM cloud_drive_inventory_keeps WHERE job_id=? "
-            "AND entry_id>? ORDER BY entry_id LIMIT 200", (jobId, afterId)) if row[0] in pageIds}
-        kept |= persisted
-        rulesHash = sha256(json.dumps([RULE_VERSION, terms, sorted(approved), sorted(kept)], ensure_ascii=False,
-                                     separators=(",", ":")).encode()).hexdigest()
-        for item in page["items"]:
-            protection = "user_keep" if item["id"] in kept else _protected(item)
-            reasons = []
-            if not protection:
-                if any(term in item["name"] for term in _PROMOTION):
-                    reasons.append("promotional_phrase")
-                if _URL.search(item["name"]):
-                    reasons.append("domain_or_url_in_name")
-            folder = _folderSuggestion(item, approved, terms, protection) if item["isDirectory"] else None
-            if folder and not summary["pathCurrent"]:
-                folder = {"status": "blocked", "proposedName": None, "reason": "path_revision_changed"}
-            if folder and folder["status"] == "suggested":
-                parent = item["relativePath"].rpartition("/")[0]
-                relative = (parent + "/" if parent else "") + folder["proposedName"]
-                exists = connection.execute("SELECT 1 FROM cloud_drive_inventory_entries WHERE job_id=? AND path=? LIMIT 1",
-                    (jobId, summary["approvedRoot"] + "/" + relative)).fetchone()
-                if exists:
-                    folder.update(status="blocked", reason="observed_target_exists", conflict="observed_target_exists")
-            items.append({**item, "decision": "review" if reasons else "keep", "protection": protection,
-                "evidenceLevel": "medium" if len(reasons) > 1 else ("low" if reasons else "none"),
-                "reasons": reasons, "partialObservation": not item["directoryComplete"], "folderSuggestion": folder,
-                "userKept": item["id"] in persisted, "selected": False, "actionAvailable": False})
-    return {**page, "items": items, "jobRevision": summary["revision"], "ruleVersion": RULE_VERSION,
+    persisted = {row[0] for row in connection.execute("SELECT entry_id FROM cloud_drive_inventory_keeps WHERE job_id=? "
+        "AND entry_id>? ORDER BY entry_id LIMIT 200", (jobId, afterId)) if row[0] in pageIds}
+    kept |= persisted
+    rulesHash = sha256(json.dumps([RULE_VERSION, terms, sorted(approved), sorted(kept)], ensure_ascii=False,
+                                 separators=(",", ":")).encode()).hexdigest()
+    for item in observations["items"]:
+        protection = "user_keep" if item["id"] in kept else _protected(item)
+        reasons = []
+        if not protection:
+            if any(term in item["name"] for term in _PROMOTION):
+                reasons.append("promotional_phrase")
+            if _URL.search(item["name"]):
+                reasons.append("domain_or_url_in_name")
+        folder = _folderSuggestion(item, approved, terms, protection) if item["isDirectory"] else None
+        if folder and not summary["pathCurrent"]:
+            folder = {"status": "blocked", "proposedName": None, "reason": "path_revision_changed"}
+        if folder and folder["status"] == "suggested":
+            parent = item["relativePath"].rpartition("/")[0]
+            relative = (parent + "/" if parent else "") + folder["proposedName"]
+            exists = connection.execute("SELECT 1 FROM cloud_drive_inventory_entries WHERE job_id=? AND path=? LIMIT 1",
+                (jobId, summary["approvedRoot"] + "/" + relative)).fetchone()
+            if exists:
+                folder.update(status="blocked", reason="observed_target_exists", conflict="observed_target_exists")
+        items.append({**item, "decision": "review" if reasons else "keep", "protection": protection,
+            "evidenceLevel": "medium" if len(reasons) > 1 else ("low" if reasons else "none"),
+            "reasons": reasons, "partialObservation": not item["directoryComplete"], "folderSuggestion": folder,
+            "userKept": item["id"] in persisted, "selected": False, "actionAvailable": False})
+    return {**observations, **pagination, "items": items, "jobRevision": summary["revision"], "ruleVersion": RULE_VERSION,
         "rulesHash": rulesHash, "freshness": "unknown", "contentReadBytes": 0,
         "externalSubmission": False, "writeAvailable": False, "keepExceptionsPersisted": False,
         "savedKeepScope": "current_job_entries"}

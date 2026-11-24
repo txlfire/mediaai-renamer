@@ -1,15 +1,16 @@
 import { createRenderer, nextTick, ssrContextKey } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DirectoryExecution, DirectoryExecutionPolicy, DirectoryPlan } from "../api/cloudDirectory";
+import type { DirectoryExecution, DirectoryExecutionPolicy, DirectoryPlan, DirectoryExecutionInput } from "../api/cloudDirectory";
 import { invalidateSessionRequests } from "../utils/sessionGeneration";
 
 const mocks = vi.hoisted(() => ({ policy: vi.fn(), start: vi.fn(), find: vi.fn(), cancel: vi.fn(), commit: vi.fn(),
-  persist: vi.fn(), permission: vi.fn(), confirm: vi.fn() }));
+  persist: vi.fn(), permission: vi.fn(), confirm: vi.fn(), boundPolicy: vi.fn(), boundStart: vi.fn() }));
 vi.mock("../api/cloudDirectory", () => ({ fetchDirectoryPolicy: mocks.policy, startDirectoryExecution: mocks.start,
   findDirectoryExecution: mocks.find, cancelDirectoryExecution: mocks.cancel, commitDirectoryLocally: mocks.commit }));
 vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: mocks.permission }) }));
 vi.mock("element-plus", () => ({ ElMessageBox: { confirm: mocks.confirm } }));
 vi.mock("./OperationLogDrawer.vue", () => ({ default: { render: () => null } }));
+vi.mock("../api/cloudBoundActions", () => ({ fetchBoundDirectoryPolicy: mocks.boundPolicy, startBoundDirectoryExecution: mocks.boundStart, startBoundDirectoryRecovery: vi.fn() }));
 import DirectoryExecutionDialog from "./DirectoryExecutionDialog.vue";
 
 type Node = { children: Node[] };
@@ -32,12 +33,18 @@ const execution: DirectoryExecution = { planId, requestId, status: "accepted", r
   usedRpc: 0, maxRpc: 10, receivedBytes: 0, maxBytes: 1048576, createdAt: 1792100000, expiresAt: 1792100180,
   items: [{ ordinal: 1, sourceName: plan.items[0]!.sourceName, targetName: "示例", state: "not_started", reason: null,
     sentAt: null, verifiedAt: null }], events: [], networkAccess: false, replayed: false };
+const source = { connectionId: "42345678-1234-1234-1234-123456789abc", directoryProfileId: "52345678-1234-1234-1234-123456789abc", selectedPath: plan.parentPath,
+  connectionName: "原公司", directoryName: "原电影", currentConnectionName: "公司新名", currentDirectoryName: "电影新名" };
+const nativeContext = "62345678-1234-1234-1234-123456789abc";
+const boundPlan: DirectoryPlan = { ...plan, bindingState: "bound", contextId: planId, source };
+const boundExecution: DirectoryExecution = { ...execution, contextId: nativeContext, source };
 type State = { tokenValue: string; maintenance: boolean; globalFence: boolean; requestId: string;
   execution: DirectoryExecution | null; errorText: string; canStart: boolean; busy: boolean;
   canViewLogs: boolean;
   start: () => Promise<void>; lookup: () => Promise<void>; loadPolicy: () => Promise<void>; close: () => void;
   hidden: () => void; acknowledge: () => Promise<void>; act: (kind: "cancel" | "commit") => Promise<void> };
 let app: ReturnType<typeof renderer.createApp>, state: State;
+let sentStart: DirectoryExecutionInput | null;
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); await nextTick(); };
 function mount(overrides = {}) {
   app = renderer.createApp(DirectoryExecutionDialog, { visible: true, plan, requestId: "", persistRequestId: mocks.persist, ...overrides });
@@ -50,10 +57,13 @@ describe("controlled directory execution dialog", () => {
   beforeEach(async () => {
     vi.useFakeTimers(); vi.clearAllMocks(); vi.stubGlobal("location", { protocol: "https:" });
     vi.stubGlobal("crypto", { randomUUID: () => requestId });
-    mocks.policy.mockReset().mockResolvedValue(policy); mocks.start.mockReset().mockResolvedValue(execution);
+    sentStart = null;
+    mocks.policy.mockReset().mockResolvedValue(policy); mocks.start.mockReset().mockImplementation(async (_id, input) => { sentStart = { ...input }; return execution; });
     mocks.find.mockReset().mockResolvedValue(execution); mocks.cancel.mockReset().mockResolvedValue({ ...execution, cancelRequested: true, revision: 1 });
     mocks.commit.mockReset().mockResolvedValue({ ...execution, status: "completed", revision: 2, workerSlotHeld: false, globalSlotHeld: false, pollingRecommended: false });
     mocks.persist.mockReset().mockResolvedValue(undefined); mocks.permission.mockReset().mockReturnValue(true); mocks.confirm.mockResolvedValue("confirm");
+    mocks.boundPolicy.mockReset().mockResolvedValue({ ...policy, ...source, revisions: {}, writeAvailable: false });
+    mocks.boundStart.mockReset().mockResolvedValue({ id: planId, contextId: nativeContext, requestId, resourceId: planId, resourceKind: "directory_execute", revision: 0, replayed: false, source, status: "accepted", networkAccess: null });
     mount(); await flush();
   });
   afterEach(() => { app.unmount(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -64,12 +74,39 @@ describe("controlled directory execution dialog", () => {
     expect(mocks.persist).toHaveBeenCalledExactlyOnceWith(requestId);
     expect(mocks.persist.mock.invocationCallOrder[0]).toBeLessThan(mocks.start.mock.invocationCallOrder[0]!);
     expect(mocks.start).toHaveBeenCalledExactlyOnceWith(planId, { requestId, expectedRevision: 0, policyHash: plan.policyHash,
+      confirmMaintenance: true, confirmGlobalFence: true, apiToken: "" });
+    expect(sentStart).toEqual({ requestId, expectedRevision: 0, policyHash: plan.policyHash,
       confirmMaintenance: true, confirmGlobalFence: true, apiToken: "synthetic-limited-secret" });
     expect(state.tokenValue).toBe(""); expect(state.canStart).toBe(false); await state.start(); expect(mocks.start).toHaveBeenCalledTimes(1);
   });
   it("never submits after marker persistence fails", async () => {
     mocks.persist.mockRejectedValueOnce(new Error("navigation")); fill(); await state.start();
     expect(mocks.start).not.toHaveBeenCalled(); expect(state.requestId).toBe(requestId); expect(state.tokenValue).toBe("");
+  });
+  it("多连接政策取自原计划，受理后查询原UUID而非直接解释小回执", async () => {
+    app.unmount(); mocks.policy.mockClear(); mocks.find.mockResolvedValue(boundExecution); mount({ plan: boundPlan }); await flush(); fill();
+    let sent: Record<string, unknown> | null = null;
+    mocks.boundStart.mockImplementationOnce(async (_id, _source, input) => { sent = { ...input }; return { id: planId, contextId: nativeContext }; });
+    await state.start(); expect(mocks.policy).not.toHaveBeenCalled(); expect(mocks.boundPolicy).toHaveBeenCalledExactlyOnceWith(source);
+    expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.boundStart).toHaveBeenCalledWith(planId, source, expect.objectContaining({ requestId, apiToken: "" }));
+    expect(sent).toMatchObject({ requestId, apiToken: "synthetic-limited-secret", expectedRevision: 0 });
+    expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId); expect(state.execution?.contextId).toBe(nativeContext);
+  });
+  it("未绑定或部分绑定计划不读取单例政策、不交接令牌", async () => {
+    for (const value of [{ ...plan, bindingState: "legacy_unbound", contextId: null, source: null }, { ...plan, bindingState: "bound", contextId: planId }]) {
+      app.unmount(); mocks.policy.mockClear(); mocks.boundPolicy.mockClear(); mount({ plan: value }); await flush(); fill(); await state.start();
+      expect(state.canStart).toBe(false); expect(mocks.policy).not.toHaveBeenCalled(); expect(mocks.boundPolicy).not.toHaveBeenCalled();
+    }
+    expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.boundStart).not.toHaveBeenCalled();
+  });
+  it("原来源政策返回另一目录时拒绝执行", async () => {
+    app.unmount(); mocks.boundPolicy.mockResolvedValueOnce({ ...policy, ...source, directoryProfileId: nativeContext }); mount({ plan: boundPlan }); await flush(); fill(); await state.start();
+    expect(state.canStart).toBe(false); expect(mocks.boundStart).not.toHaveBeenCalled();
+  });
+  it("原请求状态的context或来源不对应受理回执时拒绝展示为成功", async () => {
+    app.unmount(); mocks.find.mockResolvedValueOnce({ ...boundExecution, contextId: planId }); mount({ plan: boundPlan }); await flush(); fill(); await state.start();
+    expect(state.execution).toBeNull(); expect(state.errorText).not.toBe(""); expect(state.requestId).toBe(requestId);
+    mocks.find.mockResolvedValueOnce({ ...boundExecution, source: { ...source, connectionId: nativeContext } }); await state.lookup(); expect(state.execution).toBeNull();
   });
   it("keeps a newer execution marker when an old acknowledgement fails", async () => {
     mocks.start.mockResolvedValueOnce({ ...execution, status: "completed", workerSlotHeld: false, globalSlotHeld: false, pollingRecommended: false });
@@ -101,6 +138,16 @@ describe("controlled directory execution dialog", () => {
     app.unmount(); mount({ requestId }); await flush();
     expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.find).not.toHaveBeenCalled();
     await state.lookup(); expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId);
+  });
+  it("reopening reads the original request, then observes it without any write", async () => {
+    app.unmount(); mocks.policy.mockClear(); mount({ visible: false, requestId });
+    await flush(); expect(mocks.find).not.toHaveBeenCalled();
+    app._instance!.props.visible = true; await flush();
+    expect(mocks.find).toHaveBeenCalledExactlyOnceWith(requestId);
+    expect(state.execution?.status).toBe("accepted");
+    await vi.advanceTimersByTimeAsync(1500); expect(mocks.find).toHaveBeenCalledTimes(2);
+    expect(mocks.policy).not.toHaveBeenCalled(); expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.boundStart).not.toHaveBeenCalled(); expect(mocks.persist).not.toHaveBeenCalled();
   });
   it("bounds local event polling to 1500ms and stops on completion or malformed response", async () => {
     fill(); await state.start(); await vi.advanceTimersByTimeAsync(1499); expect(mocks.find).not.toHaveBeenCalled();

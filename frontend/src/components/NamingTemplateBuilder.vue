@@ -3,7 +3,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import Sortable from "sortablejs";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { zhCnMessages } from "../locales/zh-CN";
 import {
   buildNamingPreview,
   buildNamingElementPreview,
@@ -22,7 +23,8 @@ import {
   validateNamingElements,
 } from "../utils/namingBuilder";
 
-const text = messages.settings.naming;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.settings.naming);
 
 const props = defineProps<{
   movieElements: NamingTemplateElement[];
@@ -59,10 +61,10 @@ const contextMenu = reactive({
 let sortable: Sortable | null = null;
 
 const currentElements = computed(() => (activeType.value === "movie" ? props.movieElements : props.episodeElements));
-const currentErrors = computed(() => validateNamingElements(currentElements.value, text));
-const currentWarnings = computed(() => detectNamingSemanticWarnings(currentElements.value, text));
-const currentPreview = computed(() => buildNamingPreview(currentElements.value, props.separator, text, activeType.value));
-const separatorError = computed(() => validateNamingSeparator(props.separator, text));
+const currentErrors = computed(() => validateNamingElements(currentElements.value, text.value));
+const currentWarnings = computed(() => detectNamingSemanticWarnings(currentElements.value, text.value));
+const currentPreview = computed(() => buildNamingPreview(currentElements.value, props.separator, text.value, activeType.value));
+const separatorError = computed(() => validateNamingSeparator(props.separator, text.value));
 const selectedPreset = computed({
   get: () => selectedPresets[activeType.value],
   set: (value: string) => {
@@ -75,12 +77,12 @@ const presetOptions = computed(() =>
     label: presetLabel(value),
   })),
 );
-const bracketStyleOptions: Array<{ label: string; value: NonNullable<NamingElementFormat["bracketStyle"]> }> = [
-  { label: text.bracketStyles.none, value: "none" },
-  { label: text.bracketStyles.square, value: "square" },
-  { label: text.bracketStyles.round, value: "round" },
-  { label: text.bracketStyles.curly, value: "curly" },
-];
+const bracketStyleOptions = computed<Array<{ label: string; value: NonNullable<NamingElementFormat["bracketStyle"]> }>>(() => [
+  { label: text.value.bracketStyles.none, value: "none" },
+  { label: text.value.bracketStyles.square, value: "square" },
+  { label: text.value.bracketStyles.round, value: "round" },
+  { label: text.value.bracketStyles.curly, value: "curly" },
+]);
 
 const elementGroups = computed(() => {
   return Object.entries(
@@ -89,11 +91,20 @@ const elementGroups = computed(() => {
       groups[item.category].push(item);
       return groups;
     }, {}),
-  ).map(([key, items]) => ({ key, label: text.categories[key as keyof typeof text.categories] || key, items }));
+  ).map(([key, items]) => ({ key, label: text.value.categories[key as keyof typeof text.value.categories] || key, items }));
 });
 
+function displayedElementLabel(element: NamingTemplateElement) {
+  const definition = NAMING_ELEMENT_DEFINITIONS.find((item) => item.key === element.key);
+  // 只翻译内置标签，保留导入模板的自定义标签和序列化结果。
+  if (!definition || element.label !== elementLabel(definition, zhCnMessages.settings.naming)) {
+    return element.label;
+  }
+  return elementLabel(definition, text.value);
+}
+
 function presetLabel(value: string) {
-  return text.presets[value as keyof typeof text.presets] || value;
+  return text.value.presets[value as keyof typeof text.value.presets] || value;
 }
 
 function emitElements(elements: NamingTemplateElement[]) {
@@ -118,10 +129,10 @@ function baseVariable(variable: string) {
 function addElement(definition: NamingElementDefinition) {
   const duplicate = currentElements.value.some((element) => baseVariable(element.variable) === definition.variable);
   if (duplicate) {
-    ElMessage.warning(text.duplicateElement);
+    ElMessage.warning(text.value.duplicateElement);
     return;
   }
-  emitElements([...cloneElements(currentElements.value), createNamingElement(definition.key, text)]);
+  emitElements([...cloneElements(currentElements.value), createNamingElement(definition.key, zhCnMessages.settings.naming)]);
 }
 
 async function applyPreset(value: string) {
@@ -129,19 +140,19 @@ async function applyPreset(value: string) {
     return;
   }
   try {
-    await ElMessageBox.confirm(text.presetConfirm, text.presetConfirmTitle, {
-      confirmButtonText: messages.common.confirm,
-      cancelButtonText: messages.common.cancel,
+    await ElMessageBox.confirm(text.value.presetConfirm, text.value.presetConfirmTitle, {
+      confirmButtonText: messages.value.common.confirm,
+      cancelButtonText: messages.value.common.cancel,
       type: "warning",
     });
-    emitElements(elementsFromPreset(activeType.value, value, text));
+    emitElements(elementsFromPreset(activeType.value, value, zhCnMessages.settings.naming));
   } catch {
     selectedPreset.value = "standard";
   }
 }
 
 function resetCurrentPreset() {
-  emitElements(elementsFromPreset(activeType.value, selectedPreset.value || "standard", text));
+  emitElements(elementsFromPreset(activeType.value, selectedPreset.value || "standard", zhCnMessages.settings.naming));
 }
 
 function removeElement(index: number) {
@@ -249,7 +260,7 @@ function updateBracketStyle(index: number, value: string) {
 }
 
 function elementFormatPreview(element: NamingTemplateElement) {
-  return buildNamingElementPreview(element, text);
+  return buildNamingElementPreview(element, text.value);
 }
 
 function showContextMenu(event: MouseEvent | KeyboardEvent, index: number) {
@@ -383,13 +394,13 @@ onBeforeUnmount(() => {
                   @keydown.shift.f10.stop="showContextMenu($event, index)"
                   @contextmenu.stop="showContextMenu($event, index)"
                 >
-                  <span>{{ element.label }}</span>
+                  <span>{{ displayedElementLabel(element) }}</span>
                   <small>{ {{ element.variable }} }</small>
                 </button>
                 <button
                   class="naming-builder-token-remove"
                   type="button"
-                  :aria-label="`${text.removeElement}：${element.label}`"
+                  :aria-label="`${text.removeElement}：${displayedElementLabel(element)}`"
                   @click.stop="removeElement(index)"
                 >
                   ×

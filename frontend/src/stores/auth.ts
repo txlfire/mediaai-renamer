@@ -12,7 +12,7 @@ import {
   resetAdminPassword as resetAdminPasswordApi,
   type AuthUser,
 } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 import { resetWorkspaceState } from "./workspace";
 import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 
@@ -65,7 +65,7 @@ export const useAuthStore = defineStore("auth", {
         this.currentUser = user;
       } catch (error) {
         if (generation !== getSessionGeneration()) return;
-        this.clearSession(error instanceof Error ? error.message : messages.auth.sessionExpired);
+        this.clearSession(error instanceof Error ? error.message : getInterfaceMessages().auth.sessionExpired);
       } finally {
         if (generation === getSessionGeneration()) this.loading = false;
       }
@@ -81,7 +81,7 @@ export const useAuthStore = defineStore("auth", {
         this.currentUser = result.user;
       } catch (error) {
         if (generation !== getSessionGeneration()) throw error;
-        this.clearSession(error instanceof Error ? error.message : messages.auth.loginFailed);
+        this.clearSession(error instanceof Error ? error.message : getInterfaceMessages().auth.loginFailed);
         throw error;
       } finally {
         if (generation === getSessionGeneration()) this.loading = false;
@@ -100,7 +100,7 @@ export const useAuthStore = defineStore("auth", {
         this.currentUser = result.user;
       } catch (error) {
         if (generation !== getSessionGeneration()) throw error;
-        this.clearSession(error instanceof Error ? error.message : messages.auth.bootstrapFailed);
+        this.clearSession(error instanceof Error ? error.message : getInterfaceMessages().auth.bootstrapFailed);
         throw error;
       } finally {
         if (generation === getSessionGeneration()) this.loading = false;
@@ -116,7 +116,7 @@ export const useAuthStore = defineStore("auth", {
         this.clearSession();
       } catch (error) {
         if (generation !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.auth.changePasswordFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().auth.changePasswordFailed;
         throw error;
       } finally {
         if (generation === getSessionGeneration()) this.loading = false;
@@ -131,7 +131,7 @@ export const useAuthStore = defineStore("auth", {
         await sessionRequest(resetAdminPasswordApi(), generation);
       } catch (error) {
         if (generation !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.auth.resetAdminPasswordFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().auth.resetAdminPasswordFailed;
         throw error;
       } finally {
         if (generation === getSessionGeneration()) this.loading = false;

@@ -53,6 +53,7 @@ $Arguments = @(
     $HostName,
     "--port",
     "$Port",
+    "--strictPort",
     "--config",
     "frontend/vite.config.ts"
 )

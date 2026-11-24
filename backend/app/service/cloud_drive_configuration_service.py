@@ -52,6 +52,9 @@ def _parse(values):
 
 
 def _read(connection):
+    from app.core.cloud_connection_schema import cloudMultiStoragePresent
+    if cloudMultiStoragePresent(connection):
+        raise CloudConfigurationError("multi_connection_required")
     row = connection.execute("SELECT revision,values_json,updated_at FROM cloud_drive_configuration WHERE id=1").fetchone()
     if row is None or type(row[0]) is not int or row[0] < 0:
         raise CloudConfigurationError("configuration_unavailable")
@@ -83,6 +86,21 @@ def resolveCloudDriveSettings(settings, *, expectedRevision=None):
 
 
 def requireCloudConfigurationRevision(settings, connection):
+    from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeFactsTx
+    if isinstance(settings, BoundNativeCloudSettings):
+        requireNativeFactsTx(settings, connection)
+        return
+    from app.service.cloud_connection_diagnostic_service import BoundDiagnosticSettings, requireDiagnosticFactsTx
+    if isinstance(settings, BoundDiagnosticSettings):
+        requireDiagnosticFactsTx(settings, connection)
+        return
+    from app.service.cloud_bound_runtime_service import BoundCloudSettings, requireBoundRuntimeTx
+    if isinstance(settings, BoundCloudSettings):
+        requireBoundRuntimeTx(settings, connection)
+        return
+    from app.core.cloud_connection_schema import cloudMultiStoragePresent
+    if cloudMultiStoragePresent(connection):
+        raise CloudConfigurationError("multi_connection_required")
     revision = settings.cloudDrive.configurationRevision
     # 显式构造的离线服务单元测试快照没有数据库修订；网页及子进程不使用此路径。
     if revision is not None:
@@ -100,6 +118,7 @@ def cloudConfigurationReference(settings):
 
 def _blocked(connection):
     from app.service.file_task_queue_service import TASKS
+    from app.service.cloud_directory_recovery_evidence import UNRECONCILED_DIRECTORY_READ_RPC
     checks = (
         "SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1",
         "SELECT 1 FROM cloud_directory_probe_leases LIMIT 1",
@@ -108,7 +127,7 @@ def _blocked(connection):
         "SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 OR worker_pid IS NOT NULL LIMIT 1",
         "SELECT 1 FROM cloud_quarantine_runs WHERE slot_held=1 OR worker_pid IS NOT NULL LIMIT 1",
         "SELECT 1 FROM cloud_directory_rpc_intents WHERE phase IN ('sending','unknown') AND reviewed_by_recovery IS NULL LIMIT 1",
-        "SELECT 1 FROM cloud_directory_recovery_rpcs WHERE phase IN ('sending','unknown') LIMIT 1",
+        'SELECT 1 FROM cloud_directory_recovery_rpcs n WHERE ' + UNRECONCILED_DIRECTORY_READ_RPC + ' LIMIT 1',
         "SELECT 1 FROM cloud_quarantine_rpcs WHERE phase IN ('sending','unknown') AND reviewed_by_run IS NULL LIMIT 1",
         "SELECT 1 FROM scan_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1",
         "SELECT 1 FROM background_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1",
@@ -136,6 +155,10 @@ def getCloudDriveConfiguration(settings):
     try:
         with closing(_connect(settings)) as connection:
             connection.execute("BEGIN")
+            from app.core.cloud_connection_schema import cloudMultiStoragePresent
+            if cloudMultiStoragePresent(connection):
+                return {"source": "legacy", "migrationRequired": True, "networkAccess": False,
+                        "settingsUrl": "/api/settings/cloud-connections", "reason": "multi_connection_required"}
             config, updated = _read(connection)
             return _view(config, updated, _blocked(connection))
     except (sqlite3.Error, OSError) as exc:
@@ -145,7 +168,6 @@ def getCloudDriveConfiguration(settings):
 
 
 def saveCloudDriveConfiguration(settings, *, values, expectedRevision, auditContext):
-    config = _parse(values)
     if type(expectedRevision) is not int or not 0 <= expectedRevision < 2**63 - 1:
         raise CloudConfigurationError("invalid_revision")
     try:
@@ -159,6 +181,7 @@ def saveCloudDriveConfiguration(settings, *, values, expectedRevision, auditCont
                 except CloudBudgetError:
                     raise CloudConfigurationError("configuration_permission_denied") from None
                 old, _ = _read(connection)
+                config = _parse(values)
                 if old.configurationRevision != expectedRevision:
                     raise CloudConfigurationError("configuration_changed")
                 if _blocked(connection):

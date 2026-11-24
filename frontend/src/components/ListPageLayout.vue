@@ -2,7 +2,9 @@
 import { ArrowDown, ArrowUp, MoreFilled } from "@element-plus/icons-vue";
 import { computed, ref, useSlots } from "vue";
 
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+
+const { messages } = useInterfaceLanguage();
 
 const props = withDefaults(
   defineProps<{
@@ -11,6 +13,7 @@ const props = withDefaults(
     collapsibleFilters?: boolean;
     defaultFiltersExpanded?: boolean;
     titleCardMode?: "standalone" | "merged";
+    flatTable?: boolean;
   }>(),
   {
     collapsibleFilters: false,
@@ -53,10 +56,10 @@ function toggleFilters() {
           >
             {{ filtersExpanded ? messages.common.collapse : messages.common.expand }}
           </el-button>
-          <div class="list-query-actions">
+          <div v-if="slots.queryAction" class="list-query-actions">
             <slot name="queryAction" />
           </div>
-          <div class="list-filter-actions">
+          <div v-if="slots.filterActions" class="list-filter-actions">
             <slot name="filterActions" />
           </div>
         </div>
@@ -75,10 +78,10 @@ function toggleFilters() {
       >
         {{ filtersExpanded ? messages.common.collapse : messages.common.expand }}
       </el-button>
-      <div class="list-query-actions">
+      <div v-if="slots.queryAction" class="list-query-actions">
         <slot name="queryAction" />
       </div>
-      <div class="list-filter-actions">
+      <div v-if="slots.filterActions" class="list-filter-actions">
         <slot name="filterActions" />
       </div>
     </div>
@@ -106,7 +109,7 @@ function toggleFilters() {
 
     <slot />
 
-    <el-card v-if="hasTable" class="list-table-card" shadow="never">
+    <el-card v-if="hasTable" class="list-table-card" :class="{ 'is-flat-table': flatTable }" shadow="never">
       <slot name="table" />
       <slot name="pagination" />
     </el-card>

@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { ArrowLeft, ArrowRight, Download, FolderChecked, Plus, Refresh, View } from "@element-plus/icons-vue";
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import FullscreenTablePanel from "./FullscreenTablePanel.vue";
+import TablePagination from "./TablePagination.vue";
+import { Download, FolderChecked, Plus, Refresh, View } from "@element-plus/icons-vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
 import { findAdReview, listAdReviews, saveAdReview, type AdDecision, type AdReview, type AdReviewHistory } from "../api/cloudAdReview";
 import { InventoryRequestError, type InventoryAdviceItem } from "../api/cloudInventory";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
 import { buildAdReviewCsv } from "../utils/cloudAdReviewCsv";
 import { formatDateTime } from "../utils/displayFormat";
 import TextCell from "./TextCell.vue";
 import { useAuthStore } from "../stores/auth";
+import CloudHistoryFilter from "./CloudHistoryFilter.vue";
+import CloudTaskSourceSummary from "./CloudTaskSourceSummary.vue";
+import type { CloudHistoryFilter as HistoryFilter } from "../utils/cloudHistorySource";
+import { useTableRowSelection } from "../utils/tableRowSelection";
 
 const props = defineProps<{ visible: boolean; jobId: string; revision: number; items: InventoryAdviceItem[];
   available: boolean; requestId: string; initialHistory?: boolean; persistRequestId: (id: string) => Promise<void> }>();
 const emit = defineEmits<{ "update:visible": [value: boolean]; quarantine:[review:AdReview,entryIds:number[]] }>();
 const auth=useAuthStore();
+const { table: resultTable, toggleByRowClick: toggleResultRow } = useTableRowSelection<AdReview["items"][number]>(
+  () => auth.hasPermission("cloud-quarantine:plan"),
+);
+const { table: draftTable, toggleByRowClick: toggleDraftRow } = useTableRowSelection<InventoryAdviceItem>();
 const quarantineSelection=ref<number[]>([]);
 function quarantineSelectable(item:AdReview["items"][number]){
   return !!visibleResult.value?.sourceCurrent && !busy.value && auth.hasPermission("cloud-quarantine:plan")
@@ -27,7 +38,8 @@ function prepareQuarantine(){
     ||!ids.every(id=>review.items.some(i=>i.entryId===id&&quarantineSelectable(i))))return;
   emit("quarantine",review,[...ids]);
 }
-const text = messages.cloudInventory.adReview;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.cloudInventory.adReview);
 type Draft = { entryId: number; decision: AdDecision; reason: string };
 const tab = ref("draft");
 const draft = ref<Record<number, Draft>>({});
@@ -38,6 +50,7 @@ const errorText = ref("");
 const result = ref<AdReview | null>(null);
 const history = ref<AdReviewHistory | null>(null);
 const page = ref(1);
+const historyFilter = ref<HistoryFilter>({});
 let active = true, generation = 0, session = getSessionGeneration();
 let ownMarker: string | null = null;
 const visibleResult = computed(() => result.value?.requestId === props.requestId ? result.value : null);
@@ -48,10 +61,12 @@ const maySave = computed(() => props.available && !props.requestId && !busy.valu
     const item = draft.value[id];
     return item && (!item.decision.startsWith("suggest_") || !!item.reason.trim());
   }));
-const reasonText = (code: string) => messages.cloudInventory.reasons[code as keyof typeof messages.cloudInventory.reasons] ?? code;
+const reasonText = (code: string) => messages.value.cloudInventory.reasons[code as keyof typeof messages.value.cloudInventory.reasons] ?? code;
 const dateText = (date: number) => formatDateTime(new Date(date * 1000).toISOString());
-const current = (token: number) => active && props.visible && token === generation && session === getSessionGeneration();
-const failureText = (error: unknown) => error instanceof InventoryRequestError ? error.message : text.failed;
+const readable = () => active && props.visible && session === getSessionGeneration() && auth.hasPermission("scan:run")
+  && (typeof document === "undefined" || !document.hidden);
+const current = (token: number) => readable() && token === generation;
+const failureText = (error: unknown) => error instanceof InventoryRequestError ? error.message : text.value.failed;
 
 function resetDraft() {
   selected.value = []; confirmed.value = false;
@@ -92,20 +107,25 @@ async function save() {
 }
 
 async function loadHistory() {
-  if (busy.value || session !== getSessionGeneration()) return;
+  if (busy.value || !readable()) return;
   const token = ++generation;
   busy.value = true; errorText.value = ""; history.value = null;
-  try { const value = await listAdReviews(page.value); if (current(token)) history.value = value; }
+  try { const value = historyFilter.value.connectionId ? await listAdReviews(page.value, historyFilter.value) : await listAdReviews(page.value); if (current(token)) history.value = value; }
   catch (error) { if (current(token) && !isSessionChangedError(error)) errorText.value = failureText(error); }
   finally { if (current(token)) busy.value = false; }
 }
 
+function filterHistory(value: HistoryFilter) {
+  if (!props.visible || busy.value || session !== getSessionGeneration()) return;
+  generation++; history.value = null; page.value = 1; historyFilter.value = { ...value }; void loadHistory();
+}
+
 async function choose(requestId: string) {
-  if (busy.value || !history.value?.items.some(item => item.requestId === requestId)) return;
+  if (busy.value || !readable() || !history.value?.items.some(item => item.requestId === requestId)) return;
   const token = ++generation;
   busy.value = true;
   try {
-    if (props.requestId && props.requestId !== requestId) await ElMessageBox.confirm(text.newConfirm, text.title, { type: "warning" });
+    if (props.requestId && props.requestId !== requestId) await ElMessageBox.confirm(text.value.newConfirm, text.value.title, { type: "warning" });
     if (!current(token)) return;
     result.value = null; errorText.value = "";
     ownMarker = requestId;
@@ -123,13 +143,13 @@ async function newDraft() {
   const token = ++generation;
   busy.value = true;
   try {
-    if (props.requestId) await ElMessageBox.confirm(text.newConfirm, text.title, { type: "warning" });
+    if (props.requestId) await ElMessageBox.confirm(text.value.newConfirm, text.value.title, { type: "warning" });
     if (!current(token)) return;
     ownMarker = "";
     await props.persistRequestId("");
     if (!current(token)) return;
     result.value = null; errorText.value = ""; tab.value = "draft"; resetDraft();
-  } catch (error) { if (current(token) && error !== "cancel" && error !== "close" && !isSessionChangedError(error)) errorText.value = text.failed; }
+  } catch (error) { if (current(token) && error !== "cancel" && error !== "close" && !isSessionChangedError(error)) errorText.value = text.value.failed; }
   finally { if (current(token)) busy.value = false; }
 }
 
@@ -141,7 +161,7 @@ function exportRecord() {
     url = URL.createObjectURL(new Blob([buildAdReviewCsv(record)], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a"); link.href = url; link.download = `ad-review-${record.id}.csv`;
     document.body.append(link); link.click(); link.remove();
-  } catch { errorText.value = text.exportFailed; }
+  } catch { errorText.value = text.value.exportFailed; }
   finally { if (url) { const downloadUrl = url; setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000); } }
 }
 
@@ -149,7 +169,7 @@ watch(() => props.visible, value => {
   ownMarker = null;
   generation += 1; busy.value = false; result.value = null; history.value = null; errorText.value = "";
   if (value) {
-    session = getSessionGeneration(); page.value = 1; resetDraft();
+    session = getSessionGeneration(); page.value = 1; historyFilter.value = {}; resetDraft();
     tab.value = props.initialHistory ? "history" : "draft";
     if (props.initialHistory) void loadHistory();
     else if (props.requestId) void loadRecord();
@@ -172,7 +192,11 @@ watch(() => props.requestId, value => {
   if (value && tab.value === "draft") void loadRecord();
 });
 watch(tab, value => { if (value === "history" && props.visible) void loadHistory(); });
-onUnmounted(() => { active = false; generation += 1; });
+function invalidateRead() { generation++; busy.value = false; history.value = null; result.value = null; resetDraft(); }
+function hidden() { if (document.hidden) invalidateRead(); }
+watch(() => [auth.currentUser?.id, auth.hasPermission("scan:run")], invalidateRead, { flush: "sync" });
+onMounted(() => { if (typeof document !== "undefined") document.addEventListener("visibilitychange", hidden); });
+onUnmounted(() => { active = false; generation += 1; if (typeof document !== "undefined") document.removeEventListener("visibilitychange", hidden); });
 </script>
 
 <template>
@@ -186,7 +210,9 @@ onUnmounted(() => { active = false; generation += 1; });
     </el-tabs>
     <div v-loading="busy" class="ad-review-content">
       <template v-if="tab === 'history'">
-        <el-table :data="history?.items ?? []" class="data-table" border height="280" :empty-text="text.none">
+        <CloudHistoryFilter :disabled="busy" @change="filterHistory" />
+        <FullscreenTablePanel variant="embedded"><el-table :data="history?.items ?? []" class="data-table" border height="280" :empty-text="text.none">
+          <el-table-column :label="messages.cloudHistory.source" min-width="260"><template #default="{ row }"><CloudTaskSourceSummary :value="row" compact /></template></el-table-column>
           <el-table-column :label="text.date" min-width="180"><template #default="{ row }">{{ dateText(row.createdAt) }}</template></el-table-column>
           <el-table-column :label="text.count" width="85" prop="itemCount" align="center" />
           <el-table-column :label="text.source" min-width="210"><template #default="{ row }">{{ row.sourceCurrent ? text.current : text.historical }}</template></el-table-column>
@@ -194,24 +220,28 @@ onUnmounted(() => { active = false; generation += 1; });
             <el-tooltip :content="messages.common.detail" :trigger-keys="[]"><el-button class="table-action-button action-view" text :icon="View" :disabled="busy" :aria-label="messages.common.detail" @click="choose(row.requestId)" /></el-tooltip>
           </template></el-table-column>
         </el-table>
-        <div class="ad-review-toolbar"><el-button :icon="Refresh" :disabled="busy" @click="loadHistory">{{ messages.common.refresh }}</el-button>
-          <el-button :icon="ArrowLeft" :disabled="busy || page <= 1" :aria-label="messages.common.previousPage" @click="page--; loadHistory()" />
-          <span>{{ page }}</span><el-button :icon="ArrowRight" :disabled="busy || page * 20 >= (history?.total ?? 0)" :aria-label="messages.common.nextPage" @click="page++; loadHistory()" /></div>
+        <TablePagination class="is-inset" :current-page="page" :total="history?.total ?? 0" :fixed-page-size="20" :disabled="busy"
+          @page-change="(nextPage) => { page = nextPage; loadHistory(); }">
+          <template #actions><el-button :icon="Refresh" :disabled="busy" @click="loadHistory">{{ messages.common.refresh }}</el-button></template>
+        </TablePagination>
+        </FullscreenTablePanel>
       </template>
       <template v-else-if="visibleResult">
         <p :class="visibleResult.sourceCurrent ? 'ad-review-hint' : 'ad-review-error'" role="status">{{ visibleResult.sourceCurrent ? text.current : text.historical }}</p>
         <p class="ad-review-id">{{ text.recordId }}: {{ visibleResult.id }}</p>
-        <el-table :key="visibleResult.id" :data="visibleResult.items" class="data-table" border height="300" @selection-change="selectQuarantine">
+        <FullscreenTablePanel variant="embedded"><el-table ref="resultTable" :key="visibleResult.id" :data="visibleResult.items"
+          class="data-table row-select-table" border height="300" @row-click="toggleResultRow" @selection-change="selectQuarantine">
           <el-table-column v-if="auth.hasPermission('cloud-quarantine:plan')" type="selection" width="44" :selectable="quarantineSelectable"/>
           <el-table-column :label="messages.cloudInventory.name" min-width="220"><template #default="{ row }"><TextCell :value="row.name" :max-length="45" /></template></el-table-column>
           <el-table-column :label="text.evidence" min-width="190"><template #default="{ row }">{{ row.protection ? reasonText(row.protection) : row.evidence.map(reasonText).join('；') || text.noEvidence }}</template></el-table-column>
           <el-table-column :label="messages.cloudInventory.decision" min-width="185"><template #default="{ row }">{{ text.decisions[row.decision as AdDecision] }}</template></el-table-column>
           <el-table-column :label="text.reason" min-width="220"><template #default="{ row }"><TextCell :value="row.reason || '—'" :max-length="45" /></template></el-table-column>
-        </el-table><p class="ad-review-hint">{{ text.immutable }}</p>
+        </el-table></FullscreenTablePanel><p class="ad-review-hint">{{ text.immutable }}</p>
       </template>
       <template v-else-if="!requestId">
         <p class="ad-review-hint">{{ formatMessage(text.selected, { count: selected.length }) }}</p>
-        <el-table :key="`${jobId}:${revision}`" :data="files" class="data-table" border height="320" :empty-text="text.noFiles" @selection-change="selectionChanged">
+        <FullscreenTablePanel variant="embedded"><el-table ref="draftTable" :key="`${jobId}:${revision}`" :data="files"
+          class="data-table row-select-table" border height="320" :empty-text="text.noFiles" @row-click="toggleDraftRow" @selection-change="selectionChanged">
           <el-table-column type="selection" width="44" :selectable="() => available && !busy" />
           <el-table-column :label="messages.cloudInventory.name" min-width="230"><template #default="{ row }"><TextCell :value="row.name" :max-length="45" /><p class="ad-review-evidence">{{ row.protection ? reasonText(row.protection) : row.reasons.map(reasonText).join('；') || text.noEvidence }}</p></template></el-table-column>
           <el-table-column :label="messages.cloudInventory.decision" min-width="210"><template #default="{ row }">
@@ -220,7 +250,7 @@ onUnmounted(() => { active = false; generation += 1; });
             </el-select>
           </template></el-table-column>
           <el-table-column :label="text.reason" min-width="250"><template #default="{ row }"><el-input v-if="draft[row.id]" v-model="draft[row.id]!.reason" :aria-label="`${row.name} ${text.reason}`" maxlength="500" :placeholder="text.reasonPlaceholder" :disabled="busy || !selected.includes(row.id)" @input="confirmed = false" /></template></el-table-column>
-        </el-table>
+        </el-table></FullscreenTablePanel>
         <el-checkbox v-model="confirmed" :disabled="busy || !available || !selected.length" class="ad-review-confirm">{{ text.confirm }}</el-checkbox>
       </template>
     </div>

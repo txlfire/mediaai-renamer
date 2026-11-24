@@ -35,49 +35,60 @@ def _original(connection, runId, actorId):
 
 
 def approveQuarantineObservation(settings, originalId, *, requestId, expectedRevision, confirmMaintenance, confirmRemoteIdle, auditContext):
+    with inventoryDb(settings, write=True) as connection:
+        return approveQuarantineObservationTx(settings, connection, originalId, requestId=requestId,
+            expectedRevision=expectedRevision, confirmMaintenance=confirmMaintenance,
+            confirmRemoteIdle=confirmRemoteIdle, auditContext=auditContext)
+
+
+def approveQuarantineObservationTx(settings, connection, originalId, *, requestId, expectedRevision,
+                                    confirmMaintenance, confirmRemoteIdle, auditContext,
+                                    runId=None, contextId=None, approvedAt=None):
     inventoryId(requestId)
     _limit(expectedRevision, 0, 2**63-1)
     if confirmMaintenance is not True or confirmRemoteIdle is not True or auditContext.actor is None:
         raise ValueError("须确认维护窗口、旧进程退出及原请求相关远端已静止")
-    with inventoryDb(settings, write=True) as connection:
-        original = _original(connection, originalId, auditContext.actor.id)
-        if original["revision"] != expectedRevision:
-            raise QuarantineError("revision_conflict")
-        if original["policy_hash"] != recoveryPolicyHash(settings):
-            raise QuarantineError("execution_policy_changed")
-        if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE request_id=?", (requestId,)).fetchone():
-            raise QuarantineError("execution_already_accepted")
-        if (connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE id<>? AND (slot_held=1 OR worker_pid IS NOT NULL) LIMIT 1", (originalId,)).fetchone()
-                or connection.execute("SELECT 1 FROM cloud_directory_executions WHERE slot_held=1 LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 OR worker_pid IS NOT NULL LIMIT 1").fetchone()):
-            raise QuarantineError("recovery_slot_busy")
-        actions._requireOtherWorkIdle(connection)
-        attempt = connection.execute("SELECT COUNT(*)+1 FROM cloud_quarantine_runs WHERE original_run_id=?", (originalId,)).fetchone()[0]
-        if attempt > 5:
-            raise QuarantineError("recovery_attempt_limit")
-        plan, snapshot = actions._snapshot(connection, original)
-        if sha256(plan["snapshot_json"].encode()).hexdigest() != plan["snapshot_hash"]:
-            raise QuarantineError("observation_changed")
-        now = _wallNow()
-        pool = _pool(settings, connection, now)
-        if now < pool["cooldown_until"] or (pool["state"] != "ready" and pool["pause_reason"] != "request_incomplete"):
-            raise QuarantineError("pool_not_ready")
-        maxRpc = 6+2*len(snapshot["items"])
-        if maxRpc*pool["min_interval"]+15 > OBSERVE_SECONDS:
-            raise QuarantineError("batch_exceeds_time_budget")
-        runId, token = str(uuid4()), str(uuid4())
-        logId = connection.execute("SELECT COALESCE(MAX(log_id),0)+1 FROM cloud_quarantine_runs").fetchone()[0]
-        connection.execute("INSERT INTO cloud_quarantine_runs "
-            "(id,request_id,plan_id,actor_id,kind,original_run_id,attempt,policy_hash,status,worker_token,owner_pid,owner_host,"
-            "max_rpc,max_bytes,log_id,basis_revision,basis_epoch,created_at,expires_at,updated_at) "
-            "VALUES(?,?,?,?,'observe',?,?,?,'accepted',?,?,?,?,?,?,?,?,?,?,?)",
-            (runId, requestId, original["plan_id"], original["actor_id"], originalId, attempt, original["policy_hash"], token,
-             os.getpid(), cloudDriveHostKey(), maxRpc, actions.MAX_BYTES, logId, original["revision"], cloudPathEpoch(connection)["revision"], now, now+OBSERVE_SECONDS, now))
-        if pool["state"] != "ready":
-            connection.execute("UPDATE cloud_drive_budget_pool SET state='ready',pause_reason=NULL,revision=revision+1,updated_at=? WHERE id=1", (now,))
-        actions._audit(settings, connection, actions._row(connection, runId), "observe_approved", auditContext,
-            {"newReadBudget": True, "attempt": attempt, "remoteIdleConfirmed": True, "originalOutcomeRewritten": False})
-        return runId, token
+    original = _original(connection, originalId, auditContext.actor.id)
+    if original["revision"] != expectedRevision:
+        raise QuarantineError("revision_conflict")
+    if original["policy_hash"] != recoveryPolicyHash(settings):
+        raise QuarantineError("execution_policy_changed")
+    if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE request_id=?", (requestId,)).fetchone():
+        raise QuarantineError("execution_already_accepted")
+    if (connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE id<>? AND (slot_held=1 OR worker_pid IS NOT NULL) LIMIT 1", (originalId,)).fetchone()
+            or connection.execute("SELECT 1 FROM cloud_directory_executions WHERE slot_held=1 LIMIT 1").fetchone()
+            or connection.execute("SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 OR worker_pid IS NOT NULL LIMIT 1").fetchone()):
+        raise QuarantineError("recovery_slot_busy")
+    actions._requireOtherWorkIdle(connection)
+    attempt = connection.execute("SELECT COUNT(*)+1 FROM cloud_quarantine_runs WHERE original_run_id=?", (originalId,)).fetchone()[0]
+    if attempt > 5:
+        raise QuarantineError("recovery_attempt_limit")
+    plan, snapshot = actions._snapshot(connection, original)
+    if sha256(plan["snapshot_json"].encode()).hexdigest() != plan["snapshot_hash"]:
+        raise QuarantineError("observation_changed")
+    now = _wallNow() if approvedAt is None else approvedAt
+    pool = _pool(settings, connection, now)
+    if now < pool["cooldown_until"] or (pool["state"] != "ready" and pool["pause_reason"] != "request_incomplete"):
+        raise QuarantineError("pool_not_ready")
+    maxRpc = 6+2*len(snapshot["items"])
+    if maxRpc*pool["min_interval"]+15 > OBSERVE_SECONDS:
+        raise QuarantineError("batch_exceeds_time_budget")
+    runId, token = runId or str(uuid4()), str(uuid4())
+    logId = connection.execute("SELECT COALESCE(MAX(log_id),0)+1 FROM cloud_quarantine_runs").fetchone()[0]
+    columns = ('id,request_id,plan_id,actor_id,kind,original_run_id,attempt,policy_hash,status,worker_token,owner_pid,owner_host,'
+               'max_rpc,max_bytes,log_id,basis_revision,basis_epoch,created_at,expires_at,updated_at')
+    values = (runId, requestId, original['plan_id'], original['actor_id'], 'observe', originalId, attempt,
+              original['policy_hash'], 'accepted', token, os.getpid(), cloudDriveHostKey(), maxRpc, actions.MAX_BYTES,
+              logId, original['revision'], cloudPathEpoch(connection)['revision'], now, now+OBSERVE_SECONDS, now)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_quarantine_runs({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    if pool["state"] != "ready":
+        connection.execute("UPDATE cloud_drive_budget_pool SET state='ready',pause_reason=NULL,revision=revision+1,updated_at=? WHERE id=1", (now,))
+    actions._audit(settings, connection, actions._row(connection, runId), "observe_approved", auditContext,
+        {"newReadBudget": True, "attempt": attempt, "remoteIdleConfirmed": True, "originalOutcomeRewritten": False})
+    return runId, token
 
 
 def requireObservationActive(settings, connection, row, now):
@@ -179,70 +190,80 @@ def _commitOriginal(settings, connection, original, positions, now, observedBy=N
 
 
 def commitQuarantineLocal(settings, runId, *, expectedRevision, confirmLocalOnly, actorId):
+    with inventoryDb(settings, write=True) as connection:
+        return commitQuarantineLocalTx(settings, connection, runId, expectedRevision=expectedRevision,
+            confirmLocalOnly=confirmLocalOnly, actorId=actorId)
+
+
+def commitQuarantineLocalTx(settings, connection, runId, *, expectedRevision, confirmLocalOnly, actorId):
     _limit(expectedRevision, 0, 2**63-1)
     if confirmLocalOnly is not True:
         raise ValueError("须确认仅提交本地修订，不发送云请求")
-    with inventoryDb(settings, write=True) as connection:
-        original = actions._owned(connection, runId, actorId)
-        actions._executePermission(connection, actorId)
-        if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE original_run_id=?", (runId,)).fetchone():
-            raise QuarantineError("path_commit_requires_review")
-        if original["committed_epoch"] is not None:
-            return original["committed_epoch"]
-        original = _original(connection, runId, actorId)
-        if original["revision"] != expectedRevision or original["policy_hash"] != recoveryPolicyHash(settings):
-            raise QuarantineError("revision_or_policy_changed")
-        if connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase!='responded'", (runId,)).fetchone():
-            raise QuarantineError("path_commit_requires_review")
-        _, snapshot = actions._snapshot(connection, original)
-        if snapshot["pathEpoch"] != cloudPathEpoch(connection)["revision"]:
-            raise QuarantineError("revision_or_policy_changed")
-        outcomes = connection.execute("SELECT * FROM cloud_quarantine_outcomes WHERE run_id=? ORDER BY ordinal", (runId,)).fetchall()
-        now = _wallNow()
-        if len(outcomes) != len(snapshot["items"]) or any(o["state"] not in {"verified","not_applied"} or not 0 <= now-o["verified_at"] <= 300 for o in outcomes):
-            raise QuarantineError("recovery_not_ready_or_stale")
-        positions = []
-        for outcome, item in zip(outcomes, snapshot["items"]):
-            parent = connection.execute("SELECT identity_json FROM cloud_quarantine_rpcs WHERE run_id=? AND request_path='/' "
-                "AND response_code='ok' AND phase='responded' ORDER BY ordinal LIMIT 1", (runId,)).fetchone()
-            positions.append({"ordinal": outcome["ordinal"], "position": "at_target" if outcome["state"] == "verified" else "at_source",
-                "remoteId": item["remoteId"], "sourcePath": item["sourcePath"], "targetPath": item["targetPath"],
-                "parentRemoteId": json.loads(parent[0])["objectId"]})
-        oldest = connection.execute("SELECT MIN(responded_at) FROM cloud_quarantine_rpcs WHERE run_id=? AND method='FindFileByPath'", (runId,)).fetchone()[0]
-        if oldest is None or not 0 <= now-oldest <= 300:
-            raise QuarantineError("recovery_not_ready_or_stale")
-        return _commitOriginal(settings, connection, original, positions, now)
+    original = actions._owned(connection, runId, actorId)
+    actions._executePermission(connection, actorId)
+    if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE original_run_id=?", (runId,)).fetchone():
+        raise QuarantineError("path_commit_requires_review")
+    if original["committed_epoch"] is not None:
+        return original["committed_epoch"]
+    original = _original(connection, runId, actorId)
+    if original["revision"] != expectedRevision or original["policy_hash"] != recoveryPolicyHash(settings):
+        raise QuarantineError("revision_or_policy_changed")
+    if connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase!='responded'", (runId,)).fetchone():
+        raise QuarantineError("path_commit_requires_review")
+    _, snapshot = actions._snapshot(connection, original)
+    if snapshot["pathEpoch"] != cloudPathEpoch(connection)["revision"]:
+        raise QuarantineError("revision_or_policy_changed")
+    outcomes = connection.execute("SELECT * FROM cloud_quarantine_outcomes WHERE run_id=? ORDER BY ordinal", (runId,)).fetchall()
+    now = _wallNow()
+    if len(outcomes) != len(snapshot["items"]) or any(o["state"] not in {"verified","not_applied"} or not 0 <= now-o["verified_at"] <= 300 for o in outcomes):
+        raise QuarantineError("recovery_not_ready_or_stale")
+    positions = []
+    for outcome, item in zip(outcomes, snapshot["items"]):
+        parent = connection.execute("SELECT identity_json FROM cloud_quarantine_rpcs WHERE run_id=? AND request_path='/' "
+            "AND response_code='ok' AND phase='responded' ORDER BY ordinal LIMIT 1", (runId,)).fetchone()
+        positions.append({"ordinal": outcome["ordinal"], "position": "at_target" if outcome["state"] == "verified" else "at_source",
+            "remoteId": item["remoteId"], "sourcePath": item["sourcePath"], "targetPath": item["targetPath"],
+            "parentRemoteId": json.loads(parent[0])["objectId"]})
+    oldest = connection.execute("SELECT MIN(responded_at) FROM cloud_quarantine_rpcs WHERE run_id=? AND method='FindFileByPath'", (runId,)).fetchone()[0]
+    if oldest is None or not 0 <= now-oldest <= 300:
+        raise QuarantineError("recovery_not_ready_or_stale")
+    return _commitOriginal(settings, connection, original, positions, now)
 
 
 def commitQuarantineObservation(settings, runId, *, expectedRevision, confirmLocalOnly, actorId):
+    with inventoryDb(settings, write=True) as connection:
+        return commitQuarantineObservationTx(settings, connection, runId, expectedRevision=expectedRevision,
+            confirmLocalOnly=confirmLocalOnly, actorId=actorId)
+
+
+def commitQuarantineObservationTx(settings, connection, runId, *, expectedRevision, confirmLocalOnly, actorId):
     _limit(expectedRevision, 0, 2**63-1)
     if confirmLocalOnly is not True:
         raise ValueError("须确认仅依据当前位置提交本地修订，不改原未知回执")
-    with inventoryDb(settings, write=True) as connection:
-        row = actions._owned(connection, runId, actorId)
-        actions._executePermission(connection, actorId)
-        if row["kind"] != "observe":
-            raise QuarantineError("not_found")
-        if row["committed_epoch"] is not None:
-            return row["committed_epoch"]
-        original = _original(connection, row["original_run_id"], actorId)
-        if (row["revision"] != expectedRevision or row["basis_revision"] != original["revision"]
-                or row["basis_epoch"] != cloudPathEpoch(connection)["revision"] or row["policy_hash"] != recoveryPolicyHash(settings)):
-            raise QuarantineError("revision_or_policy_changed")
-        now = _wallNow()
-        if (row["status"] != "review" or row["reason"] != "positions_observed" or row["cancel_requested"] or row["worker_pid"] is not None or row["slot_held"]
-                or connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE original_run_id=? AND attempt>?", (original["id"],row["attempt"])).fetchone()
-                or connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase!='responded'", (runId,)).fetchone()):
-            raise QuarantineError("recovery_not_ready_or_stale")
-        oldest = connection.execute("SELECT MIN(responded_at) FROM cloud_quarantine_rpcs WHERE run_id=? AND method='FindFileByPath'", (runId,)).fetchone()[0]
-        positions = json.loads(row["positions_json"] or "[]")
-        _, snapshot = actions._snapshot(connection, row)
-        if (oldest is None or not 0 <= now-oldest <= 300 or len(positions) != len(snapshot["items"])
-                or any(p["position"] not in {"at_source","at_target"} for p in positions)):
-            raise QuarantineError("recovery_not_ready_or_stale")
-        epoch = _commitOriginal(settings, connection, original, positions, now, runId)
-        connection.execute("UPDATE cloud_quarantine_runs SET committed_epoch=?,committed_at=?,revision=revision+1,updated_at=? WHERE id=?", (epoch,now,now,runId))
-        return epoch
+    row = actions._owned(connection, runId, actorId)
+    actions._executePermission(connection, actorId)
+    if row["kind"] != "observe":
+        raise QuarantineError("not_found")
+    if row["committed_epoch"] is not None:
+        return row["committed_epoch"]
+    original = _original(connection, row["original_run_id"], actorId)
+    if (row["revision"] != expectedRevision or row["basis_revision"] != original["revision"]
+            or row["basis_epoch"] != cloudPathEpoch(connection)["revision"] or row["policy_hash"] != recoveryPolicyHash(settings)):
+        raise QuarantineError("revision_or_policy_changed")
+    now = _wallNow()
+    if (row["status"] != "review" or row["reason"] != "positions_observed" or row["cancel_requested"] or row["worker_pid"] is not None or row["slot_held"]
+            or connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE original_run_id=? AND attempt>?", (original["id"],row["attempt"])).fetchone()
+            or connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase!='responded'", (runId,)).fetchone()):
+        raise QuarantineError("recovery_not_ready_or_stale")
+    oldest = connection.execute("SELECT MIN(responded_at) FROM cloud_quarantine_rpcs WHERE run_id=? AND method='FindFileByPath'", (runId,)).fetchone()[0]
+    positions = json.loads(row["positions_json"] or "[]")
+    _, snapshot = actions._snapshot(connection, row)
+    if (oldest is None or not 0 <= now-oldest <= 300 or len(positions) != len(snapshot["items"])
+            or any(p["position"] not in {"at_source","at_target"} for p in positions)):
+        raise QuarantineError("recovery_not_ready_or_stale")
+    epoch = _commitOriginal(settings, connection, original, positions, now, runId)
+    connection.execute("UPDATE cloud_quarantine_runs SET committed_epoch=?,committed_at=?,revision=revision+1,updated_at=? WHERE id=?", (epoch,now,now,runId))
+    return epoch
 
 
 def reversePlanInvalidReason(connection, row, snapshot):
@@ -266,68 +287,88 @@ def createReverseQuarantinePlan(settings, planId, *, requestId, expectedRevision
             if old["actor_id"] != plan["actor_id"] or old["request_hash"] != requestHash:
                 raise QuarantineError("request_conflict")
             return plans._view(connection, settings, old)
-        if plan["revision"] != expectedRevision or plan["policy_hash"] != recoveryPolicyHash(settings):
-            raise QuarantineError("revision_or_policy_changed")
-        from app.service.cloud_directory_guard import requireNoDirectoryExecution
-        requireNoDirectoryExecution(connection)
-        original = connection.execute("SELECT * FROM cloud_quarantine_runs WHERE plan_id=? AND kind='move'", (planId,)).fetchone()
-        epoch = cloudPathEpoch(connection)["revision"]
-        if original is None or original["committed_epoch"] != epoch or original["slot_held"] or original["worker_pid"] is not None:
-            raise QuarantineError("reverse_basis_changed")
-        snapshot = json.loads(plan["snapshot_json"])
-        positions = json.loads(original["positions_json"] or "[]")
-        chosen = {p["ordinal"] for p in positions if p["position"] == "at_target"}
-        if not chosen:
-            raise QuarantineError("reverse_basis_outdated_or_no_changes")
-        snapshot["items"] = [{**item, "sourcePath": item["targetPath"], "targetPath": item["sourcePath"]}
-            for ordinal,item in enumerate(snapshot["items"],1) if ordinal in chosen]
-        snapshot["parentRemoteId"] = positions[0]["parentRemoteId"]
-        snapshot["pathEpoch"] = epoch
-        snapshot["originRunId"] = original["id"]
-        serialized = plans.reviews._json(snapshot)
-        size = len(serialized.encode())
-        count,total = connection.execute("SELECT COUNT(*),COALESCE(SUM(logical_bytes),0) FROM cloud_quarantine_plans").fetchone()
-        if count >= plans.MAX_PLANS or size > plans.MAX_SNAPSHOT_BYTES or total+size > plans.MAX_TOTAL_BYTES:
-            raise QuarantineError("plan_capacity")
-        newId,now = str(uuid4()),_wallNow()
-        connection.execute("INSERT INTO cloud_quarantine_plans "
-            "(id,request_id,request_hash,actor_id,review_id,job_id,inventory_revision,path_epoch,policy_hash,rule_version,item_count,"
-            "snapshot_json,snapshot_hash,logical_bytes,created_at,expires_at,updated_at,kind,origin_run_id,basis_epoch) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'reverse',?,?)",
-            (newId,requestId,requestHash,plan["actor_id"],plan["review_id"],plan["job_id"],plan["inventory_revision"],epoch,
-             plans.quarantinePolicyHash(settings),plan["rule_version"],len(snapshot["items"]),serialized,sha256(serialized.encode()).hexdigest(),size,
-             now,now+plans.PLAN_SECONDS,now,original["id"],epoch))
-        from app.service.audit_service import record_audit_event
-        record_audit_event(settings,event_type="cloud_quarantine.plan",action="reverse_prepare",result="success",
-            summary="固定反向隔离新计划；未发送云请求",target_type="cloud_quarantine_plan",target_id=newId,
-            actor=auditContext.actor,connection=connection,detail={"itemCount":len(snapshot["items"]),"originRunId":original["id"]})
+        newId = insertReverseQuarantinePlanTx(settings, connection, planId, requestId=requestId,
+            expectedRevision=expectedRevision, auditContext=auditContext)
         return plans._view(connection, settings, plans._owned(connection, newId, plan["actor_id"]))
+
+
+def insertReverseQuarantinePlanTx(settings, connection, planId, *, requestId, expectedRevision,
+                                  auditContext, newId=None, contextId=None, createdAt=None):
+    inventoryId(requestId)
+    _limit(expectedRevision, 0, 2**63-1)
+    if auditContext.actor is None:
+        raise QuarantineError('permission_denied')
+    plan = plans._owned(connection, planId, auditContext.actor.id)
+    if plan['revision'] != expectedRevision or plan['policy_hash'] != recoveryPolicyHash(settings):
+        raise QuarantineError('revision_or_policy_changed')
+    from app.service.cloud_directory_guard import requireNoDirectoryExecution
+    requireNoDirectoryExecution(connection)
+    original = connection.execute("SELECT * FROM cloud_quarantine_runs WHERE plan_id=? AND kind='move'", (planId,)).fetchone()
+    epoch = cloudPathEpoch(connection)['revision']
+    if original is None or original['committed_epoch'] != epoch or original['slot_held'] or original['worker_pid'] is not None:
+        raise QuarantineError('reverse_basis_changed')
+    snapshot = json.loads(plan['snapshot_json'])
+    positions = json.loads(original['positions_json'] or '[]')
+    chosen = {p['ordinal'] for p in positions if p['position'] == 'at_target'}
+    if not chosen:
+        raise QuarantineError('reverse_basis_outdated_or_no_changes')
+    snapshot['items'] = [{**item, 'sourcePath': item['targetPath'], 'targetPath': item['sourcePath']}
+        for ordinal, item in enumerate(snapshot['items'], 1) if ordinal in chosen]
+    snapshot['parentRemoteId'] = positions[0]['parentRemoteId']
+    snapshot['pathEpoch'] = epoch
+    snapshot['originRunId'] = original['id']
+    serialized = plans.reviews._json(snapshot)
+    size = len(serialized.encode())
+    count, total = connection.execute('SELECT COUNT(*),COALESCE(SUM(logical_bytes),0) FROM cloud_quarantine_plans').fetchone()
+    if count >= plans.MAX_PLANS or size > plans.MAX_SNAPSHOT_BYTES or total+size > plans.MAX_TOTAL_BYTES:
+        raise QuarantineError('plan_capacity')
+    newId, now = newId or str(uuid4()), _wallNow() if createdAt is None else createdAt
+    columns = ('id,request_id,request_hash,actor_id,review_id,job_id,inventory_revision,path_epoch,policy_hash,rule_version,item_count,'
+               'snapshot_json,snapshot_hash,logical_bytes,created_at,expires_at,updated_at,kind,origin_run_id,basis_epoch')
+    values = (newId, requestId, plans.reviews._digest(['reverse', planId, expectedRevision]), plan['actor_id'],
+        plan['review_id'], plan['job_id'], plan['inventory_revision'], epoch, plans.quarantinePolicyHash(settings),
+        plan['rule_version'], len(snapshot['items']), serialized, sha256(serialized.encode()).hexdigest(), size,
+        now, now+plans.PLAN_SECONDS, now, 'reverse', original['id'], epoch)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_quarantine_plans({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    from app.service.audit_service import record_audit_event
+    record_audit_event(settings, event_type='cloud_quarantine.plan', action='reverse_prepare', result='success',
+        summary='固定反向隔离新计划；未发送云请求', target_type='cloud_quarantine_plan', target_id=newId,
+        actor=auditContext.actor, connection=connection, detail={'itemCount': len(snapshot['items']), 'originRunId': original['id']})
+    return newId
 
 
 def reviewQuarantineWorker(settings, runId, *, expectedRevision, confirmClientsStopped, confirmRemoteIdle, auditContext):
     """仅本机管理员核对旧进程并归还PID；未知和原动作保护不因进程退出释放。"""
+    with inventoryDb(settings, write=True) as connection:
+        return reviewQuarantineWorkerTx(settings, connection, runId, expectedRevision=expectedRevision,
+            confirmClientsStopped=confirmClientsStopped, confirmRemoteIdle=confirmRemoteIdle, auditContext=auditContext)
+
+
+def reviewQuarantineWorkerTx(settings, connection, runId, *, expectedRevision, confirmClientsStopped, confirmRemoteIdle, auditContext):
     _limit(expectedRevision, 0, 2**63-1)
     if confirmClientsStopped is not True or confirmRemoteIdle is not True or auditContext.actor is None:
         raise ValueError("须确认旧客户端退出及相关远端静止；不会释放原未知保护或发送请求")
-    with inventoryDb(settings, write=True) as connection:
-        try:
-            plans._permission(connection, auditContext.actor.id, "settings:write")
-        except plans.CloudDirectoryError:
-            raise QuarantineError("permission_denied") from None
-        row = actions._owned(connection, runId, auditContext.actor.id)
-        actions._executePermission(connection, auditContext.actor.id)
-        if row["revision"] != expectedRevision or row["owner_host"] != cloudDriveHostKey() or not row["slot_held"]:
-            raise QuarantineError("revision_or_policy_changed")
-        if (row["worker_pid"] is not None and (isProcessAlive(row["worker_pid"]) or isProcessAlive(row["owner_pid"]))) or (
-                row["status"] in {"accepted","running"} and isProcessAlive(row["owner_pid"])):
-            raise QuarantineError("worker_exit_unconfirmed")
-        unknown = connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase IN ('sending','unknown') LIMIT 1", (runId,)).fetchone()
-        connection.execute("UPDATE cloud_quarantine_rpcs SET phase='unknown' WHERE run_id=? AND phase='sending'", (runId,))
-        now = _wallNow()
-        if unknown:
-            actions._pauseUnknown(settings, connection, now)
-        connection.execute("UPDATE cloud_quarantine_runs SET worker_pid=NULL,status='review',"
-            "reason=COALESCE(reason,'worker_interrupted'),slot_held=?,revision=revision+1,updated_at=? WHERE id=?", (1 if row["kind"] == "move" else 0,now,runId))
-        actions._audit(settings, connection, row, "worker_reviewed", auditContext,
-            {"clientsStoppedConfirmed":True,"remoteIdleConfirmed":True,"originalOutcomeRewritten":False,"networkAccess":False})
-        return actions._view(connection, actions._row(connection, runId))
+    try:
+        plans._permission(connection, auditContext.actor.id, 'settings:write')
+    except plans.CloudDirectoryError:
+        raise QuarantineError('permission_denied') from None
+    row = actions._owned(connection, runId, auditContext.actor.id)
+    actions._executePermission(connection, auditContext.actor.id)
+    if row['revision'] != expectedRevision or row['owner_host'] != cloudDriveHostKey() or not row['slot_held']:
+        raise QuarantineError('revision_or_policy_changed')
+    if (row['worker_pid'] is not None and (isProcessAlive(row['worker_pid']) or isProcessAlive(row['owner_pid']))) or (
+            row['status'] in {'accepted', 'running'} and isProcessAlive(row['owner_pid'])):
+        raise QuarantineError('worker_exit_unconfirmed')
+    unknown = connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase IN ('sending','unknown') LIMIT 1", (runId,)).fetchone()
+    connection.execute("UPDATE cloud_quarantine_rpcs SET phase='unknown' WHERE run_id=? AND phase='sending'", (runId,))
+    now = _wallNow()
+    if unknown:
+        actions._pauseUnknown(settings, connection, now)
+    connection.execute("UPDATE cloud_quarantine_runs SET worker_pid=NULL,status='review',"
+        "reason=COALESCE(reason,'worker_interrupted'),slot_held=?,revision=revision+1,updated_at=? WHERE id=?", (1 if row['kind'] == 'move' else 0, now, runId))
+    actions._audit(settings, connection, row, 'worker_reviewed', auditContext,
+        {'clientsStoppedConfirmed': True, 'remoteIdleConfirmed': True, 'originalOutcomeRewritten': False, 'networkAccess': False})
+    return actions._view(connection, actions._row(connection, runId))

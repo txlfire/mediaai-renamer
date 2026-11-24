@@ -1,5 +1,5 @@
 import { fetchRenameOperation, fetchRenameRollbackPlan, type BatchAiParseResult, type BatchMultiSourceMatchResult,
-  type MetadataMatchSource, type MultiSourceMatchMode } from "./client";
+  type BatchMetadataMatchResult, type MetadataAiFallbackResult, type MetadataMatchSource, type MultiSourceMatchMode, type PreviewGenerationSummary } from "./client";
 import { useBackgroundJobsStore } from "../stores/backgroundJobs";
 import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 
@@ -22,4 +22,18 @@ export function matchRenamePreviewsMultiSourceBackground(ids: number[], source: 
 
 export function parseRenamePreviewsWithAiBackground(ids: number[], source: MetadataMatchSource) {
   return useBackgroundJobsStore().run<BatchAiParseResult>("ai_batch", { rename_preview_ids: ids, metadata_match_source: source });
+}
+
+export function matchTmdbBatchBackground(ids: number[], source: MetadataMatchSource) {
+  return useBackgroundJobsStore().run<BatchMetadataMatchResult>("tmdb_batch", { rename_preview_ids: ids, metadata_match_source: source });
+}
+
+export function matchTmdbWithAiBackground(ids: number[], source: MetadataMatchSource) {
+  return useBackgroundJobsStore().run<MetadataAiFallbackResult>("tmdb_ai_batch", { rename_preview_ids: ids, metadata_match_source: source });
+}
+
+export function generateScannedPreviewsBackground(scanJobId: number, sourceId?: number) {
+  return useBackgroundJobsStore().run<PreviewGenerationSummary>("preview_generation", {
+    scan_job_id: scanJobId, ...(sourceId === undefined ? {} : { media_source_id: sourceId }),
+  });
 }

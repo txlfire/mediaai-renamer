@@ -1,23 +1,25 @@
 import { apiClient } from "./client";
 import { InventoryRequestError } from "./cloudInventory";
 import { isSessionChangedError } from "../utils/sessionGeneration";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
+import type { CloudTaskBinding } from "../utils/cloudTaskBinding";
+import { cloudHistoryParams, validateCloudHistorySources, type CloudHistoryFilter } from "../utils/cloudHistorySource";
 
 export type DirectoryPlanItem = { entryId: number; generation: number; remoteId: string; sourcePath: string;
   sourceName: string; targetName: string; targetPath: string };
-export type DirectoryPlan = { id: string; requestId: string; inventoryJobId: string; inventoryRevision: number;
+export type DirectoryPlan = CloudTaskBinding & { id: string; requestId: string; inventoryJobId: string; inventoryRevision: number;
   kind?: "inventory" | "reverse"; originPlanId?: string | null; originRevision?: number | null; basisEpoch?: number;
   revision: number; status: "prepared" | "cancelled" | "expired"; valid: boolean; invalidReason: string | null;
   policyHash: string; rulesHash: string; ruleVersion: string; parentPath: string; items: DirectoryPlanItem[];
   createdAt: number; expiresAt: number; networkAccess: false; writeAvailable: false };
-export type DirectoryPlanHistoryItem = { id: string; requestId: string; kind: "inventory" | "reverse"; parentPath: string;
+export type DirectoryPlanHistoryItem = CloudTaskBinding & { id: string; requestId: string; kind: "inventory" | "reverse"; parentPath: string;
   status: string; createdAt: number; expiresAt: number; itemCount: number; executionRequestId: string | null;
   executionStatus: string | null; executionReason: string | null; recoveryRequestId: string | null; usedRpc: number | null; maxRpc: number | null };
 export type DirectoryPlanInput = { requestId: string; jobId: string; expectedRevision: number; entryIds: number[]; folderTerms: string[] };
 export type DirectoryExecutionPolicy = { available: boolean; reason: string | null; policyHash: string;
   limits: { items: number; baseRpc: number; rpcPerItem: number; seconds: number; bytes: number };
   controlledMode: true; atomicIdentityGuaranteed: false; oldPlansGloballyInvalidated: true; automaticRescan: false; networkAccess: false };
-export type DirectoryExecution = { planId: string; requestId: string;
+export type DirectoryExecution = CloudTaskBinding & { planId: string; requestId: string;
   status: "accepted" | "running" | "review" | "cancelled" | "completed"; reason: string | null; revision: number;
   cancelRequested: boolean; workerSlotHeld: boolean; globalSlotHeld: boolean; pollingRecommended: boolean;
   logId: number; logAvailable: boolean;
@@ -28,7 +30,7 @@ export type DirectoryExecution = { planId: string; requestId: string;
     receivedBytes: number; sentAt: number; respondedAt: number | null }[]; networkAccess: false; replayed: false };
 export type DirectoryExecutionInput = { requestId: string; expectedRevision: number; policyHash: string;
   confirmMaintenance: boolean; confirmGlobalFence: boolean; apiToken: string };
-export type DirectoryRecovery = { id: string; requestId: string; planId: string; attempt: number; revision: number;
+export type DirectoryRecovery = CloudTaskBinding & { id: string; requestId: string; planId: string; attempt: number; revision: number;
   status: "accepted" | "running" | "ready" | "review" | "committed"; reason: string | null;
   workerSlotHeld: boolean; recoverySlotHeld: boolean; cancelRequested: boolean; pollingRecommended: boolean;
   usedRpc: number; maxRpc: number; receivedBytes: number; maxBytes: number; createdAt: number; expiresAt: number; updatedAt: number;
@@ -39,7 +41,7 @@ export type DirectoryRecoveryInput = { requestId: string; expectedRevision: numb
 
 function failed(error: unknown): never {
   if (isSessionChangedError(error)) throw error;
-  throw new InventoryRequestError(messages.cloudInventory.directoryPlan.requestFailed, error);
+  throw new InventoryRequestError(getInterfaceMessages().cloudInventory.directoryPlan.requestFailed, error);
 }
 
 export async function prepareDirectoryPlan(input: DirectoryPlanInput): Promise<DirectoryPlan> {
@@ -115,7 +117,12 @@ export async function prepareReverseDirectoryPlan(id: string, input: { requestId
   catch (error) { return failed(error); }
 }
 
-export async function fetchDirectoryPlanHistory(page = 1, pageSize = 20): Promise<{ items: DirectoryPlanHistoryItem[]; page: number; pageSize: number; total: number; networkAccess: false; replayed: false }> {
-  try { return (await apiClient.get("/cloud-drive/directory-plans", { params: { page, pageSize } })).data; }
+export async function fetchDirectoryPlanHistory(page = 1, pageSize = 20, filter: CloudHistoryFilter = {}): Promise<{ items: DirectoryPlanHistoryItem[]; page: number; pageSize: number; total: number; networkAccess: false; replayed: false }> {
+  try {
+    const value = (await apiClient.get("/cloud-drive/directory-plans", { params: { page, pageSize, ...cloudHistoryParams(filter) } })).data;
+    if (!value || !Array.isArray(value.items) || value.items.length > pageSize || value.page !== page) throw new Error("invalid_directory_history");
+    validateCloudHistorySources(value.items, filter);
+    return value;
+  }
   catch (error) { return failed(error); }
 }

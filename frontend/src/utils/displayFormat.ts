@@ -1,4 +1,10 @@
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceLanguage, getInterfaceMessages } from "../locales/interfaceLanguage";
+
+const englishInteger = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+
+export function formatDisplayCount(value: number): string {
+  return getInterfaceLanguage() === "en-US" && Number.isSafeInteger(value) ? englishInteger.format(value) : String(value);
+}
 
 export function textByteLength(value: unknown): number {
   return new TextEncoder().encode(String(value ?? "")).length;
@@ -68,18 +74,19 @@ export function formatDateTime(value: unknown): string {
 }
 
 export function formatScanJobStatus(value: unknown): string {
+  const { status: text } = getInterfaceMessages();
   const status = String(value ?? "");
   const labels: Record<string, string> = {
-    pending: messages.status.pending,
-    queued: messages.status.pending,
-    interrupted: messages.status.interrupted,
-    running: messages.status.running,
-    completed: messages.status.completed,
-    partial_completed: messages.status.partialCompleted,
-    partial_failed: messages.status.partialCompleted,
-    connection_lost: messages.status.connectionLost,
-    failed: messages.status.failed,
+    pending: text.pending,
+    queued: text.pending,
+    interrupted: text.interrupted,
+    running: text.running,
+    completed: text.completed,
+    partial_completed: text.partialCompleted,
+    partial_failed: text.partialCompleted,
+    connection_lost: text.connectionLost,
+    failed: text.failed,
   };
 
-  return labels[status] ?? messages.status.unknown;
+  return Object.prototype.hasOwnProperty.call(labels, status) ? labels[status]! : text.unknown;
 }

@@ -34,8 +34,10 @@ describe("theme before first paint", () => {
     expect(initialTheme("system", "candy", false)).toEqual({ scheme: "light", palette: "candy" });
   });
 
-  it("falls back for empty and unsupported stored values", () => {
-    expect(initialTheme(null, null)).toEqual({ scheme: "light", palette: "default" });
+  it("uses forest only for new users and falls back for unsupported stored values", () => {
+    expect(initialTheme(null, null)).toEqual({ scheme: "light", palette: "forest" });
+    expect(initialTheme("system", null, true)).toEqual({ scheme: "dark", palette: "forest" });
+    expect(initialTheme("light", "")).toEqual({ scheme: "light", palette: "default" });
     expect(initialTheme("invalid", "invalid", true)).toEqual({ scheme: "dark", palette: "default" });
   });
 });

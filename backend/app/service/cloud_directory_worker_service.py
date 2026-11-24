@@ -25,6 +25,7 @@ _REASONS = {"worker_failed", "worker_start_failed", "worker_interrupted", "cance
     "parent_identity_changed", "directory_identity_unsupported", "token_scope_or_permissions_invalid",
     "unknown_token_permissions", "runtime_not_verified", "unavailable", "unauthenticated", "resource_exhausted",
     "invalid_response", "execution_budget_exhausted", "pool_not_ready", "storage_unavailable", "trust_unavailable"}
+_REASONS |= {'context_stale', 'authentication_required', 'action_permission_denied', 'resource_not_found', 'storage_version_unsupported'}
 
 
 def safeDirectoryReason(value):
@@ -113,12 +114,18 @@ def superviseDirectoryWorker(settings, planId, token, apiToken, *, stop=None):
     try:
         with inventoryDb(settings) as connection:
             row = _row(connection, planId)
+            from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+            if isinstance(settings, BoundNativeCloudSettings):
+                requireNativeSendTx(settings, connection)
             remaining = row["expires_at"] - time.time()
         if remaining <= 0 or stop is not None and stop.is_set():
             return
         deadline = time.monotonic() + min(180, remaining)
-        payload = {"plan_id": planId, "worker_token": token, "api_token": apiToken,
-                   "configuration_revision": cloudConfigurationReference(settings)}
+        payload = {'plan_id': planId, 'worker_token': token, 'api_token': apiToken}
+        if isinstance(settings, BoundNativeCloudSettings):
+            payload['context_id'] = settings.contextId
+        else:
+            payload['configuration_revision'] = cloudConfigurationReference(settings)
         try:
             process = startTaskProcess(settings, "app.cloud_directory_worker", payload,
                 lambda pid: bindDirectoryWorker(settings, planId, token, pid))
@@ -129,14 +136,7 @@ def superviseDirectoryWorker(settings, planId, token, apiToken, *, stop=None):
             payload.pop("api_token", None)
             apiToken = ""
         while process.poll() is None:
-            with inventoryDb(settings) as connection:
-                row = _row(connection, planId)
-                try:
-                    _permission(connection, row["actor_id"])
-                    _permission(connection, row["actor_id"], "cloud-directory:execute")
-                    permitted = True
-                except CloudDirectoryError:
-                    permitted = False
+            row, permitted = _readSupervisionState(settings, planId, deadline=deadline, stop=stop)
             if (not permitted or row["cancel_requested"] or stop is not None and stop.is_set()
                     or time.monotonic() >= deadline or time.time() >= row["expires_at"]):
                 stopReason = "permission_denied" if not permitted else "cancel_requested" if row["cancel_requested"] else "deadline_exceeded" if time.monotonic() >= deadline else "worker_interrupted"
@@ -153,3 +153,21 @@ def superviseDirectoryWorker(settings, planId, token, apiToken, *, stop=None):
                 process.kill()
             process.wait()
         finishDirectoryWorker(settings, planId, token, process.pid if process else None, stopReason=stopReason)
+
+
+def _readSupervisionState(settings, planId, *, deadline, stop=None):
+    from app.service.cloud_worker_read_service import readCloudSupervision
+    from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+    def read():
+        with inventoryDb(settings) as connection:
+            row = _row(connection, planId)
+            try:
+                _permission(connection, row['actor_id'])
+                _permission(connection, row['actor_id'], 'cloud-directory:execute')
+                if isinstance(settings, BoundNativeCloudSettings):
+                    requireNativeSendTx(settings, connection)
+                permitted = True
+            except (CloudDirectoryError, ValueError):
+                permitted = False
+            return row, permitted
+    return readCloudSupervision(read, deadline=deadline, stop=stop)

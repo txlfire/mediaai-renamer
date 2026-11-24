@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from app.api.auth import require_permission
 from app.service.operation_log_service import (
@@ -13,6 +14,23 @@ from app.service.operation_log_service import (
 )
 
 router = APIRouter(prefix="/api/operation-logs", tags=["operation-logs"])
+
+
+def _readCloudLogs(request, user, taskType, taskId, **kwargs):
+    from app.api.auth import _extract_bearer_token
+    from app.api.cloud_connections import _call
+    from app.service.cloud_directory_log_service import readAuthorizedDirectoryLogs
+    from app.service.cloud_quarantine_log_service import readAuthorizedQuarantineLogs
+    from app.service.cloud_directory_plan_service import CloudDirectoryError
+    from app.service.cloud_inventory_service import CloudInventoryError
+    try:
+        reader = readAuthorizedQuarantineLogs if taskType == 'cloud_quarantine_run' else readAuthorizedDirectoryLogs
+        return _call(request, user, reader, taskId,
+            accessToken=_extract_bearer_token(request.headers.get('authorization')), **kwargs)
+    except CloudDirectoryError as exc:
+        raise HTTPException(status_code=403 if exc.code == 'permission_denied' else 404, detail='无权读取或日志任务不存在') from None
+    except CloudInventoryError:
+        raise HTTPException(status_code=409, detail='日志暂不可用，请稍后核对') from None
 
 
 def _authorizeDirectoryLogs(request, taskType, taskId, actorId):
@@ -40,6 +58,8 @@ def list_operation_logs_api(
     _current_user=Depends(require_permission("audit:read")),
 ):
     """按任务读取运行日志。"""
+    if task_type in {'cloud_directory_execution', 'cloud_quarantine_run'}:
+        return _readCloudLogs(request, _current_user, task_type, task_id, afterId=after_id, limit=limit)
     _authorizeDirectoryLogs(request, task_type, task_id, _current_user.id)
     return operation_log_page_to_dict(
         list_operation_logs(
@@ -60,6 +80,9 @@ def export_operation_logs_api(
     _current_user=Depends(require_permission("audit:read")),
 ):
     """导出指定任务运行日志。"""
+    if task_type in {'cloud_directory_execution', 'cloud_quarantine_run'}:
+        result = _readCloudLogs(request, _current_user, task_type, task_id, export=True)
+        return result if isinstance(result, JSONResponse) else Response(content=result, media_type='text/plain; charset=utf-8')
     _authorizeDirectoryLogs(request, task_type, task_id, _current_user.id)
     return Response(
         content=export_operation_logs_text(

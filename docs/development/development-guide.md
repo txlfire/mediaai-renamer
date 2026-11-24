@@ -1,6 +1,6 @@
 # MediaAI Renamer 开发指南
 
-类型：开发与操作手册。适用 v1.3.0、schema39；[当前状态与剩余边界](project-status.md)，[全部文档](../README.md)。
+类型：开发与操作手册。稳定版v1.4.0、schema55；未发布增量见[当前状态与剩余边界](project-status.md)，[全部文档](../README.md)。
 
 ## 1. 环境与依赖
 
@@ -23,7 +23,7 @@ Linux 使用 `python3 -m venv .venv` 和 `.venv/bin/python`。镜像源缺包时
 
 ## 2. 规范启动
 
-Windows 先检查状态：
+每次开始或恢复开发前必须先检查本地服务，不以此前已启动的记录代替当前核验。Windows先检查状态：
 
 ```powershell
 npm.cmd run dev:windows -- status
@@ -37,17 +37,26 @@ npm.cmd run dev:windows -- start
 
 Linux 对应 `npm run dev:linux -- status`，仅停止时 `npm run dev:linux -- start`。`start` 会替换脚本管理的旧实例，不是无副作用的健康查询。用户要求保持运行时，不执行 stop/restart，不因测试或文档工作重启服务。
 
+只有前后端均停止且端口归属明确时才执行整套start；仅一个服务缺失时定点恢复，不因整套脚本会停止旧进程而打断仍健康的服务。已配置的本地HTTPS入口也检查页面与API健康，使用系统默认信任，不跳过证书校验或自动重新导入CA。没有HTTPS配置时不临时生成新信任。
+
 | 检查 | 预期结果 |
 | --- | --- |
 | `http://127.0.0.1:5173` | Vue 页面可访问 |
 | `http://127.0.0.1:8970/api/health` | 200，`status=ok`，版本与当前源码一致 |
 | `http://127.0.0.1:5173/api/health` | 200，Vite 代理可达同一后端 |
+| 已配置的 `https://127.0.0.1:5443/` 及 `/api/health` | 页面及代理200，无证书验证错误；沿用已批准证书 |
 
 脚本的 running 提示包含端口探测，不替代上述健康检查。默认后台启动前后端，日志/PID 在 `.codex/run-logs/`；前端直接使用 Node/Vite，不用 Python 静态服务器替代，不另开可见窗口。`frontend:dev` 也是后台脚本，不是前台终端命令。
 
 脚本仅管理本项目的可验证进程，未知进程占端口时先核对归属或选择其他端口，不强杀。日志中不应包含凭据，分享前仍需检查路径、账号等隐私。桌面宿主退出可能连带结束开发服务，脚本不是系统级守护服务；恢复后核对健康和任务意图，不重放未知操作。
 
 需要明确停服/重启、改端口或单进程调试时见[命令目录](common-tasks.md)。局域网监听仅用于可信网络，不能当作互联网安全部署方案。
+
+### Windows保留端口
+
+若出现 WinError 10013 或 Vite `EACCES`，先运行 `netsh interface ipv4 show excludedportrange protocol=tcp`，区分系统保留和已被进程监听，不修改系统保留项或强杀未知进程。Windows 可分别指定 `-FrontendPort` 和 `-BackendPort`；例如 `npm.cmd run dev:windows -- status -FrontendPort 6061 -BackendPort 9070`。同一组端口用于启动、状态检查和探活。
+
+前后端均停止且目标端口可用时，将上例动作由 `status` 换为 `start`，Vite 会代理到指定后端。只有前端停止时，单独运行 `powershell -ExecutionPolicy Bypass -File scripts/start-frontend-dev.ps1 -HostName 127.0.0.1 -Port 6061 -BackendUrl http://127.0.0.1:9070 -Background`，保留正常的后端。示例端口不是默认值；如已占用或被保留，选其他空闲端口。HTTPS 沿用已批准证书并显式指向同一后端，不跳过校验；本机证书路径不写入公共配置。
 
 ## 3. 隔离测试与构建
 

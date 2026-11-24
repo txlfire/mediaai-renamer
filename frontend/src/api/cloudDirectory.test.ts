@@ -46,6 +46,7 @@ describe("fixed directory plan API", () => {
   it("reverse creation and history are local-only commands without names or credentials", async () => {
     await prepareReverseDirectoryPlan("plan/a", { requestId: "reverse-request", expectedRevision: 5 });
     expect(http.post).toHaveBeenLastCalledWith("/cloud-drive/directory-plans/plan%2Fa/reverse", { requestId: "reverse-request", expectedRevision: 5 });
+    http.get.mockResolvedValueOnce({ data: { items: [], page: 2, pageSize: 20, total: 0, networkAccess: false, replayed: false } });
     await fetchDirectoryPlanHistory(2, 20); expect(http.get).toHaveBeenLastCalledWith("/cloud-drive/directory-plans", { params: { page: 2, pageSize: 20 } });
   });
   it("worker review submits only current revision and explicit local confirmations without retry", async () => {

@@ -25,10 +25,16 @@ def main():
                 backup_count=payload["log_backup_count"], console_output=False))
         setup_logging(settings.logging)
         runId, token = inventoryId(payload["run_id"]), inventoryId(payload["worker_token"])
-        revision = payload["configuration_revision"]
-        if type(revision) is not int or revision < 0:
-            raise ValueError("配置修订无效")
-        settings = resolveCloudDriveSettings(settings, expectedRevision=revision)
+        if 'context_id' in payload:
+            if any(key in payload for key in ('configuration_revision', 'endpoint', 'caCertificatePem', 'connectionId', 'directoryProfileId')):
+                raise ValueError('固定来源不能接受配置覆盖')
+            from app.service.cloud_bound_native_runtime_service import loadNativeWorker
+            settings = loadNativeWorker(settings, payload['context_id'], runId, token)
+        else:
+            revision = payload['configuration_revision']
+            if type(revision) is not int or revision < 0:
+                raise ValueError('配置修订无效')
+            settings = resolveCloudDriveSettings(settings, expectedRevision=revision)
         executeQuarantineBatch(settings, runId, token, payload.pop("api_token"))
         return 0
     except Exception as exc:

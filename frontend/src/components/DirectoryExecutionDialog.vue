@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import FullscreenTablePanel from "./FullscreenTablePanel.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CircleCheck, CircleClose, Document, InfoFilled, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
@@ -6,17 +7,22 @@ import { fetchDirectoryPolicy, startDirectoryExecution, findDirectoryExecution, 
   commitDirectoryLocally, type DirectoryPlan, type DirectoryExecution, type DirectoryExecutionPolicy } from "../api/cloudDirectory";
 import { inventoryRequestId, InventoryRequestError } from "../api/cloudInventory";
 import { useAuthStore } from "../stores/auth";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { formatFileSize } from "../utils/displayFormat";
 import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
 import OperationLogDrawer from "./OperationLogDrawer.vue";
 import DirectoryRecoveryDialog from "./DirectoryRecoveryDialog.vue";
+import { fetchBoundDirectoryPolicy, startBoundDirectoryExecution, type BoundNativeReceipt, type BoundDirectoryPolicy } from "../api/cloudBoundActions";
+import { resolveCloudTaskBinding, sameCloudTaskSource } from "../utils/cloudTaskBinding";
+import CloudTaskSourceSummary from "./CloudTaskSourceSummary.vue";
 
 const props = defineProps<{ visible: boolean; plan: DirectoryPlan; requestId: string;
   persistRequestId: (id: string) => Promise<void>; recoveryRequestId?: string; persistRecoveryRequestId?: (id: string) => Promise<void>;
   allowReverse?: boolean }>();
 const emit = defineEmits<{ "update:visible": [value: boolean]; accepted: []; reverse: [planId: string, executionRevision: number] }>();
-const text = messages.cloudInventory.directoryExecution;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.cloudInventory.directoryExecution);
 const auth = useAuthStore();
 const policy = ref<DirectoryExecutionPolicy | null>(null);
 const execution = ref<DirectoryExecution | null>(null);
@@ -31,15 +37,18 @@ const logsVisible = ref(false);
 const recoveryVisible = ref(false);
 const ownerSession = getSessionGeneration();
 const secure = computed(() => typeof location !== "undefined" && location.protocol === "https:");
-const canExecute = computed(() => auth.hasPermission("cloud-directory:execute") && auth.hasPermission("cloud-directory:plan"));
+const sourceBinding = computed(() => { try { return resolveCloudTaskBinding(props.plan); } catch { return null; } });
+const canExecute = computed(() => auth.hasPermission("cloud-directory:execute") && auth.hasPermission("cloud-directory:plan")
+  && sourceBinding.value !== null && sourceBinding.value.mode !== "legacy_unbound");
 const canViewLogs = computed(() => Boolean(execution.value && auth.hasPermission("audit:read")
   && (execution.value.logAvailable || execution.value.pollingRecommended)));
-const canStart = computed(() => secure.value && canExecute.value && props.plan.valid && policy.value?.available
+const canStart = computed(() => Boolean(secure.value && canExecute.value && props.plan.valid && policy.value?.available
   && policy.value.policyHash === props.plan.policyHash && !busy.value && !policyLoading.value && !requestId.value
-  && maintenance.value && globalFence.value && /^[\x21-\x7e]{1,8192}$/.test(tokenValue.value));
-const disabledReason = computed(() => !secure.value ? text.https : !canExecute.value ? text.permission
-  : !props.plan.valid || (policy.value?.available && policy.value.policyHash !== props.plan.policyHash) ? text.stale
-  : policy.value?.reason === "directory_execution_held" ? text.held : !policy.value?.available ? text.disabled : "");
+  && maintenance.value && globalFence.value && /^[\x21-\x7e]{1,8192}$/.test(tokenValue.value)));
+const disabledReason = computed(() => !secure.value ? text.value.https : !sourceBinding.value ? messages.value.cloudTaskSource.invalid
+  : sourceBinding.value.mode === "legacy_unbound" ? messages.value.cloudTaskSource.unbound : !canExecute.value ? text.value.permission
+  : !props.plan.valid || (policy.value?.available && policy.value.policyHash !== props.plan.policyHash) ? text.value.stale
+  : policy.value?.reason === "directory_execution_held" ? text.value.held : !policy.value?.available ? text.value.disabled : "");
 let active = true, sequence = 0, policySequence = 0, handoffToken = "";
 let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -50,19 +59,23 @@ function purge() {
 }
 function sessionValid() {
   if (getSessionGeneration() === ownerSession) return true;
-  purge(); execution.value = null; errorText.value = text.sessionChanged; return false;
+  purge(); execution.value = null; errorText.value = text.value.sessionChanged; return false;
 }
 function current(id: number) { return active && props.visible && id === sequence && sessionValid(); }
 function fail(error: unknown, id: number) {
   if (!active || !props.visible || id !== sequence) return;
-  if (isSessionChangedError(error) || !sessionValid()) { purge(); execution.value = null; errorText.value = text.sessionChanged; return; }
-  errorText.value = error instanceof InventoryRequestError && error.status === 404 ? text.missing : text.failed;
+  if (isSessionChangedError(error) || !sessionValid()) { purge(); execution.value = null; errorText.value = text.value.sessionChanged; return; }
+  errorText.value = error instanceof InventoryRequestError && error.status === 404 ? text.value.missing : text.value.failed;
   stopPolling();
 }
 
 function validExecution(value: DirectoryExecution) {
   const bounded = (n: number, max: number) => Number.isSafeInteger(n) && n >= 0 && n <= max;
-  return value && value.planId === props.plan.id && value.requestId === requestId.value
+  const binding = sourceBinding.value;
+  let responseBinding;
+  try { responseBinding = resolveCloudTaskBinding(value); } catch { return false; }
+  return binding && (binding.mode === "bound" ? sameCloudTaskSource(value, binding.source) : responseBinding.mode === binding.mode)
+    && value && value.planId === props.plan.id && value.requestId === requestId.value
     && ["accepted", "running", "review", "cancelled", "completed"].includes(value.status)
     && bounded(value.revision, Number.MAX_SAFE_INTEGER) && typeof value.globalSlotHeld === "boolean"
     && typeof value.workerSlotHeld === "boolean" && typeof value.pollingRecommended === "boolean"
@@ -73,19 +86,19 @@ function validExecution(value: DirectoryExecution) {
     && Number.isFinite(value.createdAt) && Number.isFinite(value.expiresAt) && value.expiresAt > value.createdAt
     && Array.isArray(value.items) && value.items.length === props.plan.items.length
     && value.items.every((item, index) => item.ordinal === index + 1 && item.sourceName === props.plan.items[index]?.sourceName
-      && item.targetName === props.plan.items[index]?.targetName && Object.prototype.hasOwnProperty.call(text.itemStates, item.state))
+      && item.targetName === props.plan.items[index]?.targetName && Object.prototype.hasOwnProperty.call(text.value.itemStates, item.state))
     && Array.isArray(value.events) && value.events.length <= value.maxRpc && value.events.length === value.usedRpc
     && value.events.every((event, index) => event.ordinal === index + 1
       && ["GetApiTokenInfo", "GetRuntimeInfo", "FindFileByPath", "RenameFile"].includes(event.method)
-      && Object.prototype.hasOwnProperty.call(text.phases, event.phase) && bounded(event.receivedBytes, Number.MAX_SAFE_INTEGER)
+      && Object.prototype.hasOwnProperty.call(text.value.phases, event.phase) && bounded(event.receivedBytes, Number.MAX_SAFE_INTEGER)
       && (event.responseCode === null || /^[a-z_]{1,40}$/.test(event.responseCode))
       && (event.itemOrdinal === null || (Number.isInteger(event.itemOrdinal) && event.itemOrdinal >= 1 && event.itemOrdinal <= value.items.length)))
     && value.networkAccess === false && value.replayed === false;
 }
 
 function accept(value: DirectoryExecution) {
-  if (!validExecution(value)) { execution.value = null; errorText.value = text.invalid; stopPolling(); return; }
-  if (execution.value && value.revision < execution.value.revision) { errorText.value = text.invalid; stopPolling(); return; }
+  if (!validExecution(value)) { execution.value = null; errorText.value = text.value.invalid; stopPolling(); return; }
+  if (execution.value && value.revision < execution.value.revision) { errorText.value = text.value.invalid; stopPolling(); return; }
   execution.value = value;
   emit("accepted");
   schedule();
@@ -103,19 +116,26 @@ async function loadPolicy() {
   const id = ++policySequence;
   policyLoading.value = true; errorText.value = "";
   try {
-    const value = await fetchDirectoryPolicy();
+    const binding = sourceBinding.value;
+    if (!binding || binding.mode === "legacy_unbound") { policy.value = null; errorText.value = text.value.stale; return; }
+    const value = binding.mode === "bound" ? await fetchBoundDirectoryPolicy(binding.source) : await fetchDirectoryPolicy();
     if (!active || !props.visible || id !== policySequence || !sessionValid()) return;
+    if (binding.mode === "bound") {
+      const explicit = value as BoundDirectoryPolicy;
+      if (explicit.connectionId !== binding.source.connectionId || explicit.directoryProfileId !== binding.source.directoryProfileId
+        || explicit.selectedPath !== binding.source.selectedPath) { policy.value = null; errorText.value = text.value.policyFailed; return; }
+    }
     if (typeof value.available !== "boolean" || value.networkAccess !== false || value.controlledMode !== true
       || value.atomicIdentityGuaranteed !== false || value.oldPlansGloballyInvalidated !== true || value.automaticRescan !== false
       || value.limits?.items !== 5 || value.limits?.baseRpc !== 3 || value.limits?.rpcPerItem !== 7
       || value.limits?.seconds !== 180 || value.limits?.bytes !== 1048576
       || (value.available && !/^[a-f0-9]{64}$/.test(value.policyHash))) {
-      policy.value = null; errorText.value = text.policyFailed; return;
+      policy.value = null; errorText.value = text.value.policyFailed; return;
     }
     policy.value = value;
   } catch (error) {
     if (active && props.visible && id === policySequence) {
-      policy.value = null; errorText.value = isSessionChangedError(error) ? text.sessionChanged : text.policyFailed;
+      policy.value = null; errorText.value = isSessionChangedError(error) ? text.value.sessionChanged : text.value.policyFailed;
     }
   } finally { if (id === policySequence) policyLoading.value = false; }
 }
@@ -124,6 +144,8 @@ async function start() {
   if (!sessionValid() || !canStart.value || !policy.value) return;
   const id = ++sequence;
   const planId = props.plan.id, revision = props.plan.revision, hash = policy.value.policyHash;
+  const binding = sourceBinding.value;
+  if (!binding || binding.mode === "legacy_unbound") return;
   busy.value = true; errorText.value = ""; handoffToken = tokenValue.value; tokenValue.value = "";
   maintenance.value = false; globalFence.value = false;
   try {
@@ -132,18 +154,28 @@ async function start() {
     // 先保存独立执行编号；POST结果不明时只能查询，不重新交接令牌。
     await props.persistRequestId(requestId.value);
     if (!current(id)) return;
-    const pending = startDirectoryExecution(planId, { requestId: requestId.value, expectedRevision: revision,
-      policyHash: hash, confirmMaintenance: true, confirmGlobalFence: true, apiToken: handoffToken });
+    const input = { requestId: requestId.value, expectedRevision: revision, policyHash: hash,
+      confirmMaintenance: true as const, confirmGlobalFence: true as const, apiToken: handoffToken };
+    const pending = binding.mode === "bound" ? startBoundDirectoryExecution(planId, binding.source, input) : startDirectoryExecution(planId, input);
     handoffToken = "";
     emit("accepted");
-    const result = await pending;
-    if (current(id)) accept(result);
+    let result;
+    try { result = await pending; } finally { input.apiToken = ""; }
+    if (!current(id)) return;
+    if (binding.mode === "bound") {
+      const receipt = result as BoundNativeReceipt;
+      const value = await findDirectoryExecution(requestId.value);
+      if (!current(id)) return;
+      if (value.contextId !== receipt.contextId) throw new Error("directory_execution_context_mismatch");
+      accept(value);
+    } else accept(result as DirectoryExecution);
   } catch (error) { fail(error, id); }
   finally { if (id === sequence) { handoffToken = ""; busy.value = false; } }
 }
 
 async function lookup() {
-  if (!requestId.value || busy.value || !sessionValid()) return;
+  if (!active || !props.visible || !auth.hasPermission("cloud-directory:plan") || !sourceBinding.value
+    || !requestId.value || busy.value || !sessionValid() || (typeof document !== "undefined" && document.hidden)) return;
   const id = ++sequence;
   stopPolling(); tokenValue.value = ""; busy.value = true; errorText.value = "";
   try { const result = await findDirectoryExecution(requestId.value); if (current(id)) accept(result); }
@@ -153,6 +185,7 @@ async function lookup() {
 
 async function act(kind: "cancel" | "commit") {
   if (busy.value || !execution.value || !sessionValid()) return;
+  if (!sourceBinding.value || sourceBinding.value.mode === "legacy_unbound") return;
   const value = execution.value;
   if (kind === "commit" && (!canExecute.value || value.reason !== "awaiting_path_sync" || value.workerSlotHeld)) return;
   if (kind === "cancel" && (value.cancelRequested || !value.globalSlotHeld)) return;
@@ -171,8 +204,8 @@ async function acknowledge() {
   const id = ++sequence;
   busy.value = true; stopPolling();
   try {
-    await ElMessageBox.confirm(text.acknowledgeHint, text.acknowledge, { type: "info",
-      confirmButtonText: messages.common.confirm, cancelButtonText: messages.common.cancel });
+    await ElMessageBox.confirm(text.value.acknowledgeHint, text.value.acknowledge, { type: "info",
+      confirmButtonText: messages.value.common.confirm, cancelButtonText: messages.value.common.cancel });
     if (!current(id)) return;
     const previous = requestId.value;
     if (props.persistRecoveryRequestId) await props.persistRecoveryRequestId("");
@@ -188,15 +221,21 @@ async function acknowledge() {
 
 function close() { recoveryVisible.value = false; logsVisible.value = false; purge(); execution.value = null; emit("update:visible", false); }
 function hidden() { if (typeof document === "undefined" || document.hidden) purge(); }
-function expired() { recoveryVisible.value = false; logsVisible.value = false; purge(); execution.value = null; errorText.value = text.sessionChanged; }
+function expired() { recoveryVisible.value = false; logsVisible.value = false; purge(); execution.value = null; errorText.value = text.value.sessionChanged; }
 watch(() => props.requestId, value => { const next = inventoryRequestId(value); if (next !== requestId.value) { purge(); requestId.value = next; execution.value = null; } }, { flush: "sync" });
 watch(() => props.plan.id, () => { purge(); execution.value = null; });
 watch(canExecute, value => { if (!value) purge(); }, { flush: "sync" });
-watch(() => props.visible, value => {
+watch(() => props.visible, (value, wasVisible) => {
   purge(); errorText.value = ""; execution.value = null;
   logsVisible.value = false;
   recoveryVisible.value = false;
-  if (value) { requestId.value = inventoryRequestId(props.requestId); void loadPolicy(); }
+  if (value) {
+    requestId.value = inventoryRequestId(props.requestId);
+    if (requestId.value) {
+      if (wasVisible === false) void lookup();
+    }
+    else void loadPolicy();
+  }
 }, { immediate: true, flush: "sync" });
 onMounted(() => {
   if (typeof window !== "undefined") { window.addEventListener("pagehide", purge); window.addEventListener("mediaai:auth-expired", expired); }
@@ -213,6 +252,7 @@ onBeforeUnmount(() => {
   <el-dialog :model-value="visible" :title="text.title" width="min(820px, 94vw)" append-to-body destroy-on-close
     @update:model-value="(value: boolean) => { if (!value) close(); }">
     <div class="directory-execution-content">
+      <CloudTaskSourceSummary :value="plan" />
       <p class="directory-execution-notice"><el-icon><InfoFilled /></el-icon><span>{{ text.scope }}</span></p>
       <p v-if="errorText" class="directory-execution-error" role="alert">{{ errorText }}</p>
       <dl class="directory-execution-facts"><dt>{{ text.parent }}</dt><dd>{{ plan.parentPath }}</dd>
@@ -221,10 +261,10 @@ onBeforeUnmount(() => {
       <template v-if="!requestId">
         <p class="directory-execution-muted">{{ formatMessage(text.limits, { rpc: 3 + 7 * plan.items.length }) }}</p>
         <p v-if="disabledReason" class="directory-execution-muted" role="status">{{ disabledReason }}</p>
-        <el-table :data="plan.items" border class="data-table" max-height="210">
+        <FullscreenTablePanel variant="embedded"><el-table :data="plan.items" border class="data-table" max-height="210">
           <el-table-column prop="sourceName" :label="messages.cloudInventory.directoryPlan.source" min-width="200" show-overflow-tooltip />
           <el-table-column prop="targetName" :label="messages.cloudInventory.directoryPlan.target" min-width="200" show-overflow-tooltip />
-        </el-table>
+        </el-table></FullscreenTablePanel>
         <el-form v-if="secure && canExecute && policy?.available && plan.valid" label-position="top" @submit.prevent="start">
           <el-form-item :label="text.token">
             <el-input v-model="tokenValue" :aria-label="text.token" type="password" maxlength="8192" autocomplete="new-password"
@@ -244,19 +284,19 @@ onBeforeUnmount(() => {
         <p v-else-if="execution.reason === 'positions_reconciled'" class="directory-execution-muted">{{ text.reconciledHint }}</p>
         <p v-else-if="execution.reason === 'awaiting_path_sync'" class="directory-execution-muted">{{ text.localHint }}</p>
         <p v-else-if="execution.globalSlotHeld && !execution.pollingRecommended" class="directory-execution-muted" role="status">{{ text.frozen }}</p>
-        <el-table :data="execution.items" border class="data-table" max-height="250">
+        <FullscreenTablePanel variant="embedded"><el-table :data="execution.items" border class="data-table" max-height="250">
           <el-table-column prop="sourceName" :label="messages.cloudInventory.directoryPlan.source" min-width="190" show-overflow-tooltip />
           <el-table-column prop="targetName" :label="messages.cloudInventory.directoryPlan.target" min-width="190" show-overflow-tooltip />
           <el-table-column :label="text.itemState" width="126" fixed="right"><template #default="{ row }"><span>{{ text.itemStates[row.state] }}</span></template></el-table-column>
-        </el-table>
+        </el-table></FullscreenTablePanel>
         <el-collapse class="directory-execution-events"><el-collapse-item :title="text.events" name="events">
           <p class="directory-execution-muted">{{ text.eventHint }}</p>
-          <el-table :data="execution.events" border class="data-table" max-height="230" :empty-text="text.noEvents">
+          <FullscreenTablePanel variant="embedded"><el-table :data="execution.events" border class="data-table" max-height="230" :empty-text="text.noEvents">
             <el-table-column prop="ordinal" label="#" width="54" />
             <el-table-column prop="method" :label="text.method" min-width="170" />
             <el-table-column :label="text.phase" width="110"><template #default="{ row }">{{ text.phases[row.phase] }}</template></el-table-column>
             <el-table-column prop="responseCode" :label="text.response" min-width="145" />
-          </el-table>
+          </el-table></FullscreenTablePanel>
         </el-collapse-item></el-collapse>
       </template>
     </div>

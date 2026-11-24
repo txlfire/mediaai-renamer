@@ -28,7 +28,7 @@ import {
   type ScanMode,
   type ScanModeSuggestion,
 } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 import { useAuthStore } from "./auth";
 
 export const useMediaStore = defineStore("media", {
@@ -119,7 +119,7 @@ export const useMediaStore = defineStore("media", {
         return job;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.scanJobFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.scanJobFailed;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           this.loading = false;

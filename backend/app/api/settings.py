@@ -8,6 +8,9 @@ from app.service.cloud_drive_configuration_service import (
 
 from app.api.auth import require_authenticated_user, require_permission
 from app.service.audit_service import AuditWriteContext, record_audit_event, sanitize_audit_detail
+from app.service.dev_port_service import (
+    DevPortError, MAX_DEV_PORT, MIN_DEV_PORT, PortPair, readDevPorts, saveDevPorts,
+)
 from app.service.settings_service import (
     AI_TEST_PAGE_KEY,
     TMDB_TEST_PAGE_KEY,
@@ -57,6 +60,44 @@ class CloudDriveConfigurationRequest(BaseModel):
     expectedRevision: StrictInt = Field(ge=0, lt=2**63 - 1)
 
 
+class DevPortSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    frontendPort: StrictInt = Field(ge=MIN_DEV_PORT, le=MAX_DEV_PORT)
+    backendPort: StrictInt = Field(ge=MIN_DEV_PORT, le=MAX_DEV_PORT)
+    expectedRevision: StrictInt = Field(ge=0, lt=2**53 - 1)
+
+
+def _devPortHttpError(exc: DevPortError):
+    if exc.code == "invalid_service_ports":
+        return HTTPException(400, detail=exc.code)
+    if exc.code == "service_ports_deployment_managed":
+        return HTTPException(403, detail=exc.code)
+    if exc.code in {"service_ports_changed", "service_ports_revision_exhausted",
+                    "frontend_port_unavailable", "backend_port_unavailable"}:
+        return HTTPException(409, detail=exc.code)
+    return HTTPException(503, detail=exc.code)
+
+
+@router.get("/service-ports")
+def getDevPortSettings(request: Request, _user=Depends(require_permission("settings:write"))):
+    try:
+        return readDevPorts(request.app.state.settings)
+    except DevPortError as exc:
+        raise _devPortHttpError(exc) from None
+
+
+@router.put("/service-ports")
+def updateDevPortSettings(payload: DevPortSettingsRequest, request: Request,
+                          user=Depends(require_permission("settings:write"))):
+    context = AuditWriteContext(actor=user, ipAddress=request.client.host if request.client else None,
+                                userAgent=request.headers.get("user-agent"))
+    try:
+        values = PortPair(payload.frontendPort, payload.backendPort)
+        return saveDevPorts(request.app.state.settings, values, payload.expectedRevision, context)
+    except DevPortError as exc:
+        raise _devPortHttpError(exc) from None
+
+
 @router.get("/cloud-drive")
 def get_cloud_drive_configuration(request: Request, _user=Depends(require_permission("settings:write"))):
     try:
@@ -73,7 +114,7 @@ def save_cloud_drive_configuration(payload: CloudDriveConfigurationRequest, requ
             expectedRevision=payload.expectedRevision, auditContext=AuditWriteContext(actor=user,
                 ipAddress=request.client.host if request.client else None, userAgent=request.headers.get("user-agent")))
     except CloudConfigurationError as exc:
-        status = 409 if exc.code in {"configuration_changed", "cloud_work_or_unknown_pending"} else 503 if exc.code in {
+        status = 409 if exc.code in {"configuration_changed", "cloud_work_or_unknown_pending", "multi_connection_required"} else 503 if exc.code in {
             "configuration_unavailable", "configuration_storage_failed"} else 400
         if exc.code == "configuration_permission_denied":
             status = 403

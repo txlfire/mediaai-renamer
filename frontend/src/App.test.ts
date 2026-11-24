@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   route: { meta: {} as { public?: boolean }, matched: [] as object[] },
   appStore: { resolvedTheme: "light", health: null as null | { version: string }, connectionState: "loading",
-    loadSidebarCollapsed: vi.fn(), loadThemeMode: vi.fn(), refreshHealth: vi.fn() },
+    loadSidebarCollapsed: vi.fn(), syncSidebarViewport: vi.fn(), loadThemeMode: vi.fn(), refreshHealth: vi.fn() },
 }));
 vi.mock("./stores/app", () => ({ useAppStore: () => reactive(mocks.appStore) }));
 vi.mock("./stores/auth", () => ({ useAuthStore: () => ({ hasPermission: () => false, currentUser: null, loadStoredSession: vi.fn() }) }));

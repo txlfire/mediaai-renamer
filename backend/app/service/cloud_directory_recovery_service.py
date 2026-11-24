@@ -56,47 +56,55 @@ def _audit(settings, connection, row, action, *, detail=None):
 
 
 def approveDirectoryRecovery(settings, planId, *, requestId, expectedRevision, confirmMaintenance, confirmRemoteIdle, auditContext):
+    with inventoryDb(settings, write=True) as connection:
+        return approveDirectoryRecoveryTx(settings, connection, planId, requestId=requestId, expectedRevision=expectedRevision,
+            confirmMaintenance=confirmMaintenance, confirmRemoteIdle=confirmRemoteIdle, auditContext=auditContext)
+
+
+def approveDirectoryRecoveryTx(settings, connection, planId, *, requestId, expectedRevision, confirmMaintenance,
+                               confirmRemoteIdle, auditContext, recoveryId=None, contextId=None, approvedAt=None):
+    """原核对预算的事务内实现；不提交、不创建连接或重发原动作。"""
     inventoryId(planId)
     inventoryId(requestId)
     _revision(expectedRevision)
     if confirmMaintenance is not True or confirmRemoteIdle is not True or auditContext.actor is None:
         raise ValueError("须确认维护窗口、旧进程退出及原请求和先前恢复涉及的远端已静止")
-    with inventoryDb(settings, write=True) as connection:
-        original = _original(connection, planId, auditContext.actor.id)
-        if original["revision"] != expectedRevision:
-            raise CloudDirectoryError("revision_conflict")
-        if connection.execute("SELECT 1 FROM cloud_directory_recoveries WHERE request_id=?", (requestId,)).fetchone():
-            raise CloudDirectoryError("recovery_already_accepted")
-        if original["policy_hash"] != recoveryPolicyHash(settings):
-            raise CloudDirectoryError("execution_policy_changed")
-        if (connection.execute("SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1").fetchone()):
-            raise CloudDirectoryError("recovery_slot_busy")
-        attempt = connection.execute("SELECT COALESCE(MAX(attempt),0)+1 FROM cloud_directory_recoveries WHERE plan_id=?", (planId,)).fetchone()[0]
-        if attempt > 5:
-            raise CloudDirectoryError("recovery_attempt_limit")
-        count = connection.execute("SELECT COUNT(*) FROM cloud_directory_plan_items WHERE plan_id=?", (planId,)).fetchone()[0]
-        if not 1 <= count <= 5:
-            raise CloudDirectoryError("invalid_plan_items")
-        now = _wallNow()
-        pool = _pool(settings, connection, now)
-        if now < pool["cooldown_until"] or (pool["state"] != "ready" and pool["pause_reason"] != "request_incomplete"):
-            raise CloudDirectoryError("pool_not_ready")
-        if (3 + 2 * count) * pool["min_interval"] + 15 > RECOVERY_SECONDS:
-            raise CloudDirectoryError("batch_exceeds_time_budget")
-        recoveryId, token = str(uuid4()), str(uuid4())
-        connection.execute("INSERT INTO cloud_directory_recoveries "
-            "(id,request_id,plan_id,attempt,actor_id,policy_hash,basis_epoch,basis_revision,status,worker_token,owner_pid,owner_host,"
-            "max_rpc,max_bytes,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'accepted',?,?,?,?,?,?,?,?)",
-            (recoveryId, requestId, planId, attempt, original["actor_id"], original["policy_hash"], cloudPathEpoch(connection)["revision"],
-             original["revision"], token, os.getpid(), cloudDriveHostKey(), 4 + 2 * count, MAX_RECOVERY_BYTES, now, now + RECOVERY_SECONDS, now))
-        # 仅本计划全局冻结下、冷却已过且用户确认远端静止，允许新只读预算；原未知记录保留。
-        if pool["state"] != "ready":
-            connection.execute("UPDATE cloud_drive_budget_pool SET state='ready',pause_reason=NULL,revision=revision+1,updated_at=? WHERE id=1", (now,))
-        row = _row(connection, recoveryId)
-        _audit(settings, connection, row, "recovery_approved", detail={"newReadBudget": True, "attempt": attempt,
-            "maintenanceConfirmed": True, "remoteIdleConfirmed": True, "originalRpcChanged": False})
-        return recoveryId, token
+    original = _original(connection, planId, auditContext.actor.id)
+    if original['revision'] != expectedRevision:
+        raise CloudDirectoryError('revision_conflict')
+    if connection.execute('SELECT 1 FROM cloud_directory_recoveries WHERE request_id=?', (requestId,)).fetchone():
+        raise CloudDirectoryError('recovery_already_accepted')
+    if original['policy_hash'] != recoveryPolicyHash(settings):
+        raise CloudDirectoryError('execution_policy_changed')
+    if (connection.execute('SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 LIMIT 1').fetchone()
+            or connection.execute('SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1').fetchone()):
+        raise CloudDirectoryError('recovery_slot_busy')
+    attempt = connection.execute('SELECT COALESCE(MAX(attempt),0)+1 FROM cloud_directory_recoveries WHERE plan_id=?', (planId,)).fetchone()[0]
+    if attempt > 5:
+        raise CloudDirectoryError('recovery_attempt_limit')
+    count = connection.execute('SELECT COUNT(*) FROM cloud_directory_plan_items WHERE plan_id=?', (planId,)).fetchone()[0]
+    if not 1 <= count <= 5:
+        raise CloudDirectoryError('invalid_plan_items')
+    now = _wallNow() if approvedAt is None else approvedAt
+    pool = _pool(settings, connection, now)
+    if now < pool['cooldown_until'] or pool['state'] != 'ready' and pool['pause_reason'] != 'request_incomplete':
+        raise CloudDirectoryError('pool_not_ready')
+    if (3 + 2 * count) * pool['min_interval'] + 15 > RECOVERY_SECONDS:
+        raise CloudDirectoryError('batch_exceeds_time_budget')
+    recoveryId, token = recoveryId or str(uuid4()), str(uuid4())
+    columns = ('id,request_id,plan_id,attempt,actor_id,policy_hash,basis_epoch,basis_revision,status,worker_token,owner_pid,owner_host,'
+               'max_rpc,max_bytes,created_at,expires_at,updated_at')
+    values = (recoveryId, requestId, planId, attempt, original['actor_id'], original['policy_hash'], cloudPathEpoch(connection)['revision'],
+        original['revision'], 'accepted', token, os.getpid(), cloudDriveHostKey(), 4 + 2 * count, MAX_RECOVERY_BYTES, now, now + RECOVERY_SECONDS, now)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_directory_recoveries({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    if pool['state'] != 'ready':
+        connection.execute("UPDATE cloud_drive_budget_pool SET state='ready',pause_reason=NULL,revision=revision+1,updated_at=? WHERE id=1", (now,))
+    _audit(settings, connection, _row(connection, recoveryId), 'recovery_approved', detail={'newReadBudget': True,
+        'attempt': attempt, 'maintenanceConfirmed': True, 'remoteIdleConfirmed': True, 'originalRpcChanged': False})
+    return recoveryId, token
 
 
 def _worker(connection, recoveryId, token):
@@ -107,7 +115,10 @@ def _worker(connection, recoveryId, token):
     return row
 
 
-def _active(settings, connection, row, now):
+def _active(settings, connection, row, now, *, network=False):
+    from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+    if isinstance(settings, BoundNativeCloudSettings):
+        requireNativeSendTx(settings, connection, network=network)
     original = _original(connection, row["plan_id"], row["actor_id"])
     if (row["status"] != "running" or row["cancel_requested"] or now < row["created_at"] or now >= row["expires_at"]
             or row["basis_revision"] != original["revision"] or row["basis_epoch"] != cloudPathEpoch(connection)["revision"]):
@@ -138,7 +149,7 @@ def reserveRecoveryRpc(settings, recoveryId, token, method, *, itemOrdinal=None,
     with inventoryDb(settings, write=True) as connection:
         row = _worker(connection, recoveryId, token)
         now = _wallNow()
-        _active(settings, connection, row, now)
+        _active(settings, connection, row, now, network=True)
         items = connection.execute("SELECT ordinal,source_name,target_name FROM cloud_directory_plan_items WHERE plan_id=? ORDER BY ordinal", (row["plan_id"],)).fetchall()
         if method == "FindFileByPath":
             valid = itemOrdinal is None and requestPath == "/" or any(item["ordinal"] == itemOrdinal
@@ -277,50 +288,55 @@ def verifyRecoveryPositions(settings, recoveryId, token):
 
 
 def commitRecoveryPositions(settings, recoveryId, *, expectedRevision, confirmCurrentPositions, actorId):
+    with inventoryDb(settings, write=True) as connection:
+        return commitRecoveryPositionsTx(settings, connection, recoveryId, expectedRevision=expectedRevision,
+            confirmCurrentPositions=confirmCurrentPositions, actorId=actorId)
+
+
+def commitRecoveryPositionsTx(settings, connection, recoveryId, *, expectedRevision, confirmCurrentPositions, actorId):
     inventoryId(recoveryId)
     _revision(expectedRevision)
     if confirmCurrentPositions is not True:
         raise ValueError("须确认仅依据本轮已核对位置提交本地修订，原请求仍可能未知，不发送云请求")
-    with inventoryDb(settings, write=True) as connection:
-        row = _row(connection, recoveryId)
-        if row["actor_id"] != actorId:
-            raise CloudDirectoryError("not_found")
-        _permission(connection, actorId)
-        _permission(connection, actorId, "cloud-directory:execute")
-        if row["status"] == "committed":
-            return cloudPathEpoch(connection)["revision"]
-        original = _original(connection, row["plan_id"], actorId)
-        if (row["revision"] != expectedRevision or row["basis_revision"] != original["revision"]
-                or row["basis_epoch"] != cloudPathEpoch(connection)["revision"] or row["policy_hash"] != recoveryPolicyHash(settings)):
-            raise CloudDirectoryError("revision_or_policy_changed")
-        now = _wallNow()
-        if (row["status"] != "ready" or row["cancel_requested"] or row["worker_pid"] is not None or row["slot_held"] != 0
-                or now < row["updated_at"] or now > row["updated_at"] + 300
-                or connection.execute("SELECT 1 FROM cloud_directory_recoveries WHERE plan_id=? AND attempt>? LIMIT 1", (row["plan_id"], row["attempt"])).fetchone()):
-            raise CloudDirectoryError("recovery_not_ready_or_stale")
-        oldestResponse = connection.execute("SELECT MIN(responded_at) FROM cloud_directory_recovery_rpcs WHERE recovery_id=? AND method='FindFileByPath'", (recoveryId,)).fetchone()[0]
-        if oldestResponse is None or not 0 <= now - oldestResponse <= 300:
-            raise CloudDirectoryError("recovery_not_ready_or_stale")
-        positions = connection.execute("SELECT p.*,r.position FROM cloud_directory_plan_items p JOIN cloud_directory_recovery_items r "
-            "ON r.ordinal=p.ordinal AND r.recovery_id=? WHERE p.plan_id=? ORDER BY p.ordinal", (recoveryId, row["plan_id"])).fetchall()
-        count = connection.execute("SELECT COUNT(*) FROM cloud_directory_plan_items WHERE plan_id=?", (row["plan_id"],)).fetchone()[0]
-        if (not 1 <= count <= 5 or len(positions) != count or any(item["position"] not in {"at_source", "at_target"} for item in positions)
-                or connection.execute("SELECT 1 FROM cloud_directory_recovery_rpcs WHERE recovery_id=? AND phase!='responded' LIMIT 1", (recoveryId,)).fetchone()
-                or connection.execute("SELECT 1 FROM cloud_directory_path_revisions WHERE plan_id=? LIMIT 1", (row["plan_id"],)).fetchone()):
-            raise CloudDirectoryError("recovery_evidence_incomplete")
-        from app.service.cloud_directory_path_service import advanceCloudPathEpoch
-        epoch = advanceCloudPathEpoch(connection, now)
-        connection.executemany("INSERT INTO cloud_directory_path_revisions(plan_id,ordinal,epoch,source_path,target_path,remote_id,committed_at) VALUES(?,?,?,?,?,?,?)",
-            [(row["plan_id"], item["ordinal"], epoch, item["source_path"], item["target_path"], item["remote_id"], now)
-             for item in positions if item["position"] == "at_target"])
-        # 未知依然未知；单独引用本轮位置核对，解除的是本地发送阻断，不伪造历史响应。
-        connection.execute("UPDATE cloud_directory_rpc_intents SET phase=CASE WHEN phase='sending' THEN 'unknown' ELSE phase END,reviewed_by_recovery=? "
-            "WHERE plan_id=? AND phase IN ('sending','unknown') AND reviewed_by_recovery IS NULL", (recoveryId, row["plan_id"]))
-        connection.execute("UPDATE cloud_directory_executions SET status='review',reason='positions_reconciled',slot_held=0,worker_pid=NULL,revision=revision+1,updated_at=? WHERE plan_id=?", (now, row["plan_id"]))
-        connection.execute("UPDATE cloud_directory_recoveries SET status='committed',revision=revision+1,updated_at=? WHERE id=?", (now, recoveryId))
-        _audit(settings, connection, row, "recovery_positions_committed", detail={"epoch": epoch, "causalityClaimed": False,
-            "atTarget": sum(item["position"] == "at_target" for item in positions), "automaticRescan": False})
-        return epoch
+    row = _row(connection, recoveryId)
+    if row['actor_id'] != actorId:
+        raise CloudDirectoryError('not_found')
+    _permission(connection, actorId)
+    _permission(connection, actorId, 'cloud-directory:execute')
+    if row['status'] == 'committed':
+        return cloudPathEpoch(connection)['revision']
+    original = _original(connection, row['plan_id'], actorId)
+    if (row['revision'] != expectedRevision or row['basis_revision'] != original['revision']
+            or row['basis_epoch'] != cloudPathEpoch(connection)['revision'] or row['policy_hash'] != recoveryPolicyHash(settings)):
+        raise CloudDirectoryError('revision_or_policy_changed')
+    now = _wallNow()
+    if (row['status'] != 'ready' or row['cancel_requested'] or row['worker_pid'] is not None or row['slot_held'] != 0
+            or now < row['updated_at'] or now > row['updated_at'] + 300
+            or connection.execute('SELECT 1 FROM cloud_directory_recoveries WHERE plan_id=? AND attempt>? LIMIT 1', (row['plan_id'], row['attempt'])).fetchone()):
+        raise CloudDirectoryError('recovery_not_ready_or_stale')
+    oldestResponse = connection.execute("SELECT MIN(responded_at) FROM cloud_directory_recovery_rpcs WHERE recovery_id=? AND method='FindFileByPath'", (recoveryId,)).fetchone()[0]
+    if oldestResponse is None or not 0 <= now - oldestResponse <= 300:
+        raise CloudDirectoryError('recovery_not_ready_or_stale')
+    positions = connection.execute('SELECT p.*,r.position FROM cloud_directory_plan_items p JOIN cloud_directory_recovery_items r '
+        'ON r.ordinal=p.ordinal AND r.recovery_id=? WHERE p.plan_id=? ORDER BY p.ordinal', (recoveryId, row['plan_id'])).fetchall()
+    count = connection.execute('SELECT COUNT(*) FROM cloud_directory_plan_items WHERE plan_id=?', (row['plan_id'],)).fetchone()[0]
+    if (not 1 <= count <= 5 or len(positions) != count or any(item['position'] not in {'at_source', 'at_target'} for item in positions)
+            or connection.execute("SELECT 1 FROM cloud_directory_recovery_rpcs WHERE recovery_id=? AND phase!='responded' LIMIT 1", (recoveryId,)).fetchone()
+            or connection.execute('SELECT 1 FROM cloud_directory_path_revisions WHERE plan_id=? LIMIT 1', (row['plan_id'],)).fetchone()):
+        raise CloudDirectoryError('recovery_evidence_incomplete')
+    from app.service.cloud_directory_path_service import advanceCloudPathEpoch
+    epoch = advanceCloudPathEpoch(connection, now)
+    connection.executemany('INSERT INTO cloud_directory_path_revisions(plan_id,ordinal,epoch,source_path,target_path,remote_id,committed_at) VALUES(?,?,?,?,?,?,?)',
+        [(row['plan_id'], item['ordinal'], epoch, item['source_path'], item['target_path'], item['remote_id'], now)
+         for item in positions if item['position'] == 'at_target'])
+    # 未知依然未知；只关联独立位置证据，不回填原响应。
+    connection.execute("UPDATE cloud_directory_rpc_intents SET phase=CASE WHEN phase='sending' THEN 'unknown' ELSE phase END,reviewed_by_recovery=? "
+        "WHERE plan_id=? AND phase IN ('sending','unknown') AND reviewed_by_recovery IS NULL", (recoveryId, row['plan_id']))
+    connection.execute("UPDATE cloud_directory_executions SET status='review',reason='positions_reconciled',slot_held=0,worker_pid=NULL,revision=revision+1,updated_at=? WHERE plan_id=?", (now, row['plan_id']))
+    connection.execute("UPDATE cloud_directory_recoveries SET status='committed',revision=revision+1,updated_at=? WHERE id=?", (now, recoveryId))
+    _audit(settings, connection, row, 'recovery_positions_committed', detail={'epoch': epoch, 'causalityClaimed': False,
+        'atTarget': sum(item['position'] == 'at_target' for item in positions), 'automaticRescan': False})
+    return epoch
 
 
 def recoveryView(connection, row):
@@ -363,18 +379,22 @@ def findDirectoryRecoveryRequest(settings, requestId, actorId):
 
 
 def cancelDirectoryRecovery(settings, recoveryId, *, expectedRevision, actorId):
+    with inventoryDb(settings, write=True) as connection:
+        return cancelDirectoryRecoveryTx(settings, connection, recoveryId, expectedRevision=expectedRevision, actorId=actorId)
+
+
+def cancelDirectoryRecoveryTx(settings, connection, recoveryId, *, expectedRevision, actorId):
     inventoryId(recoveryId)
     _revision(expectedRevision)
-    with inventoryDb(settings, write=True) as connection:
-        row = _row(connection, recoveryId)
-        if row["actor_id"] != actorId:
-            raise CloudDirectoryError("not_found")
-        _owned(connection, row["plan_id"], actorId)
-        if row["cancel_requested"] or row["status"] == "committed":
-            return recoveryView(connection, row)
-        if row["revision"] != expectedRevision:
-            raise CloudDirectoryError("revision_conflict")
-        connection.execute("UPDATE cloud_directory_recoveries SET cancel_requested=1,status=CASE WHEN status='ready' THEN 'review' ELSE status END,"
-            "reason='cancel_requested',revision=revision+1,updated_at=? WHERE id=?", (time.time(), recoveryId))
-        _audit(settings, connection, row, "recovery_cancel_requested")
-        return recoveryView(connection, _row(connection, recoveryId))
+    row = _row(connection, recoveryId)
+    if row['actor_id'] != actorId:
+        raise CloudDirectoryError('not_found')
+    _owned(connection, row['plan_id'], actorId)
+    if row['cancel_requested'] or row['status'] == 'committed':
+        return recoveryView(connection, row)
+    if row['revision'] != expectedRevision:
+        raise CloudDirectoryError('revision_conflict')
+    connection.execute("UPDATE cloud_directory_recoveries SET cancel_requested=1,status=CASE WHEN status='ready' THEN 'review' ELSE status END,"
+        "reason='cancel_requested',revision=revision+1,updated_at=? WHERE id=?", (time.time(), recoveryId))
+    _audit(settings, connection, row, 'recovery_cancel_requested')
+    return recoveryView(connection, _row(connection, recoveryId))

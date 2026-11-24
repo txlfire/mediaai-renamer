@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { Check, Close } from "@element-plus/icons-vue";
-import { nextTick, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import type { ThemePalette } from "../config/themeRegistry";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import type { ResolvedTheme, ThemeMode } from "../stores/app";
 
 defineProps<{
@@ -17,7 +17,8 @@ const emit = defineEmits<{
   mode: [value: ThemeMode];
   dismiss: [event?: KeyboardEvent];
 }>();
-const text = messages.app.theme;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.app.theme);
 const body = ref<HTMLElement>();
 
 function revealItem(element: HTMLElement) {

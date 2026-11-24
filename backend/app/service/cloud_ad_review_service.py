@@ -107,59 +107,72 @@ def createCloudAdReview(settings, *, requestId, jobId, expectedRevision, items, 
             if existing["actor_id"] != actorId or existing["request_hash"] != requestHash:
                 raise CloudInventoryError("request_conflict")
             return _result(connection, settings, existing)
-        requireNoDirectoryExecution(connection)
-        job = connection.execute("SELECT * FROM cloud_drive_inventory_jobs WHERE id=? AND actor_id=?", (jobId, actorId)).fetchone()
-        if job is None:
-            raise CloudInventoryError("job_not_found")
-        if (job["cache_state"] != "available" or job["revision"] != expectedRevision or job["status"] != "completed"
-                or job["worker_token"] is not None or job["cancel_requested"]):
-            raise CloudInventoryError("observation_changed")
-        epoch = cloudPathEpoch(connection)["revision"]
-        if job["path_epoch"] != epoch:
-            raise CloudInventoryError("path_revision_changed")
-        session = connection.execute("SELECT endpoint_hash FROM cloud_drive_read_sessions WHERE id=?", (job["session_id"],)).fetchone()
-        if (not settings.cloudDrive.approvedRoot or not isWithinCloudRoot(job["root_path"], settings.cloudDrive.approvedRoot)
-                or session is None or (settings.cloudDrive.endpoint and session["endpoint_hash"] !=
-                    sha256(canonicalCd2Target(settings.cloudDrive.endpoint).encode()).hexdigest())):
-            raise CloudInventoryError("scope_changed")
-        snapshotItems = []
-        for item in normalized:
-            row = connection.execute("SELECT e.*,d.status AS directory_status,d.generation AS current_generation "
-                "FROM cloud_drive_inventory_entries e JOIN cloud_drive_inventory_directories d ON d.id=e.directory_id "
-                "AND d.job_id=e.job_id WHERE e.id=? AND e.job_id=?", (item["entryId"], jobId)).fetchone()
-            if row is None:
-                raise CloudInventoryError("entry_not_found")
-            if row["is_directory"] or row["directory_status"] != "complete" or row["generation"] != row["current_generation"]:
-                raise CloudInventoryError("review_file_incomplete")
-            protected = _protected({"name": row["name"], "relativePath": row["path"], "isDirectory": False})
-            if connection.execute("SELECT 1 FROM cloud_drive_inventory_keeps WHERE entry_id=? AND job_id=?", (row["id"], jobId)).fetchone():
-                protected = "user_keep"
-            evidence = [] if protected else [code for code, matched in (
-                ("promotional_phrase", any(term in row["name"] for term in _PROMOTION)),
-                ("domain_or_url_in_name", bool(_URL.search(row["name"])))) if matched]
-            if protected and item["decision"] != "keep":
-                raise CloudInventoryError("protected_entry")
-            if item["decision"].startswith("suggest_") and (not evidence or not row["remote_id"]):
-                raise CloudInventoryError("review_evidence_required")
-            snapshotItems.append({**item, "name": row["name"], "path": row["path"], "size": row["size"],
-                "remoteId": row["remote_id"], "generation": row["generation"], "protection": protected,
-                "evidence": evidence, "evidenceLevel": "medium" if len(evidence) > 1 else "low" if evidence else "none"})
-        snapshot = {"jobId": jobId, "inventoryRevision": expectedRevision, "pathEpoch": epoch,
-            "ruleVersion": RULE_VERSION, "items": snapshotItems}
-        serialized = _json(snapshot)
-        size = len(serialized.encode())
-        count, totalBytes = connection.execute("SELECT COUNT(*),COALESCE(SUM(logical_bytes),0) FROM cloud_ad_reviews").fetchone()
-        if size > MAX_REVIEW_BYTES or count >= MAX_REVIEW_RECORDS or totalBytes + size > MAX_TOTAL_BYTES:
-            raise CloudInventoryError("review_capacity")
         reviewId, now = str(uuid4()), time.time()
-        connection.execute("INSERT INTO cloud_ad_reviews(id,request_id,request_hash,actor_id,job_id,inventory_revision,"
-            "path_epoch,config_hash,rule_version,item_count,snapshot_json,logical_bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (reviewId, requestId, requestHash, actorId, jobId, expectedRevision, epoch, _configHash(settings), RULE_VERSION, len(normalized), serialized, size, now))
-        record_audit_event(settings, event_type="cloud_drive.ad_review", action="ad_review_saved", result="success",
-            summary="保存本地广告人工复核；未授权云操作", target_type="cloud_ad_review", target_id=reviewId,
-            actor=auditContext.actor, detail={"itemCount": len(normalized), "logicalBytes": size, "remoteActions": 0},
-            ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent, connection=connection)
+        insertCloudAdReviewTx(settings, connection, reviewId=reviewId, requestId=requestId, requestHash=requestHash,
+            jobId=jobId, expectedRevision=expectedRevision, normalized=normalized, now=now, auditContext=auditContext)
         return _result(connection, settings, _owned(connection, reviewId, actorId))
+
+
+def insertCloudAdReviewTx(settings, connection, *, reviewId, requestId, requestHash, jobId,
+                          expectedRevision, normalized, now, auditContext, contextId=None):
+    """复用原保护规则和全实例配额；来源授权、登记及提交由调用事务负责。"""
+    actorId = auditContext.actor.id
+    _actor(connection, actorId)
+    requireNoDirectoryExecution(connection)
+    job = connection.execute('SELECT * FROM cloud_drive_inventory_jobs WHERE id=? AND actor_id=?', (jobId, actorId)).fetchone()
+    if job is None:
+        raise CloudInventoryError('job_not_found')
+    if (job['cache_state'] != 'available' or job['revision'] != expectedRevision or job['status'] != 'completed'
+            or job['worker_token'] is not None or job['worker_pid'] is not None or job['cancel_requested']):
+        raise CloudInventoryError('observation_changed')
+    epoch = cloudPathEpoch(connection)['revision']
+    if job['path_epoch'] != epoch:
+        raise CloudInventoryError('path_revision_changed')
+    session = connection.execute('SELECT endpoint_hash FROM cloud_drive_read_sessions WHERE id=?', (job['session_id'],)).fetchone()
+    if (not settings.cloudDrive.approvedRoot or not isWithinCloudRoot(job['root_path'], settings.cloudDrive.approvedRoot)
+            or session is None or (settings.cloudDrive.endpoint and session['endpoint_hash'] !=
+                sha256(canonicalCd2Target(settings.cloudDrive.endpoint).encode()).hexdigest())):
+        raise CloudInventoryError('scope_changed')
+    snapshotItems = []
+    for item in normalized:
+        row = connection.execute('SELECT e.*,d.status AS directory_status,d.generation AS current_generation '
+            'FROM cloud_drive_inventory_entries e JOIN cloud_drive_inventory_directories d ON d.id=e.directory_id '
+            'AND d.job_id=e.job_id WHERE e.id=? AND e.job_id=?', (item['entryId'], jobId)).fetchone()
+        if row is None:
+            raise CloudInventoryError('entry_not_found')
+        if row['is_directory'] or row['directory_status'] != 'complete' or row['generation'] != row['current_generation']:
+            raise CloudInventoryError('review_file_incomplete')
+        protected = _protected({'name': row['name'], 'relativePath': row['path'], 'isDirectory': False})
+        if connection.execute('SELECT 1 FROM cloud_drive_inventory_keeps WHERE entry_id=? AND job_id=?', (row['id'], jobId)).fetchone():
+            protected = 'user_keep'
+        evidence = [] if protected else [code for code, matched in (
+            ('promotional_phrase', any(term in row['name'] for term in _PROMOTION)),
+            ('domain_or_url_in_name', bool(_URL.search(row['name'])))) if matched]
+        if protected and item['decision'] != 'keep':
+            raise CloudInventoryError('protected_entry')
+        if item['decision'].startswith('suggest_') and (not evidence or not row['remote_id']):
+            raise CloudInventoryError('review_evidence_required')
+        snapshotItems.append({**item, 'name': row['name'], 'path': row['path'], 'size': row['size'],
+            'remoteId': row['remote_id'], 'generation': row['generation'], 'protection': protected,
+            'evidence': evidence, 'evidenceLevel': 'medium' if len(evidence) > 1 else 'low' if evidence else 'none'})
+    serialized = _json({'jobId': jobId, 'inventoryRevision': expectedRevision, 'pathEpoch': epoch,
+                        'ruleVersion': RULE_VERSION, 'items': snapshotItems})
+    size = len(serialized.encode())
+    count, totalBytes = connection.execute('SELECT COUNT(*),COALESCE(SUM(logical_bytes),0) FROM cloud_ad_reviews').fetchone()
+    if size > MAX_REVIEW_BYTES or count >= MAX_REVIEW_RECORDS or totalBytes + size > MAX_TOTAL_BYTES:
+        raise CloudInventoryError('review_capacity')
+    columns = ('id,request_id,request_hash,actor_id,job_id,inventory_revision,path_epoch,config_hash,rule_version,'
+               'item_count,snapshot_json,logical_bytes,created_at')
+    values = (reviewId, requestId, requestHash, actorId, jobId, expectedRevision, epoch, _configHash(settings),
+              RULE_VERSION, len(normalized), serialized, size, now)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_ad_reviews({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    record_audit_event(settings, event_type='cloud_drive.ad_review', action='ad_review_saved', result='success',
+        summary='保存本地广告人工复核；未授权云操作', target_type='cloud_ad_review', target_id=reviewId,
+        actor=auditContext.actor, detail={'itemCount': len(normalized), 'logicalBytes': size, 'remoteActions': 0},
+        ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent, connection=connection)
 
 
 def getCloudAdReview(settings, reviewId, actorId, *, byRequest=False):

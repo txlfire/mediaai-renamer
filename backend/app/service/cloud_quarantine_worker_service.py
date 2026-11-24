@@ -68,28 +68,49 @@ def executeQuarantineBatch(settings, runId, token, apiToken):
 
 
 def finishQuarantineWorker(settings, runId, token, expectedPid, *, stopReason="worker_interrupted"):
+    with inventoryDb(settings, write=True) as connection:
+        return finishQuarantineWorkerTx(settings, connection, runId, token, expectedPid, stopReason=stopReason)
+
+
+def finishQuarantineWorkerTx(settings, connection, runId, token, expectedPid, *, stopReason='worker_interrupted'):
     if expectedPid is not None and isProcessAlive(expectedPid):
         raise QuarantineError("worker_exit_unconfirmed")
-    with inventoryDb(settings, write=True) as connection:
-        row = actions._row(connection, runId)
-        if (row["worker_token"] != token or row["owner_pid"] != os.getpid() or row["owner_host"] != cloudDriveHostKey()
-                or row["worker_pid"] not in {None, expectedPid} or not row["slot_held"]
-                or connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE original_run_id=? LIMIT 1", (runId,)).fetchone()):
-            raise QuarantineError("worker_ownership_lost")
-        unknown = connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase IN ('sending','unknown') LIMIT 1", (runId,)).fetchone()
-        sent = connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND method='MoveFile' LIMIT 1", (runId,)).fetchone()
-        connection.execute("UPDATE cloud_quarantine_rpcs SET phase='unknown' WHERE run_id=? AND phase='sending'", (runId,))
-        if unknown:
-            actions._pauseUnknown(settings, connection, time.time())
-        if row["kind"] == "observe":
-            status, reason, held = "review", row["reason"] or safeQuarantineReason(stopReason), 0
-        elif unknown or sent:
-            status, reason, held = "review", row["reason"] or "worker_interrupted", 1
-        else:
-            status, reason, held = "cancelled", row["reason"] or safeQuarantineReason(stopReason), 0
-        connection.execute("UPDATE cloud_quarantine_runs SET status=?,reason=?,slot_held=?,worker_pid=NULL,revision=revision+1,updated_at=? WHERE id=?",
-            (status, reason, held, time.time(), runId))
-        actions._audit(settings, connection, row, "worker_reaped", detail={"workerExited": True, "slotHeld": bool(held), "status": status})
+    row = actions._row(connection, runId)
+    if (row['worker_token'] != token or row['owner_pid'] != os.getpid() or row['owner_host'] != cloudDriveHostKey()
+            or row['worker_pid'] not in {None, expectedPid} or not row['slot_held']
+            or connection.execute('SELECT 1 FROM cloud_quarantine_runs WHERE original_run_id=? LIMIT 1', (runId,)).fetchone()):
+        raise QuarantineError('worker_ownership_lost')
+    unknown = connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND phase IN ('sending','unknown') LIMIT 1", (runId,)).fetchone()
+    sent = connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE run_id=? AND method='MoveFile' LIMIT 1", (runId,)).fetchone()
+    connection.execute("UPDATE cloud_quarantine_rpcs SET phase='unknown' WHERE run_id=? AND phase='sending'", (runId,))
+    if unknown:
+        actions._pauseUnknown(settings, connection, time.time())
+    if row['kind'] == 'observe':
+        status, reason, held = 'review', row['reason'] or safeQuarantineReason(stopReason), 0
+    elif unknown or sent:
+        status, reason, held = 'review', row['reason'] or 'worker_interrupted', 1
+    else:
+        status, reason, held = 'cancelled', row['reason'] or safeQuarantineReason(stopReason), 0
+    connection.execute('UPDATE cloud_quarantine_runs SET status=?,reason=?,slot_held=?,worker_pid=NULL,revision=revision+1,updated_at=? WHERE id=?',
+        (status, reason, held, time.time(), runId))
+    actions._audit(settings, connection, row, 'worker_reaped', detail={'workerExited': True, 'slotHeld': bool(held), 'status': status})
+
+
+def _readSupervisionState(settings, runId, *, deadline, stop=None):
+    from app.service.cloud_worker_read_service import readCloudSupervision
+    def read():
+        with inventoryDb(settings) as connection:
+            row = actions._row(connection, runId)
+            try:
+                actions._executePermission(connection, row['actor_id'])
+                from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+                if isinstance(settings, BoundNativeCloudSettings):
+                    requireNativeSendTx(settings, connection)
+                permitted = True
+            except (QuarantineError, ValueError):
+                permitted = False
+            return row, permitted
+    return readCloudSupervision(read, deadline=deadline, stop=stop)
 
 
 def superviseQuarantineWorker(settings, runId, token, apiToken, *, stop=None):
@@ -98,12 +119,18 @@ def superviseQuarantineWorker(settings, runId, token, apiToken, *, stop=None):
     try:
         with inventoryDb(settings) as connection:
             row = actions._row(connection, runId)
+            from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+            if isinstance(settings, BoundNativeCloudSettings):
+                requireNativeSendTx(settings, connection)
             remaining = row["expires_at"]-time.time()
         if remaining <= 0 or stop is not None and stop.is_set():
             return
         deadline = time.monotonic()+min(180, remaining)
-        payload = {"run_id": runId, "worker_token": token, "api_token": apiToken,
-            "configuration_revision": cloudConfigurationReference(settings)}
+        payload = {'run_id': runId, 'worker_token': token, 'api_token': apiToken}
+        if isinstance(settings, BoundNativeCloudSettings):
+            payload['context_id'] = settings.contextId
+        else:
+            payload['configuration_revision'] = cloudConfigurationReference(settings)
         try:
             process = startTaskProcess(settings, "app.cloud_quarantine_worker", payload,
                 lambda pid: actions.bindQuarantineWorker(settings, runId, token, pid))
@@ -114,13 +141,7 @@ def superviseQuarantineWorker(settings, runId, token, apiToken, *, stop=None):
             payload.pop("api_token", None)
             apiToken = ""
         while process.poll() is None:
-            with inventoryDb(settings) as connection:
-                row = actions._row(connection, runId)
-                try:
-                    actions._executePermission(connection, row["actor_id"])
-                    permitted = True
-                except QuarantineError:
-                    permitted = False
+            row, permitted = _readSupervisionState(settings, runId, deadline=deadline, stop=stop)
             if not permitted or row["cancel_requested"] or stop is not None and stop.is_set() or time.monotonic() >= deadline or time.time() >= row["expires_at"]:
                 reason = "permission_denied" if not permitted else "cancel_requested" if row["cancel_requested"] else "deadline_exceeded"
                 break

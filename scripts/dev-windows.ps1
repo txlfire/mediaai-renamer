@@ -1,8 +1,8 @@
 param(
     [ValidateSet("start", "stop", "restart", "status")]
     [string]$Action = "status",
-    [int]$FrontendPort = 5173,
-    [int]$BackendPort = 8970
+    [Nullable[int]]$FrontendPort,
+    [Nullable[int]]$BackendPort
 )
 
 # 用途：Windows 一键管理本地开发服务。
@@ -72,6 +72,17 @@ function Show-ServiceStatus {
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $StartScript = Join-Path $Root "scripts\start-dev-lan.ps1"
 $StopScript = Join-Path $Root "scripts\stop-dev-lan.ps1"
+. (Join-Path $Root "scripts\dev-port-config.ps1")
+
+$LastPorts = $null
+if ($Action -in @("status", "stop") -and $null -eq $FrontendPort -and $null -eq $BackendPort) {
+    $LastPorts = Get-LastDevPorts -RootPath $Root.Path
+}
+if (-not $LastPorts) {
+    $LastPorts = Get-ConfiguredDevPorts -RootPath $Root.Path -FrontendPort $FrontendPort -BackendPort $BackendPort
+}
+$FrontendPort = $LastPorts.frontendPort
+$BackendPort = $LastPorts.backendPort
 
 switch ($Action) {
     "start" {
@@ -83,7 +94,6 @@ switch ($Action) {
         Show-ServiceStatus -StatusFrontendPort $FrontendPort -StatusBackendPort $BackendPort
     }
     "restart" {
-        & $StopScript -FrontendPort $FrontendPort -BackendPort $BackendPort
         & $StartScript -FrontendPort $FrontendPort -BackendPort $BackendPort
         Show-ServiceStatus -StatusFrontendPort $FrontendPort -StatusBackendPort $BackendPort
     }

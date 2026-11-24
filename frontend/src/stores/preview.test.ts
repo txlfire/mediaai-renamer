@@ -8,6 +8,7 @@ vi.mock("../api/backgroundJobs", async () => {
   const client = await import("../api/client");
   return {
     parseRenamePreviewsWithAiBackground: client.parseRenamePreviewsWithAi,
+    matchTmdbWithAiBackground: client.matchRenamePreviewsMetadataWithAiFallback,
     matchRenamePreviewsMultiSourceBackground: vi.fn(),
   };
 });

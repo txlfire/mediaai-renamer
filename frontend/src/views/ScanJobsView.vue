@@ -7,19 +7,23 @@ import { useRoute, useRouter } from "vue-router";
 import { fetchMediaSource, fetchScanJob, fetchScanJobsPage, fetchScanModeSuggestion, type MediaSource, type ScanJob, type ScanMode } from "../api/client";
 import { createScanTaskObserver, isScanActive } from "../utils/scanTaskObserver";
 import ListPageLayout from "../components/ListPageLayout.vue";
+import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import MediaSourceSelect from "../components/MediaSourceSelect.vue";
 import OperationProgressLog from "../components/OperationProgressLog.vue";
 import OperationLogDrawer from "../components/OperationLogDrawer.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { formatMessage } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
 import { useMediaStore } from "../stores/media";
 import { usePaginationStore } from "../stores/pagination";
 import { useTableSortStore } from "../stores/tableSort";
 import { formatDateTime, formatScanJobStatus } from "../utils/displayFormat";
 import { isSessionChangedError } from "../utils/sessionGeneration";
+
+const { messages } = useInterfaceLanguage();
 
 const mediaStore = useMediaStore();
 const authStore = useAuthStore();
@@ -28,6 +32,7 @@ const tableSortStore = useTableSortStore();
 const route = useRoute();
 const router = useRouter();
 const selectedSourceId = ref<number>();
+const tableActionsHost = ref<HTMLElement | null>(null);
 const scanMode = ref<ScanMode>("full");
 const scanLogDialogVisible = ref(false);
 const selectedScanLog = ref("");
@@ -35,14 +40,39 @@ const operationLogVisible = ref(false);
 const selectedOperationLogTaskId = ref<number | null>(null);
 const scanProgressVisible = ref(false);
 const scanProgressPercent = ref(0);
-const scanProgressText = ref("");
-const scanProgressLogs = ref<string[]>([]);
-const scanProgressSummary = ref("");
+const scanProgress = ref<ScanJob | "submitting" | "observationFailed" | null>(null);
+const scanProgressSourceName = ref<string | null>(null);
+const scanOutcome = ref<{ job: ScanJob; refreshFailed: boolean } | "acceptanceUnknown" | null>(null);
 const scanProgressStatus = ref<"success" | "warning" | "error">("success");
 const scanProgressIndeterminate = ref(false);
 const scanSubmitting = ref(false);
 const defaultSort = { prop: "id", order: "descending" as const };
-const pageText = messages.scanJobs;
+const pageText = computed(() => messages.value.scanJobs);
+const scanProgressText = computed(() => {
+  const job = scanProgress.value;
+  if (!job) return "";
+  if (job === "submitting") return pageText.value.scanProgressStart;
+  if (job === "observationFailed") return pageText.value.scanObservationFailed;
+  return formatMessage(pageText.value.scanProgressLive, {
+    id: job.id, status: formatScanJobStatus(job.status), files: job.scanned_count ?? 0,
+    videos: job.video_count ?? 0, warnings: job.warning_count ?? 0,
+  });
+});
+const scanProgressLogs = computed(() => scanProgressSourceName.value === null ? [] : [
+  formatMessage(pageText.value.scanLogStart, { name: scanProgressSourceName.value }),
+]);
+const scanProgressSummary = computed(() => {
+  const outcome = scanOutcome.value;
+  if (!outcome) return "";
+  if (outcome === "acceptanceUnknown") return pageText.value.scanAcceptanceUnknown;
+  const { job, refreshFailed } = outcome;
+  const summary = job.status === "completed"
+    ? formatMessage(pageText.value.scanSuccessSummary, { files: job.scanned_count ?? 0, videos: job.video_count ?? 0 })
+    : job.status === "partial_completed"
+      ? formatMessage(pageText.value.scanPartialSummary, { videos: job.video_count ?? 0, warnings: job.warning_count ?? 0 })
+      : job.error_message || pageText.value.scanFailedSummary;
+  return refreshFailed ? `${summary} ${pageText.value.scanRefreshFailed}` : summary;
+});
 
 const pagedScanJobs = ref<ScanJob[]>([]);
 const scanJobTotal = ref(0);
@@ -61,7 +91,7 @@ const canRunScan = computed(() => authStore.hasPermission("scan:run"));
 const canReadLogs = computed(() => authStore.hasPermission("audit:read"));
 const canStartScan = computed(() => Boolean(selectedSourceId.value && selectedSource.value?.enabled && canRunScan.value
   && !scanSubmitting.value && activeChecked.value && !activeScanJob.value));
-const scanPermissionTitle = computed(() => (canRunScan.value ? "" : messages.auth.permissionDenied));
+const scanPermissionTitle = computed(() => (canRunScan.value ? "" : messages.value.auth.permissionDenied));
 const scanModeSuggestion = computed(() => mediaStore.scanModeSuggestion);
 
 function handleSortChange(event: { prop: string; order: "ascending" | "descending" | null }) {
@@ -75,24 +105,20 @@ function applyScanJob(job: ScanJob) {
   activeScanJob.value = isScanActive(job.status) ? job : null;
   scanProgressVisible.value = true;
   scanProgressIndeterminate.value = isScanActive(job.status);
-  scanProgressText.value = formatMessage(pageText.scanProgressLive, { id: job.id, status: formatScanJobStatus(job.status),
-    files: job.scanned_count ?? 0, videos: job.video_count ?? 0, warnings: job.warning_count ?? 0 });
+  scanProgress.value = job;
   if (isScanActive(job.status)) {
     scanProgressPercent.value = 0;
-    scanProgressSummary.value = "";
+    scanOutcome.value = null;
     return;
   }
   const failed = !["completed", "partial_completed"].includes(job.status);
   scanProgressPercent.value = failed ? 0 : 100;
   scanProgressStatus.value = failed ? "error" : job.status === "partial_completed" || mediaStore.scanRefreshFailed ? "warning" : "success";
-  scanProgressSummary.value = failed ? (job.error_message || pageText.scanFailedSummary) : job.status === "partial_completed"
-    ? formatMessage(pageText.scanPartialSummary, { videos: job.video_count ?? 0, warnings: job.warning_count ?? 0 })
-    : formatMessage(pageText.scanSuccessSummary, { files: job.scanned_count ?? 0, videos: job.video_count ?? 0 });
-  if (mediaStore.scanRefreshFailed) scanProgressSummary.value += ` ${pageText.scanRefreshFailed}`;
+  scanOutcome.value = { job, refreshFailed: mediaStore.scanRefreshFailed };
 }
 
 const scanObserver = createScanTaskObserver(fetchScanJob, applyScanJob, () => {
-  scanProgressText.value = pageText.scanObservationFailed;
+  scanProgress.value = "observationFailed";
 });
 onUnmounted(() => {
   viewActive = false;
@@ -108,7 +134,7 @@ async function startScan() {
     return;
   }
   if (!selectedSource.value?.enabled) {
-    ElMessage.warning(pageText.disabledSource);
+    ElMessage.warning(pageText.value.disabledSource);
     return;
   }
 
@@ -118,20 +144,20 @@ async function startScan() {
   const requestedMode = scanMode.value;
   try {
     await ElMessageBox.confirm(
-    pageText.confirmScan,
-    messages.renamePreviews.confirmOperationTitle,
+    pageText.value.confirmScan,
+    messages.value.renamePreviews.confirmOperationTitle,
     {
       type: "warning",
-      confirmButtonText: messages.common.confirm,
-      cancelButtonText: messages.common.cancel,
+      confirmButtonText: messages.value.common.confirm,
+      cancelButtonText: messages.value.common.cancel,
     },
   );
   scanProgressVisible.value = true;
   scanProgressPercent.value = 0;
   scanProgressIndeterminate.value = true;
-  scanProgressText.value = pageText.scanProgressStart;
-  scanProgressLogs.value = [formatMessage(pageText.scanLogStart, { name: sourceName })];
-  scanProgressSummary.value = "";
+  scanProgress.value = "submitting";
+  scanProgressSourceName.value = sourceName;
+  scanOutcome.value = null;
   if (!viewActive || selectedSourceId.value !== sourceId) return;
   const job = await mediaStore.startScan(sourceId, requestedMode, false);
   if (!viewActive || selectedSourceId.value !== sourceId) return;
@@ -143,7 +169,7 @@ async function startScan() {
   } else {
     scanProgressIndeterminate.value = false;
     scanProgressStatus.value = "warning";
-    scanProgressSummary.value = pageText.scanAcceptanceUnknown;
+    scanOutcome.value = "acceptanceUnknown";
   }
   } catch (error) {
     if (!isSessionChangedError(error) && error !== "cancel" && error !== "close") throw error;
@@ -168,7 +194,7 @@ async function refreshActiveScan() {
     if (isSessionChangedError(error)) return;
     if (viewActive && version === activeRequestVersion) {
       activeScanJob.value = null;
-      ElMessage.error(pageText.loadFailed);
+      ElMessage.error(pageText.value.loadFailed);
     }
   }
 }
@@ -195,7 +221,7 @@ async function queryScanJobs(resetPage = true) {
     if (viewActive && version === jobRequestVersion) {
       pagedScanJobs.value = [];
       scanJobTotal.value = 0;
-      ElMessage.error(pageText.loadFailed);
+      ElMessage.error(pageText.value.loadFailed);
     }
   } finally {
     if (version === jobRequestVersion) jobsLoading.value = false;
@@ -232,7 +258,7 @@ async function loadScanModeSuggestion(mediaSourceId: number) {
 }
 
 function scanModeLabel(value: string) {
-  return value === "incremental" ? pageText.scanModes.incremental : pageText.scanModes.full;
+  return value === "incremental" ? pageText.value.scanModes.incremental : pageText.value.scanModes.full;
 }
 
 function viewScanResults(row: { id: number; media_source_id: number }) {
@@ -280,7 +306,7 @@ function hasScanDetail(row: { status: string; error_message?: string | null }) {
 }
 
 function openScanLog(row: { error_message?: string | null }) {
-  selectedScanLog.value = row.error_message || messages.common.emptyLogs;
+  selectedScanLog.value = row.error_message || "";
   scanLogDialogVisible.value = true;
 }
 
@@ -336,7 +362,7 @@ watch(selectedSourceId, async (value) => {
     if (viewActive && sourceVersion === sourceRequestVersion && value === selectedSourceId.value) selectedSource.value = source;
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    if (viewActive && sourceVersion === sourceRequestVersion) ElMessage.error(messages.selectors.selectionUnavailable);
+    if (viewActive && sourceVersion === sourceRequestVersion) ElMessage.error(messages.value.selectors.selectionUnavailable);
   }
   await loadScanModeSuggestion(value);
 });
@@ -351,13 +377,12 @@ watch(() => route.query.media_source_id, async (value) => {
 </script>
 
 <template>
-  <ListPageLayout :title="messages.scanJobs.title" :description="messages.scanJobs.description">
+  <ListPageLayout :title="messages.scanJobs.title" :description="messages.scanJobs.description" flat-table>
     <template #filters>
       <MediaSourceSelect
         v-model="selectedSourceId"
         class="source-select scan-job-source-select tall-select"
         popper-class="tall-select-dropdown"
-        :placeholder="messages.scanJobs.selectMediaSource"
         enabled-only
       />
       <el-button class="query-action-button" :icon="Search" :disabled="!selectedSourceId" :loading="jobsLoading" @click="queryScanJobs()">{{ messages.common.query }}</el-button>
@@ -392,6 +417,7 @@ watch(() => route.query.media_source_id, async (value) => {
       </el-button>
       <el-button :icon="Refresh" :disabled="!selectedSourceId || jobsLoading" @click="queryScanJobs(false)">{{ messages.common.refresh }}</el-button>
       <el-button :icon="Notebook" :disabled="!canReadLogs" :title="canReadLogs ? '' : messages.auth.permissionDenied" @click="mediaStore.openLogDrawer">{{ messages.scanJobs.viewLogs }}</el-button>
+      <span ref="tableActionsHost" class="table-view-actions" />
     </template>
 
     <el-alert v-if="mediaStore.errorMessage" type="error" :title="mediaStore.errorMessage" show-icon />
@@ -406,6 +432,7 @@ watch(() => route.query.media_source_id, async (value) => {
     />
 
     <template #table>
+      <FullscreenTablePanel :actions-host="tableActionsHost">
       <el-table
         v-loading="jobsLoading"
         :data="pagedScanJobs"
@@ -520,15 +547,13 @@ watch(() => route.query.media_source_id, async (value) => {
           </template>
         </el-table-column>
       </el-table>
-    </template>
-
-    <template #pagination>
-      <TablePagination pagination-key="scan-jobs" :total="scanJobTotal" server
-        @page-change="queryScanJobs(false)" @page-size-change="queryScanJobs()" />
+        <TablePagination pagination-key="scan-jobs" :total="scanJobTotal" server
+          @page-change="queryScanJobs(false)" @page-size-change="queryScanJobs()" />
+      </FullscreenTablePanel>
     </template>
 
     <el-dialog v-model="scanLogDialogVisible" :title="messages.scanJobs.viewLogs" width="640px">
-      <p class="scan-job-log-detail">{{ selectedScanLog }}</p>
+      <p class="scan-job-log-detail">{{ selectedScanLog || messages.common.emptyLogs }}</p>
       <template #footer>
         <el-button @click="scanLogDialogVisible = false">{{ messages.common.close }}</el-button>
       </template>

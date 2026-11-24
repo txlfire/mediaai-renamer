@@ -81,22 +81,35 @@ def createReverseDirectoryPlan(settings, originPlanId, *, requestId, expectedRev
             if old["actor_id"] != actorId or old["request_hash"] != requestHash:
                 raise CloudDirectoryError("request_conflict")
             return _view(connection, settings, old)
-        origin, revision, epoch, items = _reverseBasis(connection, settings, originPlanId, actorId)
-        if revision != expectedRevision:
-            raise CloudDirectoryError("revision_conflict")
-        if connection.execute("SELECT COUNT(*) FROM cloud_directory_plans").fetchone()[0] >= PLAN_LIMIT:
-            raise CloudDirectoryError("plan_capacity")
-        planId, now = str(uuid4()), time.time()
-        connection.execute("INSERT INTO cloud_directory_plans "
-            "(id,request_id,request_hash,actor_id,inventory_job_id,inventory_revision,policy_hash,rules_hash,rule_version,terms_json,root_path,parent_path,snapshot_hash,"
-            "created_at,expires_at,updated_at,kind,origin_plan_id,origin_revision,basis_epoch) VALUES(?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,'reverse',?,?,?)",
-            (planId, requestId, requestHash, actorId, origin["inventory_job_id"], origin["inventory_revision"], directoryPolicyHash(settings),
-                _digest(["reverse-v1", originPlanId, revision, epoch]), RULE_VERSION, origin["root_path"], origin["parent_path"], _digest(items),
-                now, now + PLAN_SECONDS, now, originPlanId, revision, epoch))
-        connection.executemany("INSERT INTO cloud_directory_plan_items(plan_id,ordinal,entry_id,observation_generation,remote_id,source_path,source_name,target_name,target_path) VALUES(?,?,?,?,?,?,?,?,?)",
-            [(planId, ordinal, item["entryId"], item["generation"], item["remoteId"], item["sourcePath"], item["sourceName"], item["targetName"], item["targetPath"])
-             for ordinal, item in enumerate(items, 1)])
-        record_audit_event(settings, event_type="cloud_directory.plan", action="prepare_reverse", result="success",
-            summary="固定反向新计划；未改名、不自动补偿", target_type="cloud_directory_plan", target_id=planId, actor=auditContext.actor,
-            detail={"originPlanId": originPlanId, "basisEpoch": epoch, "itemCount": len(items), "networkAccess": False}, connection=connection)
+        planId = str(uuid4())
+        insertReverseDirectoryPlanTx(settings, connection, originPlanId, planId=planId, requestId=requestId,
+            requestHash=requestHash, expectedRevision=expectedRevision, auditContext=auditContext, now=time.time())
         return _view(connection, settings, _owned(connection, planId, actorId))
+
+
+def insertReverseDirectoryPlanTx(settings, connection, originPlanId, *, planId, requestId, requestHash,
+                                 expectedRevision, auditContext, now, contextId=None):
+    _revision(expectedRevision)
+    actorId = auditContext.actor.id
+    _permission(connection, actorId)
+    requireNoDirectoryExecution(connection)
+    origin, revision, epoch, items = _reverseBasis(connection, settings, originPlanId, actorId)
+    if revision != expectedRevision:
+        raise CloudDirectoryError('revision_conflict')
+    if connection.execute('SELECT COUNT(*) FROM cloud_directory_plans').fetchone()[0] >= PLAN_LIMIT:
+        raise CloudDirectoryError('plan_capacity')
+    columns = ('id,request_id,request_hash,actor_id,inventory_job_id,inventory_revision,policy_hash,rules_hash,rule_version,'
+               'terms_json,root_path,parent_path,snapshot_hash,created_at,expires_at,updated_at,kind,origin_plan_id,origin_revision,basis_epoch')
+    values = (planId, requestId, requestHash, actorId, origin['inventory_job_id'], origin['inventory_revision'], directoryPolicyHash(settings),
+        _digest(['reverse-v1', originPlanId, revision, epoch]), RULE_VERSION, '[]', origin['root_path'], origin['parent_path'], _digest(items),
+        now, now + PLAN_SECONDS, now, 'reverse', originPlanId, revision, epoch)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_directory_plans({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    connection.executemany('INSERT INTO cloud_directory_plan_items(plan_id,ordinal,entry_id,observation_generation,remote_id,source_path,source_name,target_name,target_path) VALUES(?,?,?,?,?,?,?,?,?)',
+        [(planId, ordinal, item['entryId'], item['generation'], item['remoteId'], item['sourcePath'], item['sourceName'], item['targetName'], item['targetPath'])
+         for ordinal, item in enumerate(items, 1)])
+    record_audit_event(settings, event_type='cloud_directory.plan', action='prepare_reverse', result='success',
+        summary='固定反向新计划；未改名、不自动补偿', target_type='cloud_directory_plan', target_id=planId, actor=auditContext.actor,
+        detail={'originPlanId': originPlanId, 'basisEpoch': epoch, 'itemCount': len(items), 'networkAccess': False}, connection=connection)

@@ -10,7 +10,7 @@ import { ElMessage } from "element-plus";
 
 import { getAuthToken } from "../api/client";
 import { useAuthStore } from "../stores/auth";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 
 export const routeLoading = ref(true);
 
@@ -91,7 +91,7 @@ router.beforeEach(async (to) => {
 
   const requiredPermission = typeof to.meta.permission === "string" ? to.meta.permission : "";
   if (requiredPermission && !authStore.hasPermission(requiredPermission)) {
-    ElMessage.warning({ message: messages.auth.permissionDenied, grouping: true });
+    ElMessage.warning({ message: getInterfaceMessages().auth.permissionDenied, grouping: true });
     return "/media-sources";
   }
 
@@ -104,7 +104,7 @@ router.afterEach(() => {
 
 router.onError(() => {
   routeLoading.value = false;
-  ElMessage.error({ message: messages.app.pageLoadFailed, grouping: true });
+  ElMessage.error({ message: getInterfaceMessages().app.pageLoadFailed, grouping: true });
 });
 
 export default router;

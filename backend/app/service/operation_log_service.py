@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -268,11 +268,12 @@ def list_operation_logs(
     task_id: int,
     after_id: int = 0,
     limit: int = 100,
+    connection: sqlite3.Connection | None = None,
 ) -> OperationLogPage:
     """按任务查询运行日志，支持增量轮询。"""
 
     safe_limit = max(1, min(int(limit), 500))
-    with closing(_connect(settings)) as connection:
+    with nullcontext(connection) if connection is not None else closing(_connect(settings)) as connection:
         total_row = connection.execute(
             "SELECT COUNT(*) AS total, COALESCE(MAX(id), 0) AS latest_id "
             "FROM operation_logs WHERE task_type = ? AND task_id = ?",
@@ -311,13 +312,14 @@ def list_operation_logs(
     )
 
 
-def export_operation_logs_text(settings: AppSettings, *, task_type: str, task_id: int) -> str:
+def export_operation_logs_text(settings: AppSettings, *, task_type: str, task_id: int,
+                               connection: sqlite3.Connection | None = None) -> str:
     """按 ID 顺序导出，最多 10000 行/1MB；超长历史条目不读入 Python 正文。"""
 
     lines = []
     totalBytes = 0
     truncated = False
-    with closing(_connect(settings)) as connection:
+    with nullcontext(connection) if connection is not None else closing(_connect(settings)) as connection:
         rows = connection.execute(
             "SELECT created_at, level, stage, CASE WHEN LENGTH(message) > 16384 THEN '[单条日志超过导出上限，已省略]' ELSE message END AS message "
             "FROM operation_logs WHERE task_type = ? AND task_id = ? ORDER BY id LIMIT 10001",

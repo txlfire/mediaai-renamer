@@ -136,19 +136,24 @@ def externalRequestSettingsFromDict(value: dict) -> ExternalRequestSettings:
         {name: site(raw, metadata) for name, raw in providers.items()})
 
 
+# 单位为任务数。保留旧配置的 100 条缺省值；允许在 1～1000 条之间热调节，不开放无上限模式。
+DEFAULT_BACKGROUND_JOB_LIMIT = 100
+MAX_BACKGROUND_JOB_LIMIT = 1000
+
+
 @dataclass(frozen=True)
 class BackgroundJobSettings:
-    """只读探测与外发任务的有界执行和普通结果保留。"""
+    """预览生成、只读探测与外发任务的有界执行和普通结果保留。"""
 
     timeout_seconds: int = 3600
-    max_queued: int = 100
+    max_queued: int = DEFAULT_BACKGROUND_JOB_LIMIT
     result_max_size_mb: int = 4
     result_total_size_mb: int = 64
     retention_days: int = 7
 
 
 def backgroundJobSettingsFromDict(values: dict) -> BackgroundJobSettings:
-    limits = {"timeout_seconds": (30, 86400), "max_queued": (1, 1000),
+    limits = {"timeout_seconds": (30, 86400), "max_queued": (1, MAX_BACKGROUND_JOB_LIMIT),
               "result_max_size_mb": (1, 64), "result_total_size_mb": (1, 4096), "retention_days": (1, 365)}
     if not isinstance(values, dict) or set(values) - limits.keys():
         raise ValueError("后台任务配置字段无效")
@@ -244,7 +249,7 @@ class AppSettings:
 
     app_name: str = "MediaAI Renamer"
     # 用于健康接口和界面展示；未显式配置时与当前发布标签同步。
-    version: str = "1.4.1"
+    version: str = "1.5.0"
     data_dir: Path = Path("data")
     database_path: Path = Path("data/mediaai.sqlite3")
     logging: LoggingSettings = LoggingSettings()

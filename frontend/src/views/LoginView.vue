@@ -5,7 +5,9 @@ import { ElMessage } from "element-plus";
 import { onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import InterfaceLanguageSelect from "../components/InterfaceLanguageSelect.vue";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { zhCnMessages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
 import {
   loadLoginPreferences,
@@ -14,13 +16,15 @@ import {
 } from "../utils/loginPreferences";
 
 const authStore = useAuthStore();
+const { messages, options } = useInterfaceLanguage();
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref<"login" | "bootstrap">("login");
 const loginPreferences = loadLoginPreferences();
 const form = reactive({
   username: loginPreferences.username || "admin",
-  displayName: messages.auth.defaultDisplayName,
+  // 初始化时提交的账号名称不是界面文案，不由语言偏好改变。
+  displayName: zhCnMessages.auth.defaultDisplayName,
   password: "",
   rememberPassword: loginPreferences.rememberPassword,
   rememberLogin: false,
@@ -44,7 +48,7 @@ async function submitLogin() {
     await handlePostLogin(form.password);
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : messages.auth.loginFailed);
+    ElMessage.error(error instanceof Error ? error.message : messages.value.auth.loginFailed);
   }
 }
 
@@ -58,7 +62,7 @@ async function submitBootstrap() {
     if (!authStore.bootstrapAvailable) {
       activeTab.value = "login";
     }
-    ElMessage.error(error instanceof Error ? error.message : messages.auth.bootstrapFailed);
+    ElMessage.error(error instanceof Error ? error.message : messages.value.auth.bootstrapFailed);
   }
 }
 
@@ -73,12 +77,12 @@ async function handlePostLogin(currentPassword: string) {
 
 async function submitChangePassword() {
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-    ElMessage.error(messages.auth.passwordMismatch);
+    ElMessage.error(messages.value.auth.passwordMismatch);
     return;
   }
   try {
     await authStore.changePassword(pendingCurrentPassword.value, passwordForm.newPassword);
-    ElMessage.success(messages.auth.changePasswordSuccess);
+    ElMessage.success(messages.value.auth.changePasswordSuccess);
     passwordDialogVisible.value = false;
     form.password = "";
     pendingCurrentPassword.value = "";
@@ -87,7 +91,7 @@ async function submitChangePassword() {
     await router.replace("/login");
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : messages.auth.changePasswordFailed);
+    ElMessage.error(error instanceof Error ? error.message : messages.value.auth.changePasswordFailed);
   }
 }
 
@@ -109,6 +113,9 @@ onMounted(async () => {
 <template>
   <main class="login-page">
     <section class="login-panel">
+      <div v-if="options.length > 1" class="login-language">
+        <InterfaceLanguageSelect />
+      </div>
       <div class="login-brand">
         <div class="brand-logo login-logo">MR</div>
         <div>
@@ -246,6 +253,12 @@ onMounted(async () => {
   margin-bottom: 22px;
 }
 
+.login-language {
+  width: 112px;
+  max-width: 100%;
+  margin: 0 0 12px auto;
+}
+
 .login-logo {
   flex: 0 0 auto;
 }
@@ -268,9 +281,10 @@ onMounted(async () => {
 
 .login-options {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 4px 16px;
   margin: -4px 0 16px;
 }
 

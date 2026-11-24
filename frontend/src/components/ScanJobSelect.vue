@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { fetchScanJob, fetchScanJobsPage, type ScanJob } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import PagedRecordSelect from "./PagedRecordSelect.vue";
+const { messages } = useInterfaceLanguage();
+
 const props = defineProps<{ modelValue?: number; mediaSourceId?: number; placeholder?: string; disabled?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: number | undefined]; change: [value: number | undefined] }>();
 async function loadPage(page: number) {
@@ -9,9 +11,9 @@ async function loadPage(page: number) {
   return fetchScanJobsPage({ media_source_id: props.mediaSourceId, page, page_size: 50 });
 }
 async function loadSelected(id: number) {
-  if (!props.mediaSourceId) throw new Error(messages.selectors.selectionUnavailable);
+  if (!props.mediaSourceId) throw new Error(messages.value.selectors.selectionUnavailable);
   const item = await fetchScanJob(id);
-  if (item.media_source_id !== props.mediaSourceId) throw new Error(messages.selectors.selectionUnavailable);
+  if (item.media_source_id !== props.mediaSourceId) throw new Error(messages.value.selectors.selectionUnavailable);
   return item;
 }
 </script>

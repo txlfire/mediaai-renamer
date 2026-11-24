@@ -96,6 +96,13 @@ $directories = Invoke-RestMethod -Uri "$uri/directories?afterId=0&limit=50" -Hea
 $directories.items
 ```
 
+### 本地数字分页
+
+- `GET /api/cloud-drive/inventory-jobs/{id}` 的 `numberedPagination` 表示本地观察可用、任务已完成或取消且没有 worker 持有。动态盘点及观察清理期间不允许按数字页读取；既有 `afterId` 页请求不变。
+- 示例：`POST /api/cloud-drive/inventory-jobs/{id}/advice` 请求 `{"page":3,"limit":100}`；目录覆盖可请求 `GET /api/cloud-drive/inventory-jobs/{id}/directories?page=2&limit=50`。页码从 1 开始，不得同时传入非零 `afterId`。返回 `pagination: {page, pageSize, total}`，超出末页时返回实际末页，空结果仍是第 1 页。
+- 同一读取事务先校验会话、任务归属、连接目录权限和观察状态，再按任务 ID 统计记录并按 ID 定位页首前一条。新增参数化 `SELECT COUNT(*)` 与 `SELECT id ... LIMIT 1 OFFSET ?`，涉及 `cloud_drive_inventory_entries`、`cloud_drive_inventory_directories`；直接使用 SQLite，无 ORM、DDL 或现场执行脚本。本地隔离库已验证；不操作现用数据库的结构，不向 CD2 或 115 发请求。
+- “目录建议”和“广告线索”仍筛当前页；页码与总数按同一份本地盘点条目计算。本页建议、选择、导出和保留例外继续沿用原有范围及校验。界面不会把本地总数当成云端规模。
+
 ## 本机核对
 
 仅用明确配置文件核对本地任务槽，不初始化数据库、不连接 CD2：

@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import FullscreenTablePanel from "./FullscreenTablePanel.vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { CircleClose, DocumentChecked, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import { cancelDirectoryPlan, findDirectoryPlan, prepareDirectoryPlan, prepareReverseDirectoryPlan, type DirectoryPlan } from "../api/cloudDirectory";
 import { inventoryRequestId, InventoryRequestError } from "../api/cloudInventory";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { formatDateTime } from "../utils/displayFormat";
 import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
 import DirectoryExecutionDialog from "./DirectoryExecutionDialog.vue";
@@ -15,7 +17,8 @@ const props = defineProps<{ visible: boolean; requestId: string; jobId: string; 
   recoveryRequestId?: string; persistRecoveryRequestId?: (id: string) => Promise<void>;
   persistReverseRequestId?: (id: string) => Promise<void> }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
-const text = messages.cloudInventory.directoryPlan;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.cloudInventory.directoryPlan);
 const requestId = ref(inventoryRequestId(props.requestId));
 const plan = ref<DirectoryPlan | null>(null);
 const busy = ref(false);
@@ -26,7 +29,7 @@ let sequence = 0;
 let active = true;
 const canCreate = computed(() => !busy.value && !requestId.value && props.entryIds.length >= 1 && props.entryIds.length <= 5
   && new Set(props.entryIds).size === props.entryIds.length && props.folderTerms.length > 0);
-const reasonText = computed(() => plan.value?.invalidReason ? text.reasons[plan.value.invalidReason] ?? text.invalid : "");
+const reasonText = computed(() => plan.value?.invalidReason ? text.value.reasons[plan.value.invalidReason] ?? text.value.invalid : "");
 const expiryText = computed(() => plan.value ? formatDateTime(new Date(plan.value.expiresAt * 1000).toISOString()) : "");
 
 function current(token: number) {
@@ -53,8 +56,8 @@ function validPlan(value: DirectoryPlan, expectedRequest: string) {
 
 function failure(error: unknown, token: number) {
   if (!active || token !== sequence || !props.visible) return;
-  errorText.value = isSessionChangedError(error) || getSessionGeneration() !== ownerSession ? text.sessionChanged
-    : error instanceof InventoryRequestError && error.status === 404 ? text.missing : text.requestFailed;
+  errorText.value = isSessionChangedError(error) || getSessionGeneration() !== ownerSession ? text.value.sessionChanged
+    : error instanceof InventoryRequestError && error.status === 404 ? text.value.missing : text.value.requestFailed;
 }
 
 async function submit() {
@@ -73,7 +76,7 @@ async function submit() {
     if (!validPlan(result, input.requestId) || result.inventoryJobId !== input.jobId
         || result.inventoryRevision !== input.expectedRevision || result.items.length !== input.entryIds.length
         || !result.items.every(item => input.entryIds.includes(item.entryId))) {
-      errorText.value = text.invalidResponse; return;
+      errorText.value = text.value.invalidResponse; return;
     }
     plan.value = result;
   } catch (error) { failure(error, token); }
@@ -87,7 +90,7 @@ async function lookup() {
   try {
     const result = await findDirectoryPlan(id);
     if (!current(token)) return;
-    if (!validPlan(result, id)) { errorText.value = text.invalidResponse; return; }
+    if (!validPlan(result, id)) { errorText.value = text.value.invalidResponse; return; }
     plan.value = result;
   } catch (error) { failure(error, token); }
   finally { if (token === sequence) busy.value = false; }
@@ -101,7 +104,7 @@ async function cancel() {
     const result = await cancelDirectoryPlan(previous.id, previous.revision);
     if (!current(token)) return;
     if (!validPlan(result, requestId.value) || result.id !== previous.id || result.status !== "cancelled"
-        || result.revision !== previous.revision + 1) { plan.value = null; errorText.value = text.invalidResponse; return; }
+        || result.revision !== previous.revision + 1) { plan.value = null; errorText.value = text.value.invalidResponse; return; }
     plan.value = result;
   } catch (error) { if (current(token)) { plan.value = null; failure(error, token); } }
   finally { if (token === sequence) busy.value = false; }
@@ -112,8 +115,8 @@ async function acknowledge() {
   const token = ++sequence;
   busy.value = true;
   try {
-    await ElMessageBox.confirm(text.acknowledgeWarning, text.acknowledge, { type: "info",
-      confirmButtonText: messages.common.confirm, cancelButtonText: messages.common.cancel });
+    await ElMessageBox.confirm(text.value.acknowledgeWarning, text.value.acknowledge, { type: "info",
+      confirmButtonText: messages.value.common.confirm, cancelButtonText: messages.value.common.cancel });
     if (!current(token)) return;
     const previous = requestId.value;
     requestId.value = "";
@@ -130,8 +133,8 @@ async function reverse(planId: string, expectedRevision: number) {
   const previous = plan.value, token = ++sequence;
   busy.value = true; errorText.value = "";
   try {
-    await ElMessageBox.confirm(text.reverseWarning, text.reverse, { type: "warning",
-      confirmButtonText: messages.common.confirm, cancelButtonText: messages.common.cancel });
+    await ElMessageBox.confirm(text.value.reverseWarning, text.value.reverse, { type: "warning",
+      confirmButtonText: messages.value.common.confirm, cancelButtonText: messages.value.common.cancel });
     if (!current(token)) return;
     executionVisible.value = false;
     requestId.value = inventoryRequestId(crypto.randomUUID());
@@ -145,7 +148,7 @@ async function reverse(planId: string, expectedRevision: number) {
       || result.items.length > previous.items.length || !result.items.every(item => previous.items.some(old => old.remoteId === item.remoteId
         && old.entryId === item.entryId && old.generation === item.generation && old.targetName === item.sourceName && old.sourceName === item.targetName
         && old.targetPath === item.sourcePath && old.sourcePath === item.targetPath))) {
-      errorText.value = text.invalidResponse; return;
+      errorText.value = text.value.invalidResponse; return;
     }
     plan.value = result;
   } catch (error) { if (error !== "cancel" && error !== "close") failure(error, token); }
@@ -183,10 +186,10 @@ onBeforeUnmount(() => { active = false; sequence += 1; });
         <div class="directory-plan-state"><el-tag :type="plan.valid ? 'success' : 'warning'">{{ plan.valid ? text.valid : text.invalid }}</el-tag>
           <span>{{ reasonText }}</span></div>
         <p class="directory-plan-path">{{ plan.parentPath }}</p>
-        <el-table :data="plan.items" border class="data-table" max-height="340">
+        <FullscreenTablePanel variant="embedded"><el-table :data="plan.items" border class="data-table" max-height="340">
           <el-table-column :label="text.source" prop="sourceName" min-width="220" show-overflow-tooltip />
           <el-table-column :label="text.target" prop="targetName" min-width="220" show-overflow-tooltip />
-        </el-table>
+        </el-table></FullscreenTablePanel>
         <p class="directory-plan-expiry">{{ text.expires }} {{ expiryText }}</p>
       </template>
     </div>

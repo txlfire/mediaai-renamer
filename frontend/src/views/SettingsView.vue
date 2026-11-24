@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import { isSessionChangedError } from "../utils/sessionGeneration";
 import { Check, CircleCloseFilled, Delete, Edit, InfoFilled, Key, Loading, Plus, Refresh, SuccessFilled } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -43,9 +44,11 @@ import {
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
 import CloudDriveSettingsPanel from "../components/CloudDriveSettingsPanel.vue";
+import ServicePortsPanel from "../components/ServicePortsPanel.vue";
 import NamingTemplateBuilder from "../components/NamingTemplateBuilder.vue";
 import TablePagination from "../components/TablePagination.vue";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { formatMessage, zhCnMessages } from "../locales/zh-CN";
 import { useAuthStore } from "../stores/auth";
 import { usePaginationStore } from "../stores/pagination";
 import { useSettingsStore } from "../stores/settings";
@@ -89,7 +92,8 @@ async function loadLogStorage() {
     if (version === logStorageRequestVersion) logStorage.value = null;
   }
 }
-const pageText = messages.settings;
+const { messages } = useInterfaceLanguage();
+const pageText = computed(() => messages.value.settings);
 const timeoutHelpVisible = ref(false);
 
 function dismissTimeoutHelp(event: KeyboardEvent) {
@@ -99,7 +103,7 @@ function dismissTimeoutHelp(event: KeyboardEvent) {
 }
 
 const settingsWriteDisabled = computed(() => !authStore.hasPermission("settings:write"));
-const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? messages.auth.permissionDenied : ""));
+const settingsPermissionTitle = computed(() => (settingsWriteDisabled.value ? messages.value.auth.permissionDenied : ""));
 const movieNamingElements = ref<NamingTemplateElement[]>([]);
 const episodeNamingElements = ref<NamingTemplateElement[]>([]);
 const activeSupplementalMetadataProviderTab = ref<SupplementalMetadataProviderKey>("imdb");
@@ -230,32 +234,33 @@ const auditFilters = reactive({
   result: "",
   actorName: "",
 });
+// 样例会提交给规则测试接口，切换界面语言不改变规则输入。
 const namingWorkbenchForm = reactive({
   mediaType: "movie" as "movie" | "episode",
-  title: pageText.naming.sample.title,
-  chineseTitle: pageText.naming.sample.chineseTitle,
-  englishTitle: pageText.naming.sample.englishTitle,
-  originalTitle: pageText.naming.sample.originalTitle,
-  year: pageText.naming.sample.year,
-  season: pageText.naming.sample.season,
-  episode: pageText.naming.sample.episode,
-  extension: pageText.naming.sample.extension,
-  resolution: pageText.naming.sample.resolution,
-  source: pageText.naming.sample.source,
+  title: zhCnMessages.settings.naming.sample.title,
+  chineseTitle: zhCnMessages.settings.naming.sample.chineseTitle,
+  englishTitle: zhCnMessages.settings.naming.sample.englishTitle,
+  originalTitle: zhCnMessages.settings.naming.sample.originalTitle,
+  year: zhCnMessages.settings.naming.sample.year,
+  season: zhCnMessages.settings.naming.sample.season,
+  episode: zhCnMessages.settings.naming.sample.episode,
+  extension: zhCnMessages.settings.naming.sample.extension,
+  resolution: zhCnMessages.settings.naming.sample.resolution,
+  source: zhCnMessages.settings.naming.sample.source,
 });
 
 const categories = computed(() => [
-  { key: "tmdb", label: pageText.categories.tmdb },
-  { key: "privacy", label: pageText.categories.privacy },
-  { key: "ai", label: pageText.categories.ai },
-  { key: "naming", label: pageText.categories.naming },
-  { key: "scan", label: pageText.categories.scan },
-  { key: "shared", label: pageText.categories.shared },
-  { key: "cloudDrive", label: messages.cloudDriveSettings.category },
-  { key: "users", label: pageText.categories.users },
-  { key: "audit", label: pageText.categories.audit },
+  { key: "tmdb", label: pageText.value.categories.tmdb },
+  { key: "privacy", label: pageText.value.categories.privacy },
+  { key: "ai", label: pageText.value.categories.ai },
+  { key: "naming", label: pageText.value.categories.naming },
+  { key: "scan", label: pageText.value.categories.scan },
+  { key: "shared", label: pageText.value.categories.shared },
+  { key: "cloudDrive", label: messages.value.cloudDriveSettings.category },
+  { key: "users", label: pageText.value.categories.users },
+  { key: "audit", label: pageText.value.categories.audit },
   // 通用设置固定在最下方；后续新增设置分类应插入到它上方。
-  { key: "operations", label: pageText.categories.operations },
+  { key: "operations", label: pageText.value.categories.operations },
 ]);
 
 function settingValue<T>(key: string, fallback: T): T {
@@ -276,15 +281,15 @@ const savedApiKeyDisplay = computed(() => {
   return isMaskedSecret(value) ? String(value) : "";
 });
 
-const v4TokenPlaceholder = computed(() => savedV4TokenDisplay.value || pageText.tmdb.v4TokenPlaceholder);
-const apiKeyPlaceholder = computed(() => savedApiKeyDisplay.value || pageText.tmdb.apiKeyPlaceholder);
+const v4TokenPlaceholder = computed(() => savedV4TokenDisplay.value || pageText.value.tmdb.v4TokenPlaceholder);
+const apiKeyPlaceholder = computed(() => savedApiKeyDisplay.value || pageText.value.tmdb.apiKeyPlaceholder);
 const auditPagination = computed(() => paginationStore.getState("audit-events"));
 const supplementalMetadataProviderTabs = computed(() =>
   resolveSupplementalMetadataProviderTabs(settingsStore.metadataProviders),
 );
 const isMountedNfsSharedPath = computed(() => form.sharedDefaultPathType === "mounted_nfs");
 const sharedPathTypeHint = computed(() => {
-  const hints = pageText.shared.pathTypeHints;
+  const hints = pageText.value.shared.pathTypeHints;
   if (form.sharedDefaultPathType === "mounted_nfs") {
     return hints.mountedNfs;
   }
@@ -302,11 +307,11 @@ function isAiProviderProfile(value: unknown): value is AiProviderProfile {
 }
 
 function metadataProviderLabel(provider: string) {
-  return pageText.metadataProviders.providers[provider] ?? provider;
+  return pageText.value.metadataProviders.providers[provider] ?? provider;
 }
 
 function supplementalMetadataProviderTabLabel(provider: string) {
-  return provider === "imdb" ? pageText.imdb.title : metadataProviderLabel(provider);
+  return provider === "imdb" ? pageText.value.imdb.title : metadataProviderLabel(provider);
 }
 
 function metadataProviderBaseUrlDisabled(provider: string) {
@@ -315,18 +320,18 @@ function metadataProviderBaseUrlDisabled(provider: string) {
 
 function metadataProviderNotice(provider: string) {
   if (metadataProviderBaseUrlDisabled(provider)) {
-    return pageText.metadataProviders.officialLocked;
+    return pageText.value.metadataProviders.officialLocked;
   }
   if (provider === "douban_proxy") {
-    return pageText.metadataProviders.doubanProxyNotice;
+    return pageText.value.metadataProviders.doubanProxyNotice;
   }
   return "";
 }
 
 function metadataProviderStatusLabel(status: string) {
-  if (status === "success") return pageText.metadataProviders.statusSuccess;
-  if (status === "failed") return pageText.metadataProviders.statusFailed;
-  if (status === "skipped") return pageText.metadataProviders.statusSkipped;
+  if (status === "success") return pageText.value.metadataProviders.statusSuccess;
+  if (status === "failed") return pageText.value.metadataProviders.statusFailed;
+  if (status === "skipped") return pageText.value.metadataProviders.statusSkipped;
   return status;
 }
 
@@ -367,10 +372,10 @@ async function saveMetadataProvider(providerConfig: MetadataProviderConfig) {
     }
     metadataProviderSecrets[provider] = "";
     metadataProviderClearSecrets[provider] = false;
-    ElMessage.success(pageText.metadataProviders.saveSuccess);
+    ElMessage.success(pageText.value.metadataProviders.saveSuccess);
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.metadataProviders.saveFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.metadataProviders.saveFailed);
   } finally {
     metadataProviderSaving.value = "";
   }
@@ -383,13 +388,13 @@ async function testMetadataProvider(providerConfig: MetadataProviderConfig) {
     const result = await settingsStore.testMetadataProvider(provider);
     metadataProviderTestResults[provider] = result;
     if (result.status === "success") {
-      ElMessage.success(result.message || pageText.metadataProviders.statusSuccess);
+      ElMessage.success(result.message || pageText.value.metadataProviders.statusSuccess);
     } else {
-      ElMessage.error(result.message || pageText.metadataProviders.statusFailed);
+      ElMessage.error(result.message || pageText.value.metadataProviders.statusFailed);
     }
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.metadataProviders.testFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.metadataProviders.testFailed);
   } finally {
     metadataProviderTesting.value = "";
   }
@@ -412,7 +417,7 @@ const selectedSavedAiProfile = computed(() =>
 );
 
 const aiApiKeyPlaceholder = computed(() =>
-  selectedSavedAiProfile.value?.api_key || savedAiApiKeyDisplay.value || pageText.ai.apiKeyPlaceholder,
+  selectedSavedAiProfile.value?.api_key || savedAiApiKeyDisplay.value || pageText.value.ai.apiKeyPlaceholder,
 );
 const defaultSensitiveWordPreview = computed(() => parseSensitiveWordsInput(form.defaultSensitiveWordsText));
 const customSensitiveWordPreview = computed(() => parseSensitiveWordsInput(form.customSensitiveWordsText));
@@ -430,19 +435,19 @@ const sensitiveWordTotal = computed(() =>
 const namingTemplateMetaList = computed(() => [
   {
     key: "movie",
-    label: pageText.naming.movieTemplateVersion,
+    label: pageText.value.naming.movieTemplateVersion,
     version: Number(settingValue("naming.movie_template_version", 1)),
     updatedAt: String(settingValue("naming.movie_template_updated_at", "")),
   },
   {
     key: "episode",
-    label: pageText.naming.episodeTemplateVersion,
+    label: pageText.value.naming.episodeTemplateVersion,
     version: Number(settingValue("naming.episode_template_version", 1)),
     updatedAt: String(settingValue("naming.episode_template_updated_at", "")),
   },
 ]);
 const namingWorkbenchDialogTitle = computed(() =>
-  namingWorkbenchMode.value === "diff" ? pageText.naming.dialogTitleDiff : pageText.naming.dialogTitleTest,
+  namingWorkbenchMode.value === "diff" ? pageText.value.naming.dialogTitleDiff : pageText.value.naming.dialogTitleTest,
 );
 
 watch(customSensitiveWordsCollapsed, (collapsed) => {
@@ -475,23 +480,23 @@ watch(
 );
 
 function resetDefaultSensitiveWords() {
-  form.defaultSensitiveWordsText = formatSensitiveWordsInput(pageText.privacy.defaultWordsInitial);
+  form.defaultSensitiveWordsText = formatSensitiveWordsInput(zhCnMessages.settings.privacy.defaultWordsInitial);
 }
 
 function userPermissionLabel(permission: string) {
-  return pageText.users.permissionLabels[permission] || permission;
+  return pageText.value.users.permissionLabels[permission] || permission;
 }
 
 function auditEventTypeLabel(eventType: string) {
-  return pageText.audit.eventTypeLabels[eventType] || eventType;
+  return pageText.value.audit.eventTypeLabels[eventType] || eventType;
 }
 
 function auditTargetTypeLabel(targetType: string) {
-  return pageText.audit.targetTypeLabels[targetType] || targetType;
+  return pageText.value.audit.targetTypeLabels[targetType] || targetType;
 }
 
 function auditResultLabel(result: string) {
-  return pageText.audit.resultLabels[result] || result;
+  return pageText.value.audit.resultLabels[result] || result;
 }
 
 function auditResultTagType(result: string) {
@@ -530,7 +535,7 @@ async function loadAuditEvents() {
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (!viewActive || version !== auditRequestVersion) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.audit.loadFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.audit.loadFailed);
   } finally {
     if (viewActive && version === auditRequestVersion) auditLoading.value = false;
   }
@@ -566,7 +571,7 @@ async function loadUsers() {
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (!viewActive || version !== usersRequestVersion) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.users.loadFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.users.loadFailed);
   } finally {
     if (viewActive && version === usersRequestVersion) usersLoading.value = false;
   }
@@ -599,21 +604,21 @@ async function saveUser() {
         enabled: userForm.enabled,
         permissions: userForm.permissions,
       });
-      ElMessage.success(pageText.users.createSuccess);
+      ElMessage.success(pageText.value.users.createSuccess);
     } else if (editingUserId.value !== null) {
       await updateUser(editingUserId.value, {
         displayName: userForm.displayName.trim(),
         enabled: userForm.enabled,
         permissions: userForm.permissions,
       });
-      ElMessage.success(pageText.users.updateSuccess);
+      ElMessage.success(pageText.value.users.updateSuccess);
     }
     userDialogVisible.value = false;
     await loadUsers();
     await authStore.loadStoredSession();
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.users.saveFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.users.saveFailed);
   }
 }
 
@@ -634,12 +639,12 @@ async function submitResetUserPassword() {
   }
   try {
     await resetUserPassword(passwordResetUser.value.id, { password: passwordResetForm.password });
-    ElMessage.success(pageText.users.resetPasswordSuccess);
+    ElMessage.success(pageText.value.users.resetPasswordSuccess);
     passwordDialogVisible.value = false;
     await loadUsers();
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.users.resetPasswordFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.users.resetPasswordFailed);
   }
 }
 
@@ -675,8 +680,8 @@ function syncForm() {
   form.scanValidatePathBeforeScan = Boolean(settingValue("scan.validate_path_before_scan", true));
   form.movieTemplate = String(settingValue("naming.movie_template", "{title}.{year}"));
   form.episodeTemplate = String(settingValue("naming.episode_template", "{title}.{year}.S{season:02d}E{episode:02d}"));
-  movieNamingElements.value = parseNamingTemplate(form.movieTemplate, "movie", pageText.naming);
-  episodeNamingElements.value = parseNamingTemplate(form.episodeTemplate, "episode", pageText.naming);
+  movieNamingElements.value = parseNamingTemplate(form.movieTemplate, "movie", zhCnMessages.settings.naming);
+  episodeNamingElements.value = parseNamingTemplate(form.episodeTemplate, "episode", zhCnMessages.settings.naming);
   form.titleRecognitionMode = String(settingValue("naming.title_recognition_mode", "parent_folder_fallback"));
   form.namingSeparator = String(settingValue("naming.separator", "."));
   form.keepYear = Boolean(settingValue("naming.keep_year", true));
@@ -748,13 +753,13 @@ function onlyDigits(
 }
 
 function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error || messages.errors.unknown);
+  return error instanceof Error ? error.message : String(error || messages.value.errors.unknown);
 }
 
 async function notifySaveFailed(error: unknown) {
   if (isSessionChangedError(error)) return;
-  await ElMessageBox.alert(`${pageText.saveFailedPrefix}${errorText(error)}`, pageText.saveFailedTitle, {
-    confirmButtonText: messages.common.confirm,
+  await ElMessageBox.alert(`${pageText.value.saveFailedPrefix}${errorText(error)}`, pageText.value.saveFailedTitle, {
+    confirmButtonText: messages.value.common.confirm,
     type: "error",
   });
 }
@@ -789,7 +794,7 @@ async function saveTmdbSettings(options: { rethrow?: boolean } = {}) {
     await settingsStore.saveSettings(values);
     syncForm();
     resetTmdbTestState();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
     if (options.rethrow) {
@@ -801,17 +806,17 @@ async function saveTmdbSettings(options: { rethrow?: boolean } = {}) {
 function validateImdbTimeout(): number | null {
   const value = Number(form.imdbTimeoutSeconds || 10);
   if (!Number.isFinite(value)) {
-    ElMessage.warning(pageText.imdb.timeoutInvalid);
+    ElMessage.warning(pageText.value.imdb.timeoutInvalid);
     form.imdbTimeoutSeconds = "10";
     return null;
   }
   if (value < 5) {
-    ElMessage.warning(pageText.imdb.timeoutTooShort);
+    ElMessage.warning(pageText.value.imdb.timeoutTooShort);
     form.imdbTimeoutSeconds = "5";
     return null;
   }
   if (value > 30) {
-    ElMessage.warning(pageText.imdb.timeoutTooLong);
+    ElMessage.warning(pageText.value.imdb.timeoutTooLong);
     form.imdbTimeoutSeconds = "30";
     return null;
   }
@@ -832,7 +837,7 @@ async function saveImdbSettings(options: { rethrow?: boolean } = {}) {
     });
     syncForm();
     resetImdbTestState();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
     if (options.rethrow) {
@@ -853,21 +858,21 @@ async function saveScanSettings() {
       "scan.validate_path_before_scan": form.scanValidatePathBeforeScan,
     });
     syncForm();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
   }
 }
 
 async function saveNamingSettings() {
-  const separatorError = validateNamingSeparator(form.namingSeparator, pageText.naming);
+  const separatorError = validateNamingSeparator(form.namingSeparator, pageText.value.naming);
   if (separatorError) {
     ElMessage.error(separatorError);
     return;
   }
   const semanticWarnings = [
-    ...detectNamingSemanticWarnings(movieNamingElements.value, pageText.naming),
-    ...detectNamingSemanticWarnings(episodeNamingElements.value, pageText.naming),
+    ...detectNamingSemanticWarnings(movieNamingElements.value, pageText.value.naming),
+    ...detectNamingSemanticWarnings(episodeNamingElements.value, pageText.value.naming),
   ];
   try {
     const movieTemplate = serializeNamingElements(movieNamingElements.value);
@@ -885,7 +890,7 @@ async function saveNamingSettings() {
     form.movieTemplate = movieTemplate;
     form.episodeTemplate = episodeTemplate;
     syncForm();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
     if (semanticWarnings.length) {
       ElMessage.warning(semanticWarnings[0]);
     }
@@ -906,7 +911,7 @@ function currentNamingTemplateValue(mediaType: "movie" | "episode") {
 }
 
 function namingTemplateUpdatedText(updatedAt: string) {
-  return updatedAt ? formatDateTime(updatedAt) : pageText.naming.notSavedYet;
+  return updatedAt ? formatDateTime(updatedAt) : pageText.value.naming.notSavedYet;
 }
 
 function openNamingWorkbench(mode: "test" | "diff") {
@@ -988,7 +993,7 @@ function exportCurrentNamingTemplateBundle() {
       link.download = `mediaai-naming-template-v${bundle.schema_version}-${Date.now()}.json`;
       link.click();
       window.URL.revokeObjectURL(objectUrl);
-      ElMessage.success(pageText.naming.exportSuccess);
+      ElMessage.success(pageText.value.naming.exportSuccess);
     })
     .catch((error) => {
       if (isSessionChangedError(error)) return;
@@ -1016,9 +1021,9 @@ async function importNamingTemplateFile(event: Event) {
     form.keepYear = imported.keep_year;
     form.movieTemplate = imported.movie_template;
     form.episodeTemplate = imported.episode_template;
-    movieNamingElements.value = parseNamingTemplate(imported.movie_template, "movie", pageText.naming);
-    episodeNamingElements.value = parseNamingTemplate(imported.episode_template, "episode", pageText.naming);
-    ElMessage.success(pageText.naming.importSuccess);
+    movieNamingElements.value = parseNamingTemplate(imported.movie_template, "movie", zhCnMessages.settings.naming);
+    episodeNamingElements.value = parseNamingTemplate(imported.episode_template, "episode", zhCnMessages.settings.naming);
+    ElMessage.success(pageText.value.naming.importSuccess);
   } catch (error) {
     if (isSessionChangedError(error)) return;
     ElMessage.error(errorText(error));
@@ -1053,7 +1058,28 @@ async function saveOperationSettings() {
     });
     syncForm();
     await loadLogStorage();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
+  } catch (error) {
+    await notifySaveFailed(error);
+  }
+}
+
+const backgroundQueueSetting = computed(() => settingsStore.settingMap["background_jobs.max_queued"]);
+const backgroundQueueLimit = ref<number>();
+const minimumBackgroundQueueLimit = 1;
+const maximumBackgroundQueueLimit = 1000;
+const validBackgroundQueueLimit = computed(() => typeof backgroundQueueLimit.value === "number"
+  && Number.isInteger(backgroundQueueLimit.value) && backgroundQueueLimit.value >= minimumBackgroundQueueLimit
+  && backgroundQueueLimit.value <= maximumBackgroundQueueLimit);
+watch(() => backgroundQueueSetting.value?.value, value => {
+  backgroundQueueLimit.value = typeof value === "number" ? value : undefined;
+}, { immediate: true });
+
+async function saveBackgroundQueueLimit() {
+  if (settingsWriteDisabled.value || settingsStore.loading || !backgroundQueueSetting.value || !validBackgroundQueueLimit.value) return;
+  try {
+    await settingsStore.saveSettings({ "background_jobs.max_queued": backgroundQueueLimit.value });
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
   }
@@ -1062,11 +1088,11 @@ async function saveOperationSettings() {
 async function cleanupLogFiles() {
   try {
     const result = await cleanupLogs();
-    const summary = formatMessage(pageText.operations.logCleanupSummary, {
+    const summary = formatMessage(pageText.value.operations.logCleanupSummary, {
         archived: result.archived_count,
         deleted: result.deleted_count,
       });
-    if (result.has_more || result.over_budget) ElMessage.warning(`${summary}；${result.message || pageText.operations.logCleanupDeferred}`);
+    if (result.has_more || result.over_budget) ElMessage.warning(`${summary}；${result.message || pageText.value.operations.logCleanupDeferred}`);
     else ElMessage.success(summary);
     await loadLogStorage();
   } catch (error) {
@@ -1088,7 +1114,7 @@ async function saveSharedSettings() {
       "shared.mount_check_interval_seconds": Number(form.mountCheckIntervalSeconds || 60),
     });
     syncForm();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
   }
@@ -1102,7 +1128,7 @@ async function savePrivacySettings() {
       "privacy.custom_sensitive_words": parseSensitiveWordsInput(form.customSensitiveWordsText),
     });
     syncForm();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
   }
@@ -1140,8 +1166,20 @@ function externalSubmissionStatusType(status: ExternalSubmissionBlockStatus) {
 }
 
 function externalSubmissionStatusText(status: ExternalSubmissionBlockStatus) {
-  const statusMap = pageText.privacy.blockStatuses as Record<string, string>;
+  const statusMap = pageText.value.privacy.blockStatuses as Record<string, string>;
   return statusMap[status] ?? status;
+}
+
+function externalSubmissionDecisionText(decision: ExternalSubmissionBlockRecord["user_decision"]) {
+  const source = zhCnMessages.settings.privacy;
+  const labels = pageText.value.privacy;
+  switch (decision) {
+    case source.blockDecisionIgnored: return labels.blockDecisionIgnored;
+    case source.blockDecisionRenamed: return labels.blockDecisionRenamed;
+    case source.blockDecisionArchived: return labels.blockDecisionArchived;
+    case source.blockDecisionOverride: return labels.blockDecisionOverride;
+    default: return decision;
+  }
 }
 
 async function updateExternalSubmissionDecision(
@@ -1156,7 +1194,7 @@ async function updateExternalSubmissionDecision(
       user_decision: userDecision,
       override_reason: overrideReason,
     });
-    ElMessage.success(pageText.privacy.blockDecisionSaved);
+    ElMessage.success(pageText.value.privacy.blockDecisionSaved);
     await loadExternalSubmissionBlocks();
   } catch (error) {
     if (isSessionChangedError(error)) return;
@@ -1165,15 +1203,15 @@ async function updateExternalSubmissionDecision(
 }
 
 async function markExternalSubmissionIgnored(record: ExternalSubmissionBlockRecord) {
-  await updateExternalSubmissionDecision(record, "ignored", pageText.privacy.blockDecisionIgnored);
+  await updateExternalSubmissionDecision(record, "ignored", zhCnMessages.settings.privacy.blockDecisionIgnored);
 }
 
 async function markExternalSubmissionRenamed(record: ExternalSubmissionBlockRecord) {
-  await updateExternalSubmissionDecision(record, "renamed", pageText.privacy.blockDecisionRenamed);
+  await updateExternalSubmissionDecision(record, "renamed", zhCnMessages.settings.privacy.blockDecisionRenamed);
 }
 
 async function archiveExternalSubmission(record: ExternalSubmissionBlockRecord) {
-  await updateExternalSubmissionDecision(record, "archived", pageText.privacy.blockDecisionArchived);
+  await updateExternalSubmissionDecision(record, "archived", zhCnMessages.settings.privacy.blockDecisionArchived);
 }
 
 async function overrideExternalSubmission(record: ExternalSubmissionBlockRecord) {
@@ -1199,7 +1237,7 @@ async function confirmExternalSubmission() {
   const grant = externalSubmissionGrant.value;
   if (!grant || externalSubmissionBusy.value || externalSubmissionAttempted.value) return;
   if (!externalSubmissionReason.value.trim()) {
-    ElMessage.warning(pageText.privacy.blockOverrideReasonRequired);
+    ElMessage.warning(pageText.value.privacy.blockOverrideReasonRequired);
     return;
   }
   externalSubmissionBusy.value = true;
@@ -1211,7 +1249,7 @@ async function confirmExternalSubmission() {
     ElMessage.error(errorText(error));
     externalSubmissionRequestRejected.value = isAxiosError(error) && !!error.response && error.response.status >= 400 && error.response.status < 500;
     externalSubmissionOutcome.value = { id: grant.id, status: externalSubmissionRequestRejected.value ? "failed" : "unknown",
-      message: externalSubmissionRequestRejected.value ? errorText(error) : pageText.privacy.blockOutcomeUnknown,
+      message: externalSubmissionRequestRejected.value ? errorText(error) : pageText.value.privacy.blockOutcomeUnknown,
       candidates: [], audit_pending: true };
   } finally {
     externalSubmissionBusy.value = false;
@@ -1248,7 +1286,7 @@ function buildAiProfileDraft(overrides: Partial<AiProviderProfile> = {}): AiProv
   const profileId = normalizeAiProfileId(overrides.id || form.aiProfileId || form.aiProfileName || form.aiModel || form.aiProvider || "default");
   return {
     id: profileId || "default",
-    name: (overrides.name || form.aiProfileName || form.aiModel || pageText.ai.defaultProfileName).trim(),
+    name: (overrides.name || form.aiProfileName || form.aiModel || zhCnMessages.settings.ai.defaultProfileName).trim(),
     provider: overrides.provider || form.aiProvider,
     model: (overrides.model || form.aiModel || "deepseek-chat").trim(),
     api_key: overrides.api_key ?? form.aiApiKey.trim() ?? "",
@@ -1318,7 +1356,7 @@ async function activateAiProfile(profile: AiProviderProfile) {
     });
     syncForm();
     resetAiTestState();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
   }
@@ -1327,11 +1365,11 @@ async function activateAiProfile(profile: AiProviderProfile) {
 async function deleteAiProfile(profile: AiProviderProfile) {
   try {
     await ElMessageBox.confirm(
-      formatMessage(pageText.ai.deleteConfirm, { name: profile.name }),
-      pageText.ai.deleteTitle,
+      formatMessage(pageText.value.ai.deleteConfirm, { name: profile.name }),
+      pageText.value.ai.deleteTitle,
       {
-        confirmButtonText: messages.common.confirm,
-        cancelButtonText: messages.common.cancel,
+        confirmButtonText: messages.value.common.confirm,
+        cancelButtonText: messages.value.common.cancel,
         type: "warning",
       },
     );
@@ -1360,7 +1398,7 @@ async function deleteAiProfile(profile: AiProviderProfile) {
     if (!nextActive) {
       createAiProfile();
     }
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
   }
@@ -1395,7 +1433,7 @@ async function saveAiSettings(options: { rethrow?: boolean } = {}) {
     await settingsStore.saveSettings(values);
     syncForm();
     resetAiTestState();
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
   } catch (error) {
     await notifySaveFailed(error);
     if (options.rethrow) {
@@ -1412,7 +1450,7 @@ async function refreshAiSettings() {
     savedAiSnapshot.value = history.current_snapshot;
     if (history.result && history.matches_current) {
       aiTestResult.value = history.result;
-      aiLastTestTime.value = formatTestedAt(history.result.tested_at);
+      aiLastTestTime.value = history.result.tested_at ?? "";
       return;
     }
   } catch (error) {
@@ -1461,17 +1499,17 @@ let aiStatusPanelElement: HTMLElement | null = null;
 function validateTmdbTimeout(): number | null {
   const value = Number(form.timeoutSeconds || 15);
   if (!Number.isFinite(value)) {
-    ElMessage.warning(pageText.tmdb.timeoutInvalid);
+    ElMessage.warning(pageText.value.tmdb.timeoutInvalid);
     form.timeoutSeconds = "15";
     return null;
   }
   if (value < 10) {
-    ElMessage.warning(pageText.tmdb.timeoutTooShort);
+    ElMessage.warning(pageText.value.tmdb.timeoutTooShort);
     form.timeoutSeconds = "10";
     return null;
   }
   if (value > 30) {
-    ElMessage.warning(pageText.tmdb.timeoutTooLong);
+    ElMessage.warning(pageText.value.tmdb.timeoutTooLong);
     form.timeoutSeconds = "30";
     return null;
   }
@@ -1488,15 +1526,15 @@ function normalizeTmdbTestResult(result: unknown): TmdbConnectionTestResult {
   const status = payload.success ? "success" : "failed";
   return {
     v4: { status, message: payload.message || channelStatusText(status) },
-    v3: { status: "skipped", message: pageText.tmdb.statusNotConfigured },
+    v3: { status: "skipped", message: pageText.value.tmdb.statusNotConfigured },
     effective: payload.success ? "v4" : "none",
   };
 }
 
 function channelStatusText(status: string): string {
-  if (status === "success") return pageText.tmdb.statusSuccess;
-  if (status === "failed") return pageText.tmdb.statusFailed;
-  return pageText.tmdb.statusNotConfigured;
+  if (status === "success") return pageText.value.tmdb.statusSuccess;
+  if (status === "failed") return pageText.value.tmdb.statusFailed;
+  return pageText.value.tmdb.statusNotConfigured;
 }
 
 function channelStatusType(status: string): "success" | "danger" | "info" {
@@ -1508,7 +1546,7 @@ function channelStatusType(status: string): "success" | "danger" | "info" {
 function effectiveChannelLabel(effective: string): string {
   if (effective === "v4") return "V4";
   if (effective === "v3") return "V3";
-  return pageText.tmdb.noAvailableChannel;
+  return pageText.value.tmdb.noAvailableChannel;
 }
 
 const testChannels = computed(() => {
@@ -1605,7 +1643,7 @@ function resetAiTestState() {
 const imdbStatusBar = computed(() => {
   if (testingImdb.value) {
     return {
-      text: `IMDb ${pageText.imdb.testing} ${pageText.imdb.waited} ${imdbTestingElapsedSeconds.value} ${pageText.imdb.seconds}`,
+      text: `IMDb ${pageText.value.imdb.testing} ${pageText.value.imdb.waited} ${imdbTestingElapsedSeconds.value} ${pageText.value.imdb.seconds}`,
       time: "",
       tone: "testing",
     };
@@ -1613,7 +1651,7 @@ const imdbStatusBar = computed(() => {
 
   if (!imdbTestResult.value) {
     return {
-      text: pageText.imdb.testStatusUntested,
+      text: pageText.value.imdb.testStatusUntested,
       time: "",
       tone: "unknown",
     };
@@ -1621,8 +1659,8 @@ const imdbStatusBar = computed(() => {
 
   const success = imdbTestResult.value.connection_status === "success";
   return {
-    text: success ? pageText.imdb.testSuccess : pageText.imdb.testFailed,
-    time: imdbLastTestTime.value || pageText.imdb.noTestRecord,
+    text: success ? pageText.value.imdb.testSuccess : pageText.value.imdb.testFailed,
+    time: formatTestedAt(imdbLastTestTime.value) || pageText.value.imdb.noTestRecord,
     tone: success ? "success" : "danger",
   };
 });
@@ -1631,13 +1669,13 @@ function imdbResponseTimeText(result: ImdbStoredConnectionTestResult | null) {
   if (typeof result?.response_time === "number") {
     return `${Math.round(result.response_time)} ms`;
   }
-  return pageText.imdb.responseTimeUnavailable;
+  return pageText.value.imdb.responseTimeUnavailable;
 }
 
 const aiStatusBar = computed(() => {
   if (testingAi.value) {
     return {
-      text: `AI ${pageText.ai.testing} ${pageText.ai.waited} ${aiTestingElapsedSeconds.value} ${pageText.ai.seconds}`,
+      text: `AI ${pageText.value.ai.testing} ${pageText.value.ai.waited} ${aiTestingElapsedSeconds.value} ${pageText.value.ai.seconds}`,
       time: "",
       tone: "testing",
     };
@@ -1645,16 +1683,16 @@ const aiStatusBar = computed(() => {
 
   if (!aiTestResult.value) {
     return {
-      text: pageText.ai.testStatusUntested,
-      time: pageText.ai.noTestRecord,
+      text: pageText.value.ai.testStatusUntested,
+      time: pageText.value.ai.noTestRecord,
       tone: "unknown",
     };
   }
 
   const success = aiTestResult.value.status === "success";
   return {
-    text: success ? pageText.ai.testSuccess : pageText.ai.testFailed,
-    time: aiLastTestTime.value || pageText.ai.noTestRecord,
+    text: success ? pageText.value.ai.testSuccess : pageText.value.ai.testFailed,
+    time: formatTestedAt(aiLastTestTime.value) || pageText.value.ai.noTestRecord,
     tone: success ? "success" : "danger",
   };
 });
@@ -1663,13 +1701,13 @@ function aiResponseTimeText(result: AiConnectionTestResult | null) {
   if (typeof result?.response_ms === "number") {
     return `${Math.round(result.response_ms)} ms`;
   }
-  return pageText.ai.responseTimeUnavailable;
+  return pageText.value.ai.responseTimeUnavailable;
 }
 
 const testStatusBar = computed(() => {
   if (testingChannel.value) {
     return {
-      text: `${testingChannel.value.toUpperCase()} ${pageText.tmdb.testing} ${pageText.tmdb.waited} ${testingElapsedSeconds.value} ${pageText.tmdb.seconds}`,
+      text: `${testingChannel.value.toUpperCase()} ${pageText.value.tmdb.testing} ${pageText.value.tmdb.waited} ${testingElapsedSeconds.value} ${pageText.value.tmdb.seconds}`,
       channel: "",
       time: "",
       tone: "testing",
@@ -1678,9 +1716,9 @@ const testStatusBar = computed(() => {
 
   if (!testResult.value) {
     return {
-      text: pageText.tmdb.testStatusUntested,
-      channel: pageText.tmdb.noTestChannel,
-      time: pageText.tmdb.noTestRecord,
+      text: pageText.value.tmdb.testStatusUntested,
+      channel: pageText.value.tmdb.noTestChannel,
+      time: pageText.value.tmdb.noTestRecord,
       tone: "unknown",
     };
   }
@@ -1696,24 +1734,24 @@ const testStatusBar = computed(() => {
     };
   }
   return {
-    text: healthy ? pageText.tmdb.testStatusNormal : pageText.tmdb.testStatusAbnormal,
+    text: healthy ? pageText.value.tmdb.testStatusNormal : pageText.value.tmdb.testStatusAbnormal,
     channel: effectiveChannelLabel(testResult.value.effective),
-    time: lastTestTime.value || pageText.tmdb.noTestRecord,
+    time: formatTestedAt(lastTestTime.value) || pageText.value.tmdb.noTestRecord,
     tone: healthy ? "success" : "danger",
   };
 });
 
 const testSummaryText = computed(() => {
   if (!testResult.value) {
-    return pageText.tmdb.noTestRecord;
+    return pageText.value.tmdb.noTestRecord;
   }
   if (testResult.value.effective === "v4") {
-    return formatMessage(pageText.tmdb.summaryV4, { time: responseTimeText(testResult.value.v4) });
+    return formatMessage(pageText.value.tmdb.summaryV4, { time: responseTimeText(testResult.value.v4) });
   }
   if (testResult.value.effective === "v3") {
-    return formatMessage(pageText.tmdb.summaryV3, { reason: channelReasonText(testResult.value.v4) });
+    return formatMessage(pageText.value.tmdb.summaryV3, { reason: channelReasonText(testResult.value.v4) });
   }
-  return formatMessage(pageText.tmdb.summaryNone, {
+  return formatMessage(pageText.value.tmdb.summaryNone, {
     v4Reason: channelReasonText(testResult.value.v4),
     v3Reason: channelReasonText(testResult.value.v3),
   });
@@ -1723,36 +1761,36 @@ function responseTimeText(result: TmdbChannelResult) {
   if (typeof result.response_ms === "number") {
     return `${Math.round(result.response_ms)} ms`;
   }
-  return pageText.tmdb.responseTimeUnavailable;
+  return pageText.value.tmdb.responseTimeUnavailable;
 }
 
 function channelReasonText(result: TmdbChannelResult) {
   if (result.error_type === "network") {
-    return pageText.tmdb.networkUnavailable;
+    return pageText.value.tmdb.networkUnavailable;
   }
   if (result.error_type === "server" || result.error_type === "timeout") {
-    return pageText.tmdb.tmdbTimeoutOrBusy;
+    return pageText.value.tmdb.tmdbTimeoutOrBusy;
   }
   if (result.error_type === "client" && result.http_status) {
-    return pageText.tmdb.clientError.replace("{status}", String(result.http_status));
+    return pageText.value.tmdb.clientError.replace("{status}", String(result.http_status));
   }
   return result.message || channelStatusText(result.status);
 }
 
 function channelDetailText(channel: { label: string; result: TmdbChannelResult }) {
   if (channel.result.status === "success") {
-    return formatMessage(pageText.tmdb.channelSuccessDetail, {
+    return formatMessage(pageText.value.tmdb.channelSuccessDetail, {
       channel: channel.label,
       time: responseTimeText(channel.result),
     });
   }
   if (channel.result.status === "failed") {
-    return formatMessage(pageText.tmdb.channelFailedDetail, {
+    return formatMessage(pageText.value.tmdb.channelFailedDetail, {
       channel: channel.label,
       reason: channelReasonText(channel.result),
     });
   }
-  return formatMessage(pageText.tmdb.channelSkippedDetail, {
+  return formatMessage(pageText.value.tmdb.channelSkippedDetail, {
     channel: channel.label,
     reason: channelReasonText(channel.result),
   });
@@ -1765,19 +1803,15 @@ function tmdbFailureStatusMessage(result: TmdbConnectionTestResult) {
     return "";
   }
   if (first.error_type === "network") {
-    return pageText.tmdb.networkUnavailable;
+    return pageText.value.tmdb.networkUnavailable;
   }
   if (first.error_type === "server" || first.error_type === "timeout") {
-    return pageText.tmdb.tmdbTimeoutOrBusy;
+    return pageText.value.tmdb.tmdbTimeoutOrBusy;
   }
   if (first.error_type === "client" && first.http_status) {
-    return pageText.tmdb.clientError.replace("{status}", String(first.http_status));
+    return pageText.value.tmdb.clientError.replace("{status}", String(first.http_status));
   }
-  return first.message || pageText.tmdb.summaryNone;
-}
-
-function formatClock(date: Date) {
-  return formatDateTime(date.toISOString());
+  return first.message || pageText.value.tmdb.summaryNone;
 }
 
 function formatTestedAt(value?: string) {
@@ -1851,7 +1885,7 @@ async function executeTmdbTest() {
     testResult.value = normalizeTmdbTestResult(result);
     testResultSnapshot.value = testResult.value.config_snapshot ?? buildTmdbFormSnapshot();
     savedTmdbSnapshot.value = testResult.value.config_snapshot ?? savedTmdbSnapshot.value;
-    lastTestTime.value = formatTestedAt(testResult.value.tested_at) || formatClock(new Date());
+    lastTestTime.value = testResult.value.tested_at || new Date().toISOString();
   } catch (error) {
     if (isSessionChangedError(error)) return;
     testResult.value = {
@@ -1860,7 +1894,7 @@ async function executeTmdbTest() {
       effective: "none",
     };
     testResultSnapshot.value = buildTmdbFormSnapshot();
-    lastTestTime.value = formatClock(new Date());
+    lastTestTime.value = new Date().toISOString();
   } finally {
     stopTestingProgress();
   }
@@ -1884,7 +1918,7 @@ async function executeImdbTest() {
       is_valid: saved.is_valid ?? true,
     };
     savedImdbSnapshot.value = imdbTestResult.value.config_snapshot;
-    imdbLastTestTime.value = formatTestedAt(imdbTestResult.value.test_time) || formatClock(new Date());
+    imdbLastTestTime.value = imdbTestResult.value.test_time || new Date().toISOString();
   } catch (error) {
     if (isSessionChangedError(error)) return;
     imdbTestResult.value = {
@@ -1896,7 +1930,7 @@ async function executeImdbTest() {
       test_time: new Date().toISOString(),
       is_valid: false,
     };
-    imdbLastTestTime.value = formatClock(new Date());
+    imdbLastTestTime.value = new Date().toISOString();
   } finally {
     stopImdbTestingProgress();
   }
@@ -1912,7 +1946,7 @@ async function executeAiTest() {
     const result = await settingsStore.testAiSettings();
     aiTestResult.value = result;
     savedAiSnapshot.value = result.config_snapshot ?? savedAiSnapshot.value;
-    aiLastTestTime.value = formatTestedAt(result.tested_at) || formatClock(new Date());
+    aiLastTestTime.value = result.tested_at || new Date().toISOString();
   } catch (error) {
     if (isSessionChangedError(error)) return;
     aiTestResult.value = {
@@ -1923,7 +1957,7 @@ async function executeAiTest() {
       effective: "none",
       response_ms: null,
     };
-    aiLastTestTime.value = formatClock(new Date());
+    aiLastTestTime.value = new Date().toISOString();
   } finally {
     stopAiTestingProgress();
   }
@@ -1939,11 +1973,11 @@ async function testTmdbConnection() {
 
   try {
     await ElMessageBox.confirm(
-      pageText.tmdb.unsavedConfirm,
-      pageText.tmdb.unsavedConfirmTitle,
+      pageText.value.tmdb.unsavedConfirm,
+      pageText.value.tmdb.unsavedConfirmTitle,
       {
-        confirmButtonText: messages.common.confirm,
-        cancelButtonText: messages.common.cancel,
+        confirmButtonText: messages.value.common.confirm,
+        cancelButtonText: messages.value.common.cancel,
         type: "warning",
       },
     );
@@ -1953,7 +1987,7 @@ async function testTmdbConnection() {
       await executeTmdbTest();
     } catch (error) {
       if (isSessionChangedError(error)) return;
-      ElMessage.error(pageText.tmdb.saveBeforeTestFailed);
+      ElMessage.error(pageText.value.tmdb.saveBeforeTestFailed);
     }
   } catch {
     await executeTmdbTest();
@@ -1968,11 +2002,11 @@ async function testImdbConnection() {
 
   try {
     await ElMessageBox.confirm(
-      pageText.imdb.unsavedConfirm,
-      pageText.tmdb.unsavedConfirmTitle,
+      pageText.value.imdb.unsavedConfirm,
+      pageText.value.tmdb.unsavedConfirmTitle,
       {
-        confirmButtonText: messages.common.confirm,
-        cancelButtonText: messages.common.cancel,
+        confirmButtonText: messages.value.common.confirm,
+        cancelButtonText: messages.value.common.cancel,
         type: "warning",
       },
     );
@@ -1982,7 +2016,7 @@ async function testImdbConnection() {
       await executeImdbTest();
     } catch (error) {
       if (isSessionChangedError(error)) return;
-      ElMessage.error(pageText.imdb.saveBeforeTestFailed);
+      ElMessage.error(pageText.value.imdb.saveBeforeTestFailed);
     }
   } catch {
     await executeImdbTest();
@@ -1997,11 +2031,11 @@ async function testAiConnection() {
 
   try {
     await ElMessageBox.confirm(
-      pageText.ai.unsavedConfirm,
-      pageText.tmdb.unsavedConfirmTitle,
+      pageText.value.ai.unsavedConfirm,
+      pageText.value.tmdb.unsavedConfirmTitle,
       {
-        confirmButtonText: messages.common.confirm,
-        cancelButtonText: messages.common.cancel,
+        confirmButtonText: messages.value.common.confirm,
+        cancelButtonText: messages.value.common.cancel,
         type: "warning",
       },
     );
@@ -2013,7 +2047,7 @@ async function testAiConnection() {
       await executeAiTest();
     } catch (error) {
       if (isSessionChangedError(error)) return;
-      ElMessage.error(pageText.ai.saveBeforeTestFailed);
+      ElMessage.error(pageText.value.ai.saveBeforeTestFailed);
     }
   } catch {
     await executeAiTest();
@@ -2031,7 +2065,7 @@ async function openTmdbTestDetail() {
       if (history.result) {
         testResult.value = normalizeTmdbTestResult(history.result);
         testResultSnapshot.value = history.result.config_snapshot;
-        lastTestTime.value = formatTestedAt(history.result.tested_at);
+        lastTestTime.value = history.result.tested_at ?? "";
       }
     } catch (error) {
       if (isSessionChangedError(error)) return;
@@ -2039,7 +2073,7 @@ async function openTmdbTestDetail() {
     }
   }
   if (!testResult.value) {
-    ElMessage.info(pageText.tmdb.noTestRecordHint);
+    ElMessage.info(pageText.value.tmdb.noTestRecordHint);
     return;
   }
   testResultDialogVisible.value = true;
@@ -2055,7 +2089,7 @@ async function openImdbTestDetail() {
       savedImdbSnapshot.value = history.current_snapshot;
       if (history.result) {
         imdbTestResult.value = history.result;
-        imdbLastTestTime.value = formatTestedAt(history.result.test_time);
+        imdbLastTestTime.value = history.result.test_time ?? "";
       }
     } catch (error) {
       if (isSessionChangedError(error)) return;
@@ -2063,7 +2097,7 @@ async function openImdbTestDetail() {
     }
   }
   if (!imdbTestResult.value) {
-    ElMessage.info(pageText.imdb.noTestRecordHint);
+    ElMessage.info(pageText.value.imdb.noTestRecordHint);
     return;
   }
   imdbTestResultDialogVisible.value = true;
@@ -2079,7 +2113,7 @@ async function openAiTestDetail() {
       savedAiSnapshot.value = history.current_snapshot;
       if (history.result) {
         aiTestResult.value = history.result;
-        aiLastTestTime.value = formatTestedAt(history.result.tested_at);
+        aiLastTestTime.value = history.result.tested_at ?? "";
       }
     } catch (error) {
       if (isSessionChangedError(error)) return;
@@ -2087,7 +2121,7 @@ async function openAiTestDetail() {
     }
   }
   if (!aiTestResult.value) {
-    ElMessage.info(pageText.ai.noTestRecordHint);
+    ElMessage.info(pageText.value.ai.noTestRecordHint);
     return;
   }
   aiTestResultDialogVisible.value = true;
@@ -2209,7 +2243,7 @@ onMounted(async () => {
     if (history.result && history.matches_current) {
       testResult.value = normalizeTmdbTestResult(history.result);
       testResultSnapshot.value = history.result.config_snapshot;
-      lastTestTime.value = formatTestedAt(history.result.tested_at);
+      lastTestTime.value = history.result.tested_at ?? "";
     }
   } catch (error) {
     if (isSessionChangedError(error)) return;
@@ -2220,7 +2254,7 @@ onMounted(async () => {
     savedImdbSnapshot.value = history.current_snapshot;
     if (history.result && history.matches_current) {
       imdbTestResult.value = history.result;
-      imdbLastTestTime.value = formatTestedAt(history.result.test_time);
+      imdbLastTestTime.value = history.result.test_time ?? "";
     }
   } catch (error) {
     if (isSessionChangedError(error)) return;
@@ -2231,7 +2265,7 @@ onMounted(async () => {
     savedAiSnapshot.value = history.current_snapshot;
     if (history.result && history.matches_current) {
       aiTestResult.value = history.result;
-      aiLastTestTime.value = formatTestedAt(history.result.tested_at);
+      aiLastTestTime.value = history.result.tested_at ?? "";
     }
   } catch (error) {
     if (isSessionChangedError(error)) return;
@@ -2714,7 +2748,7 @@ onBeforeUnmount(() => {
                   {{ messages.common.refresh }}
                 </el-button>
               </div>
-              <el-table
+              <FullscreenTablePanel variant="embedded"><el-table
                 v-loading="externalSubmissionBlocksLoading"
                 :data="externalSubmissionBlocks"
                 size="small"
@@ -2736,7 +2770,9 @@ onBeforeUnmount(() => {
                     {{ formatTestedAt(row.created_at) }}
                   </template>
                 </el-table-column>
-                <el-table-column prop="user_decision" :label="pageText.privacy.blockDecision" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="user_decision" :label="pageText.privacy.blockDecision" min-width="160" show-overflow-tooltip>
+                  <template #default="{ row }">{{ externalSubmissionDecisionText(row.user_decision) }}</template>
+                </el-table-column>
                 <el-table-column :label="pageText.privacy.blockActions" width="300" fixed="right">
                   <template #default="{ row }">
                     <div class="settings-block-record-actions">
@@ -2759,7 +2795,7 @@ onBeforeUnmount(() => {
                     </div>
                   </template>
                 </el-table-column>
-              </el-table>
+              </el-table></FullscreenTablePanel>
             </div>
 
             <el-dialog v-model="externalSubmissionDialogVisible" :title="externalSubmissionOutcome ? pageText.privacy.blockOutcomeTitle : pageText.privacy.blockSnapshotTitle"
@@ -2809,11 +2845,11 @@ onBeforeUnmount(() => {
               </template>
               <template v-if="externalSubmissionOutcome">
                 <el-alert :title="externalSubmissionOutcome.message" :type="externalSubmissionOutcome.status === 'completed' ? 'success' : 'warning'" :closable="false" show-icon />
-                <el-table :data="externalSubmissionOutcome.candidates" max-height="300" :empty-text="pageText.privacy.blockCandidateEmpty">
+                <FullscreenTablePanel variant="embedded"><el-table :data="externalSubmissionOutcome.candidates" max-height="300" :empty-text="pageText.privacy.blockCandidateEmpty">
                   <el-table-column prop="title" :label="pageText.privacy.blockCandidateTitle" min-width="150" show-overflow-tooltip />
                   <el-table-column prop="year" :label="pageText.privacy.blockCandidateYear" width="85" />
                   <el-table-column prop="media_type" :label="pageText.privacy.blockCandidateType" width="85" />
-                </el-table>
+                </el-table></FullscreenTablePanel>
               </template>
               <template #footer>
                 <el-button :disabled="externalSubmissionBusy" @click="externalSubmissionDialogVisible = false">{{ messages.common.close }}</el-button>
@@ -2866,7 +2902,7 @@ onBeforeUnmount(() => {
                   {{ pageText.ai.newProfile }}
                 </el-button>
               </div>
-              <el-table
+              <FullscreenTablePanel variant="embedded"><el-table
                 :data="savedAiProfiles"
                 size="small"
                 class="settings-block-record-table settings-ai-profile-table"
@@ -2931,7 +2967,7 @@ onBeforeUnmount(() => {
                     </div>
                   </template>
                 </el-table-column>
-              </el-table>
+              </el-table></FullscreenTablePanel>
             </div>
             <div class="settings-grid">
               <el-form-item :label="pageText.ai.profileId">
@@ -3297,6 +3333,19 @@ onBeforeUnmount(() => {
         </el-form>
 
         <el-form v-else-if="activeCategory === 'operations'" label-position="top" class="settings-form">
+          <ServicePortsPanel v-if="!settingsWriteDisabled" />
+          <section v-if="backgroundQueueSetting" class="settings-background-queue">
+            <h3>{{ pageText.backgroundQueue.title }}</h3>
+            <div class="settings-background-controls">
+              <el-form-item :label="pageText.backgroundQueue.limit">
+                <el-input-number v-model="backgroundQueueLimit" :min="minimumBackgroundQueueLimit" :max="maximumBackgroundQueueLimit"
+                  :disabled="settingsWriteDisabled || settingsStore.loading" />
+              </el-form-item>
+              <el-button type="primary" :disabled="settingsWriteDisabled || settingsStore.loading || !validBackgroundQueueLimit || backgroundQueueLimit === backgroundQueueSetting.value"
+                @click="saveBackgroundQueueLimit">{{ pageText.backgroundQueue.save }}</el-button>
+            </div>
+            <p>{{ pageText.backgroundQueue.note }}</p>
+          </section>
           <div v-if="logStorage" class="log-storage-summary" role="status">
             <span>{{ pageText.operations.fileLogStorage }} <strong>{{ formatFileSize(logStorage.managed_file_bytes) }} / {{ formatFileSize(logStorage.file_limit_bytes) }}</strong></span>
             <span>{{ pageText.operations.operationLogStorage }} <strong>{{ formatFileSize(logStorage.operation_log_bytes) }}</strong></span>
@@ -3476,7 +3525,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <el-table
+            <FullscreenTablePanel variant="embedded"><el-table
               v-loading="usersLoading"
               class="settings-user-table"
               :data="users"
@@ -3554,7 +3603,7 @@ onBeforeUnmount(() => {
                   </div>
                 </template>
               </el-table-column>
-            </el-table>
+            </el-table></FullscreenTablePanel>
 
             <el-dialog
               v-model="userDialogVisible"
@@ -3719,7 +3768,7 @@ onBeforeUnmount(() => {
               </el-button>
             </div>
 
-            <el-table
+            <FullscreenTablePanel variant="embedded"><el-table
               v-loading="auditLoading"
               class="settings-user-table"
               :data="auditEvents"
@@ -3778,6 +3827,7 @@ onBeforeUnmount(() => {
               @page-change="handleAuditPaginationChange"
               @page-size-change="handleAuditPaginationChange"
             />
+            </FullscreenTablePanel>
 
             <el-dialog
               v-model="auditDetailVisible"
@@ -3810,6 +3860,14 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.settings-background-queue {
+  border-bottom: 1px solid var(--border-color);
+  padding-block: 12px;
+}
+.settings-background-queue h3 { margin: 0 0 8px; font-size: var(--font-body); }
+.settings-background-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; }
+.settings-background-controls .el-form-item { margin-bottom: 0; }
+.settings-background-queue p { margin: 8px 0 0; font-size: 13px; color: var(--text-muted); }
 .external-submission-snapshot {
   margin: 12px 0;
 }

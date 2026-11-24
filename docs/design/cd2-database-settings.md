@@ -2,6 +2,8 @@
 
 类型：配置、接口与数据设计。已确认范围：系统设置维护，SQLite 为唯一持久来源；不保存云密码、临时 Token 或私钥。
 
+本页描述现行单例配置契约。后续多连接、目录白名单和固定任务来源的范围已确认，但尚未实现；新增需求与候选技术取舍见[多连接需求分析](../development/cloud-drive/multi-connection-requirements.md)及[设计评估](../development/cloud-drive/multi-connection-design-review.md)。本页id=1及现行接口不因候选方案自动改变，迁移步骤另见[演进计划](../development/cloud-drive/multi-connection-evolution-plan.md)。
+
 ## 存储与接口
 
 - `cloud_drive_configuration` 为单例表（`id=1`），字段 `revision`、`values_json`、`updated_at`，schema55新增。字段白名单与范围由配置服务统一校验。

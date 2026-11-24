@@ -18,15 +18,24 @@ from app.service.operation_log_service import record_operation_log
 from app.service.settings_service import get_effective_settings
 from app.service.scan_recovery_service import isProcessAlive
 
-KINDS = {"rename_dry_run": "rename:execute", "rollback_dry_run": "rollback:execute",
-         "metadata_batch": "metadata:submit", "ai_batch": "metadata:submit"}
+TMDB_BATCH_KINDS = ("tmdb_batch", "tmdb_ai_batch")
+KINDS = {"rename_dry_run": "rename:execute", "rollback_dry_run": "rollback:execute", "preview_generation": "rename:execute",
+         **dict.fromkeys(("metadata_batch", "ai_batch", *TMDB_BATCH_KINDS), "metadata:submit")}
 TERMINAL = {"completed", "partial_completed", "failed", "interrupted"}
 INSTANCE_ID = secrets.token_hex(16)
 MAX_ITEMS = 1000
+# 每组文件先在事务外解析和探测；只在组发布时持有写锁，逐组和进度一并提交。
+PREVIEW_PART_SIZE = 128
 
 
 class BackgroundJobConflict(ValueError):
     """请求冲突或容量不足，不能通过自动新建请求规避。"""
+
+
+class BackgroundQueueFull(BackgroundJobConflict):
+    def __init__(self, limit: int):
+        super().__init__(f"后台任务已达到上限 {limit}，请等待现有任务结束或查看原任务")
+        self.limit = limit
 
 
 class BackgroundJobInterrupted(ValueError):
@@ -89,7 +98,46 @@ def _previewHash(connection, previewId):
     return _hash([dict(row), dict(source)])
 
 
+def _generationScope(connection, payload):
+    from app.service.cloud_directory_path_service import requireFreshScan
+    scanId = payload["scan_job_id"]
+    scan = connection.execute("SELECT * FROM scan_jobs WHERE id=?", (scanId,)).fetchone()
+    if (scan is None or scan["status"] not in {"completed", "partial_completed"} or scan["source_invalidated_at"]
+            or payload.get("media_source_id") not in {None, scan["media_source_id"]}):
+        raise BackgroundJobInterrupted("请选用当前媒体源下已完成且仍有效的扫描任务")
+    source = connection.execute("SELECT * FROM media_sources WHERE id=?", (scan["media_source_id"],)).fetchone()
+    if source is None or not source["enabled"] or source["deleted_at"]:
+        raise BackgroundJobInterrupted("媒体源已停用或退役，请重新核对")
+    requireFreshScan(connection, scanId)
+    return scan["media_source_id"], _hash([dict(scan), dict(source)])
+
+
+def _generationPartHash(connection, sourceId, scanId, ids):
+    from app.service.preview_service import _query_media_files
+    rows = _query_media_files(connection, sourceId, scanId, ids)
+    if len(rows) != len(ids):
+        raise BackgroundJobInterrupted("生成预览的扫描条目已变化，请重新核对")
+    placeholders = ",".join("?" for _ in ids)
+    previews = connection.execute(f"SELECT * FROM rename_previews WHERE media_file_id IN ({placeholders}) ORDER BY media_file_id", ids)
+    return _hash([list(map(dict, rows)), list(map(dict, previews))])
+
+
+def _generationSnapshot(connection, payload):
+    sourceId, scopeHash = _generationScope(connection, payload)
+    scanId = payload["scan_job_id"]
+    cursor = connection.execute("SELECT id FROM media_files WHERE scan_job_id=? ORDER BY id", (scanId,))
+    parts = []
+    while page := cursor.fetchmany(PREVIEW_PART_SIZE):
+        ids = [row[0] for row in page]
+        parts.append([ids[0], ids[-1], len(ids), _generationPartHash(connection, sourceId, scanId, ids)])
+    if not parts:
+        raise BackgroundJobConflict("该扫描尚无可生成预览的条目")
+    return {"scope": scopeHash, "parts": parts}
+
+
 def _snapshot(connection, kind, payload):
+    if kind == "preview_generation":
+        return _generationSnapshot(connection, payload)
     if kind == "rollback_dry_run":
         from app.service.rename_rollback_service import _rollbackDryRunDatabaseState
         state = _rollbackDryRunDatabaseState(connection, payload["plan_id"])
@@ -108,6 +156,15 @@ def _snapshot(connection, kind, payload):
 def _normalise(kind, payload):
     if kind not in KINDS:
         raise ValueError("不支持的后台任务类型")
+    if kind == "preview_generation":
+        scanId, sourceId = payload.get("scan_job_id"), payload.get("media_source_id")
+        if type(scanId) is not int or scanId <= 0 or (sourceId is not None and (type(sourceId) is not int or sourceId <= 0)):
+            raise ValueError("生成预览必须指定有效扫描任务")
+        if payload.get("rename_preview_ids") or payload.get("plan_id") is not None:
+            raise ValueError("生成预览不能携带预览或回滚计划编号")
+        return {"scan_job_id": scanId, "media_source_id": sourceId}
+    if payload.get("scan_job_id") is not None or payload.get("media_source_id") is not None:
+        raise ValueError("仅生成预览任务可指定扫描和媒体源编号")
     if kind == "rollback_dry_run":
         planId = payload.get("plan_id")
         if isinstance(planId, bool) or not isinstance(planId, int) or planId <= 0:
@@ -120,7 +177,7 @@ def _normalise(kind, payload):
     if not ids or len(ids) > MAX_ITEMS:
         raise BackgroundJobConflict(f"后台任务必须选择1～{MAX_ITEMS}项")
     value = {"rename_preview_ids": ids}
-    if kind in {"metadata_batch", "ai_batch"}:
+    if kind in ("metadata_batch", "ai_batch", *TMDB_BATCH_KINDS):
         source = payload.get("metadata_match_source", "parsed_title")
         if source not in {"parsed_title", "original_file_name", "parent_folder_title"}:
             raise ValueError("不支持的匹配来源")
@@ -167,6 +224,16 @@ def getBackgroundJob(settings, requestId, user, *, includeResult=False):
         return result
 
 
+def _countPendingJobs(connection):
+    return connection.execute("SELECT COUNT(*) FROM background_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL").fetchone()[0]
+
+
+def _requireQueueSpace(active, effective):
+    limit = int(effective["background_jobs.max_queued"])
+    if active >= limit:
+        raise BackgroundQueueFull(limit)
+
+
 def acceptBackgroundJob(settings, kind, requestId, payload, context):
     requestId = str(UUID(str(requestId)))
     payload = _normalise(kind, payload)
@@ -174,13 +241,19 @@ def acceptBackgroundJob(settings, kind, requestId, payload, context):
     actor = context.actor
     if actor is None:
         raise PermissionError("后台受理需要已认证用户")
+    staged = None
     with closing(_connect(settings)) as database:
+        if kind == "preview_generation":
+            database.execute("BEGIN")
         _actor(database, actor.id, actor.username, kind)
         previous = database.execute("SELECT * FROM background_jobs WHERE request_id=?", (requestId,)).fetchone()
         if previous is not None:
             if previous["actor_id"] != actor.id or previous["request_hash"] != requestHash:
                 raise BackgroundJobConflict("请求ID已用于另一任务，拒绝覆盖或重发")
             return _public(previous)
+        if kind == "preview_generation":
+            _requireQueueSpace(_countPendingJobs(database), get_effective_settings(settings))
+            staged = _generationSnapshot(database, payload)
     reservation = settings.background_jobs.result_max_size_mb * 1024 * 1024
     cleanupBackgroundResults(settings, reserveBytes=reservation)
     with closing(_connect(settings)) as connection:
@@ -196,16 +269,23 @@ def acceptBackgroundJob(settings, kind, requestId, payload, context):
                 raise BackgroundJobConflict("请求ID已用于另一任务，拒绝覆盖或重发")
             return _public(previous)
         ids = payload.get("rename_preview_ids", [])
-        limit = min(MAX_ITEMS, int(get_effective_settings(settings)["operations.batch_limit"]))
+        effective = get_effective_settings(settings)
+        limit = min(MAX_ITEMS, int(effective["operations.batch_limit"]))
         if len(ids) > limit:
             raise BackgroundJobConflict(f"批量操作数量不能超过 {limit} 条")
-        if connection.execute("SELECT COUNT(*) FROM background_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL").fetchone()[0] >= settings.background_jobs.max_queued:
-            raise BackgroundJobConflict("后台队列已满，请先查询现有任务")
+        active = _countPendingJobs(connection)
+        _requireQueueSpace(active, effective)
         used = connection.execute("SELECT COALESCE(SUM(result_bytes),0) FROM background_jobs WHERE result_cleared_at IS NULL AND result_bytes>0").fetchone()[0]
-        active = connection.execute("SELECT COUNT(*) FROM background_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL").fetchone()[0]
         if used + (active + 1) * reservation > settings.background_jobs.result_total_size_mb * 1024 * 1024:
             raise BackgroundJobConflict("后台结果容量或预留空间不足，请等待现有任务结束")
-        snapshot = _snapshot(connection, kind, payload)
+        snapshot = staged if staged is not None else _snapshot(connection, kind, payload)
+        if kind == "preview_generation":
+            if _generationScope(connection, payload)[1] != snapshot["scope"]:
+                raise BackgroundJobConflict("扫描来源已变化，请重新读取扫描任务")
+            if connection.execute("SELECT 1 FROM background_jobs WHERE kind='preview_generation' "
+                    "AND json_extract(input_json,'$.scan_job_id')=? AND (status IN ('queued','running') OR execution_token IS NOT NULL) LIMIT 1",
+                    (payload["scan_job_id"],)).fetchone():
+                raise BackgroundJobConflict("该扫描已有生成预览任务，请查看原任务")
         if kind == "rollback_dry_run":
             count = connection.execute("SELECT COUNT(*) FROM rename_rollback_items WHERE plan_id=?", (payload["plan_id"],)).fetchone()[0]
             if count > limit:
@@ -216,20 +296,23 @@ def acceptBackgroundJob(settings, kind, requestId, payload, context):
                 f"WHERE i.item_id IN ({placeholders}) AND j.kind<>'rollback_dry_run' "
                 "AND (j.status IN ('queued','running') OR j.execution_token IS NOT NULL) LIMIT 1", ids).fetchone():
                 raise BackgroundJobConflict("所选预览已有后台任务，请查询后再操作")
-        elif connection.execute("SELECT 1 FROM background_jobs WHERE kind='rollback_dry_run' "
+        elif kind == "rollback_dry_run" and connection.execute("SELECT 1 FROM background_jobs WHERE kind='rollback_dry_run' "
                 "AND json_extract(input_json,'$.plan_id')=? AND (status IN ('queued','running') OR execution_token IS NOT NULL) LIMIT 1",
                 (payload["plan_id"],)).fetchone():
             raise BackgroundJobConflict("该回滚计划已有后台干跑")
         timestamp = now()
-        count = len(ids) if ids else 1
+        count = sum(part[2] for part in snapshot["parts"]) if kind == "preview_generation" else len(ids) or 1
+        itemIds = ([part[0] for part in snapshot["parts"]] if kind == "preview_generation" else ids or [payload["plan_id"]])
+        baseBytes = len((_json(payload) + _json(snapshot) + _json({"ipAddress": context.ipAddress, "userAgent": context.userAgent})).encode())
+        if kind == "preview_generation" and baseBytes + 16384 + 512 * len(itemIds) > reservation:
+            raise BackgroundJobConflict("生成预览计划超出后台任务容量，请拆分扫描范围")
         cursor = connection.execute("INSERT INTO background_jobs(request_id,request_hash,kind,actor_id,actor_name,input_json,"
             "config_hash,snapshot_json,audit_context_json,total_count,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (requestId, requestHash, kind, actor.id, actor.username, _json(payload), _configHash(settings, connection), _json(snapshot),
              _json({"ipAddress": context.ipAddress, "userAgent": context.userAgent}), count, timestamp, timestamp))
         jobId = cursor.lastrowid
-        baseBytes = len((_json(payload) + _json(snapshot) + _json({"ipAddress": context.ipAddress, "userAgent": context.userAgent})).encode())
         connection.execute("UPDATE background_jobs SET result_bytes=? WHERE id=?", (baseBytes, jobId))
-        connection.executemany("INSERT INTO background_job_items(job_id,item_id) VALUES(?,?)", ((jobId, item) for item in (ids or [payload["plan_id"]])))
+        connection.executemany("INSERT INTO background_job_items(job_id,item_id) VALUES(?,?)", ((jobId, item) for item in itemIds))
         record_audit_event(settings, event_type="background.accepted", action="accept_background_job", result="success",
             summary="后台任务已受理，尚未执行", target_type="background_job", target_id=jobId, actor=actor,
             ip_address=context.ipAddress, user_agent=context.userAgent, detail={"kind": kind, "total_count": count}, connection=connection)
@@ -378,6 +461,14 @@ def _executionGuard(settings, jobId, token, expected, payload, kind, itemId=None
             if phase == "send":
                 database.execute("BEGIN IMMEDIATE")
             requireBackgroundJobLease(settings, database, jobId, token)
+            if phase == "metadata-published":
+                if kind in TMDB_BATCH_KINDS:
+                    row, source = _previewState(database, itemId)
+                    if expected[f"source:{itemId}"] != _hash(dict(source)):
+                        raise BackgroundJobInterrupted("匹配期间媒体源已变化，拒绝后续匹配")
+                    # 同一事务内固定本任务的 TMDB 更新，AI 阶段不能接续并发修改后的预览。
+                    expected[str(itemId)] = _hash([dict(row), dict(source)])
+                return
             if kind == "rollback_dry_run":
                 if phase.startswith("rollback-probe:"):
                     from app.service.rename_rollback_service import _rollback_item_context
@@ -409,17 +500,19 @@ def _executionGuard(settings, jobId, token, expected, payload, kind, itemId=None
     return guard
 
 
-def _publishOutcome(settings, jobId, token, itemId, outcome, itemLimit, expected=None):
+def _publishOutcome(settings, jobId, token, itemId, outcome, itemLimit, expected=None, *, transaction=None, units=1):
     value = _cleanResult(outcome)
     encoded = _json(value)
     if len(encoded.encode()) > itemLimit:
         value = {"error": "结构化结果超过本任务大小限制，未保存候选；原请求不会自动重发"}
         encoded = _json(value)
-    with closing(_connect(settings)) as connection:
-        connection.execute("BEGIN IMMEDIATE")
+    owns = transaction is None
+    with closing(_connect(settings)) if owns else nullcontext(transaction) as connection:
+        if owns:
+            connection.execute("BEGIN IMMEDIATE")
         job, _ = requireBackgroundJobLease(settings, connection, jobId, token)
-        if expected is not None and job["kind"] == "ai_batch" and expected[str(itemId)] != _previewHash(connection, itemId):
-            raise BackgroundJobInterrupted("AI返回期间输入已变化，拒绝发布过期候选")
+        if expected is not None and job["kind"] in ("ai_batch", *TMDB_BATCH_KINDS) and expected[str(itemId)] != _previewHash(connection, itemId):
+            raise BackgroundJobInterrupted("匹配期间预览已变化，拒绝发布过期结果")
         if expected is not None and job["kind"] == "metadata_batch":
             currentRow, currentSource = _previewState(connection, itemId)
             if expected[f"source:{itemId}"] != _hash(dict(currentSource)):
@@ -429,41 +522,70 @@ def _publishOutcome(settings, jobId, token, itemId, outcome, itemLimit, expected
                 if asdict(outcome["preview"]) != asdict(_row_to_preview(currentRow, get_effective_settings(settings))):
                     raise BackgroundJobInterrupted("匹配结果已被修改，拒绝发布过期结果")
         previous = connection.execute("SELECT status FROM background_job_items WHERE job_id=? AND item_id=?", (jobId, itemId)).fetchone()
+        ai = value.get("ai") or {}
         uncertain = bool(previous["status"] == "dispatched" and (value.get("error_type") in {"timeout", "network", "unknown"}
+            or ai.get("error_type") in {"timeout", "network", "unknown"}
             or any(provider.get("status") == "failed" for provider in value.get("provider_results", []))))
         state = value.get("status") or value.get("preview", {}).get("metadata_match_status")
-        failed = "error" in value or state == "failed"
+        failed = "error" in value or state == "failed" or ai.get("status") == "failed"
         connection.execute("UPDATE background_job_items SET status=?,outcome_json=? WHERE job_id=? AND item_id=?",
             ("unknown" if uncertain else "failed" if failed else "completed", encoded, jobId, itemId))
         successful = not failed and state not in {"blocked", "skipped"}
-        connection.execute("UPDATE background_jobs SET completed_count=completed_count+1,unknown_count=unknown_count+?,"
+        connection.execute("UPDATE background_jobs SET completed_count=completed_count+?,unknown_count=unknown_count+?,"
             "success_count=success_count+?,failed_count=failed_count+?,result_bytes=result_bytes+?,updated_at=? WHERE id=?",
-            (int(uncertain), int(successful), int(failed), len(encoded.encode()), now(), jobId))
+            (units, units * int(uncertain), units * int(successful), units * int(failed), len(encoded.encode()), now(), jobId))
         row = connection.execute("SELECT * FROM background_jobs WHERE id=?", (jobId,)).fetchone()
         record_operation_log(settings, task_type="background_job", task_id=jobId, level="info", stage="item_completed",
             message=f"后台任务已处理 {row['completed_count']}/{row['total_count']} 项", progress_current=row["completed_count"],
             progress_total=row["total_count"], detail={"item_id": itemId}, connection=connection)
-        connection.commit()
+        if owns:
+            connection.commit()
+
+
+def _aiBatchResult(items):
+    result = {"total_count": len(items), "success_count": 0, "failed_count": 0, "blocked_count": 0,
+              "skipped_count": 0, "items": [], "failed_items": [], "usage": {}}
+    for itemId, value in items:
+        if "error" in value:
+            result["failed_count"] += 1
+            result["failed_items"].append({"id": itemId, "message": value["error"]})
+            continue
+        status = value["status"]
+        key = {"success": "success_count", "blocked": "blocked_count", "skipped": "skipped_count"}.get(status, "failed_count")
+        result[key] += 1
+        result["items"].append({"id": itemId, "result": value})
+        for key, number in value.get("usage", {}).items():
+            if not isinstance(number, bool) and isinstance(number, (int, float)):
+                result["usage"][key] = result["usage"].get(key, 0) + number
+    return result
+
+
+def _tmdbBatchResult(kind, outcomes):
+    metadata = {"total_count": len(outcomes), "success_count": 0, "failed_count": 0, "items": [], "failed_items": []}
+    aiItems = []
+    for row in outcomes:
+        value = json.loads(row["outcome_json"])
+        itemId = row["item_id"]
+        if "preview" in value:
+            metadata["items"].append(value["preview"])
+        preview = value.get("preview", {})
+        if "error" in value or preview.get("metadata_match_status") in {"failed", "blocked"}:
+            metadata["failed_count"] += 1
+            metadata["failed_items"].append({"id": itemId, "message": value.get("error") or preview.get("metadata_message") or "TMDB 未匹配"})
+        else:
+            metadata["success_count"] += 1
+        if "ai" in value:
+            aiItems.append((itemId, value["ai"]))
+    if kind == "tmdb_batch":
+        return metadata
+    return {"total_count": len(outcomes), "fallback_count": len(aiItems), "metadata": metadata, "ai": _aiBatchResult(aiItems)}
 
 
 def _batchResult(kind, outcomes):
     if kind == "ai_batch":
-        result = {"total_count": len(outcomes), "success_count": 0, "failed_count": 0, "blocked_count": 0,
-                  "skipped_count": 0, "items": [], "failed_items": [], "usage": {}}
-        for row in outcomes:
-            value = json.loads(row["outcome_json"])
-            if "error" in value:
-                result["failed_count"] += 1
-                result["failed_items"].append({"id": row["item_id"], "message": value["error"]})
-                continue
-            status = value["status"]
-            key = {"success": "success_count", "blocked": "blocked_count", "skipped": "skipped_count"}.get(status, "failed_count")
-            result[key] += 1
-            result["items"].append({"id": row["item_id"], "result": value})
-            for key, number in value.get("usage", {}).items():
-                if not isinstance(number, bool) and isinstance(number, (int, float)):
-                    result["usage"][key] = result["usage"].get(key, 0) + number
-        return result
+        return _aiBatchResult([(row["item_id"], json.loads(row["outcome_json"])) for row in outcomes])
+    if kind in TMDB_BATCH_KINDS:
+        return _tmdbBatchResult(kind, outcomes)
     result = {"total_count": len(outcomes), "success_count": 0, "failed_count": 0, "blocked_count": 0, "skipped_count": 0,
               "provider_success_count": 0, "provider_failed_count": 0, "provider_skipped_count": 0, "items": [], "failed_items": []}
     for row in outcomes:
@@ -481,21 +603,71 @@ def _batchResult(kind, outcomes):
     return result
 
 
+def _matchTmdbItem(settings, kind, itemId, matchSource):
+    from app.service.preview_service import match_rename_preview_metadata, parse_rename_preview_with_ai, _should_run_ai_fallback
+    from app.service.tmdb_client import TmdbBatchFailure, strictTmdbBatch
+    try:
+        with strictTmdbBatch():
+            preview = match_rename_preview_metadata(settings, itemId, metadata_match_source=matchSource, auto_backfill=False)
+    except TmdbBatchFailure as exc:
+        return {"error": str(exc), "error_type": "unknown" if exc.unknown else "rejected"}
+    outcome = {"preview": preview}
+    if kind == "tmdb_ai_batch" and _should_run_ai_fallback(preview):
+        outcome["ai"] = asdict(parse_rename_preview_with_ai(settings, itemId, metadata_match_source=matchSource))
+    return outcome
+
+
+def _executePreviewGeneration(settings, jobId, token, payload, expected, itemLimit):
+    from app.service.preview_service import _generateRenamePreviews
+    scanId = payload["scan_job_id"]
+    total = dict.fromkeys(("generated_count", "needs_review_count", "edited_kept_count"), 0)
+    for first, last, units, partHash in expected["parts"]:
+        _markItems(settings, jobId, token, [first], "running")
+        with closing(_connect(settings)) as connection:
+            sourceId, scopeHash = _generationScope(connection, payload)
+            if scopeHash != expected["scope"]:
+                raise BackgroundJobInterrupted("生成预览时的扫描或媒体源已变化")
+            ids = [row[0] for row in connection.execute(
+                "SELECT id FROM media_files WHERE scan_job_id=? AND id BETWEEN ? AND ? ORDER BY id LIMIT ?",
+                (scanId, first, last, PREVIEW_PART_SIZE + 1))]
+            if len(ids) != units:
+                raise BackgroundJobInterrupted("生成预览的文件范围已变化")
+
+        def guard(database, phase):
+            requireBackgroundJobLease(settings, database, jobId, token)
+            requireNoDirectoryExecution(database)
+            if phase != "preview-generation-publish" or _generationScope(database, payload)[1] != expected["scope"] \
+                    or _generationPartHash(database, sourceId, scanId, ids) != partHash:
+                raise BackgroundJobInterrupted("生成期间条目或预览已变化，未写入此组")
+
+        def publish(database, summary):
+            _publishOutcome(settings, jobId, token, first, summary, itemLimit, transaction=database, units=units)
+
+        with executionGuard(guard):
+            summary = _generateRenamePreviews(settings, sourceId, scanId, ids, False, publish=publish)
+        for key, value in asdict(summary).items():
+            total[key] += value
+    return dict(total, scan_job_id=scanId, media_source_id=sourceId)
+
+
 def executeBackgroundJob(settings, jobId, token):
     from app.service.rename_operation_service import create_rename_dry_run
     from app.service.rename_rollback_service import dry_run_rename_rollback_plan
     from app.service.preview_service import parse_rename_preview_with_ai, match_rename_preview_multi_source_metadata
     with closing(_connect(settings)) as connection:
+        connection.execute("BEGIN")
         row, actor = requireBackgroundJobLease(settings, connection, jobId, token)
         payload, expected = json.loads(row["input_json"]), json.loads(row["snapshot_json"])
         if expected != _snapshot(connection, row["kind"], payload):
             raise BackgroundJobInterrupted("任务排队期间输入已变化")
         context = AuditWriteContext(actor, **json.loads(row["audit_context_json"]))
     kind = row["kind"]
-    ids = payload.get("rename_preview_ids", [payload.get("plan_id")])
+    ids = [part[0] for part in expected["parts"]] if kind == "preview_generation" else payload.get("rename_preview_ids", [payload.get("plan_id")])
     limit = (settings.background_jobs.result_max_size_mb * 1024 * 1024 - row["result_bytes"] - 16384 - 128 * len(ids)) // (2 * len(ids))
     result = None
-    if kind in {"rename_dry_run", "rollback_dry_run"}:
+    if kind == "preview_generation":
+        result = _executePreviewGeneration(settings, jobId, token, payload, expected, limit)
+    elif kind in {"rename_dry_run", "rollback_dry_run"}:
         _markItems(settings, jobId, token, ids, "running")
         with executionGuard(_executionGuard(settings, jobId, token, expected, payload, kind)):
             if kind == "rename_dry_run":
@@ -512,6 +684,8 @@ def executeBackgroundJob(settings, jobId, token):
             with executionGuard(_executionGuard(settings, jobId, token, expected, payload, kind, itemId)):
                 if kind == "ai_batch":
                     outcome = parse_rename_preview_with_ai(settings, itemId, metadata_match_source=payload["metadata_match_source"])
+                elif kind in TMDB_BATCH_KINDS:
+                    outcome = _matchTmdbItem(settings, kind, itemId, payload["metadata_match_source"])
                 else:
                     outcome = match_rename_preview_multi_source_metadata(settings, itemId,
                         metadata_match_source=payload["metadata_match_source"], mode=payload["mode"])
@@ -523,14 +697,20 @@ def executeBackgroundJob(settings, jobId, token):
         if result is None:
             result = _batchResult(kind, outcomes)
         resultJson = _json(result)
-        current = connection.execute("SELECT unknown_count,result_bytes FROM background_jobs WHERE id=?", (jobId,)).fetchone()
+        current = connection.execute("SELECT unknown_count,failed_count,result_bytes FROM background_jobs WHERE id=?", (jobId,)).fetchone()
         truncated = current["result_bytes"] + len(resultJson.encode()) > settings.background_jobs.result_max_size_mb * 1024 * 1024
         if truncated:
             # 用量等聚合字段可能再次复制大块数据，终态摘要仍须遵守实际字节上限。
-            result = {key: value for key, value in result.items() if key.endswith("_count")}
+            originalResult = result
+            result = {key: value for key, value in originalResult.items() if key.endswith("_count")}
             result.update(items=[], failed_items=[], usage={}, result_truncated=True)
+            if kind == "tmdb_ai_batch":
+                for stage in ("metadata", "ai"):
+                    result[stage] = {key: value for key, value in originalResult[stage].items() if key.endswith("_count")}
+                    result[stage].update(items=[], failed_items=[], usage={})
             resultJson = _json(result)
-        partial = bool(truncated or result.get("failed_count") or result.get("blocked_count") or current["unknown_count"])
+        partial = bool(truncated or result.get("failed_count") or result.get("blocked_count")
+                       or result.get("ai", {}).get("blocked_count") or current["unknown_count"] or current["failed_count"])
         status = "partial_completed" if partial else "completed"
         connection.execute("UPDATE background_jobs SET status=?,result_json=?,result_bytes=result_bytes+?,error_message=?,updated_at=? WHERE id=?",
                            (status, resultJson, len(resultJson.encode()), "聚合摘要超过大小限制，逐项已知结果仍可查看；不会重新执行" if truncated else None, now(), jobId))

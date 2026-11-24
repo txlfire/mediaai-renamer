@@ -8,10 +8,20 @@ from uuid import uuid4
 
 from app.service.cloud_directory_guard import requireNoDirectoryExecution
 from app.service.cloud_drive_budget_service import cloudDriveHostKey
-from app.service.cloud_inventory_service import inventoryDb
-from app.service.cloud_inventory_service import inventoryId
+from app.service.cloud_inventory_service import inventoryId, CloudInventoryError
+from app.service.cloud_connection_store import connectionDb, CloudConnectionError
 from app.service.scan_recovery_service import isProcessAlive
 from app.service.audit_service import record_audit_event
+
+
+@contextmanager
+def _probeDb(settings, *, write=False):
+    # 这里只维护本地探测槽，不解析或迁移云配置，也不授权CD2网络请求。
+    try:
+        with connectionDb(settings, write=write, migration=True) as connection:
+            yield connection
+    except CloudConnectionError:
+        raise CloudInventoryError('storage_unavailable') from None
 
 
 @contextmanager
@@ -20,7 +30,7 @@ def directoryProbeWindow(settings, kind):
         raise ValueError("不支持的同步探测类型")
     leaseId = str(uuid4())
     tracked = False
-    with inventoryDb(settings, write=True) as connection:
+    with _probeDb(settings, write=True) as connection:
         exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_directory_probe_leases'").fetchone()
         if exists:
             requireNoDirectoryExecution(connection)
@@ -33,7 +43,7 @@ def directoryProbeWindow(settings, kind):
         yield
     finally:
         if tracked:
-            with inventoryDb(settings, write=True) as connection:
+            with _probeDb(settings, write=True) as connection:
                 connection.execute("DELETE FROM cloud_directory_probe_leases WHERE id=? AND owner_pid=? AND owner_host=?",
                                    (leaseId, os.getpid(), cloudDriveHostKey()))
 
@@ -49,7 +59,7 @@ def directoryProbe(kind):
 
 
 def inspectDirectoryProbes(settings):
-    with inventoryDb(settings) as connection:
+    with _probeDb(settings) as connection:
         exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_directory_probe_leases'").fetchone()
         return [dict(row) for row in connection.execute("SELECT * FROM cloud_directory_probe_leases ORDER BY created_at,id LIMIT 64")] if exists else []
 
@@ -58,7 +68,7 @@ def releaseDirectoryProbeAfterReview(settings, leaseId, *, confirmProcessStopped
     inventoryId(leaseId)
     if confirmProcessStopped is not True or confirmRemoteIdle is not True:
         raise ValueError("须确认本机探测进程已停止及相关远端已静止，不自动确认")
-    with inventoryDb(settings, write=True) as connection:
+    with _probeDb(settings, write=True) as connection:
         row = connection.execute("SELECT * FROM cloud_directory_probe_leases WHERE id=?", (leaseId,)).fetchone()
         if row is None:
             raise ValueError("探测槽不存在")

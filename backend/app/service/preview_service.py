@@ -321,6 +321,11 @@ def generate_rename_previews(
     overwrite_edited: bool = False,
 ) -> PreviewGenerationSummary:
     """Generate or update rename preview records from scanned media files."""
+    return _generateRenamePreviews(settings, media_source_id, scan_job_id, media_file_ids, overwrite_edited)
+
+
+def _generateRenamePreviews(settings, media_source_id, scan_job_id, media_file_ids, overwrite_edited, *, publish=None):
+    from app.service.execution_guard_service import checkExecutionGuard
 
     generated_count = 0
     needs_review_count = 0
@@ -332,6 +337,7 @@ def generate_rename_previews(
     with closing(sqlite3.connect(settings.database_path)) as connection:
         connection.row_factory = sqlite3.Row
         rows = _query_media_files(connection, media_source_id, scan_job_id, media_file_ids)
+        prepared = []
         for row in rows:
             parsed = parse_media_filename(str(row["file_name"]))
             parsed, title_source, parent_folder_title, title_conflict_message = _merge_parent_folder_title(
@@ -354,8 +360,15 @@ def generate_rename_previews(
             elif status == "generated":
                 generated_count += 1
 
-            if not connection.in_transaction:
-                connection.execute("BEGIN IMMEDIATE")
+            prepared.append((row, parsed, title_source, parent_folder_title, title_conflict_message,
+                             template_type, template_version, template_updated_at, suggested_name, status, message))
+
+        # 路径探测可能访问挂载目录，必须在获取 SQLite 写锁前完成。
+        if prepared or publish is not None:
+            connection.execute("BEGIN IMMEDIATE")
+            checkExecutionGuard(connection, phase="preview-generation-publish")
+        for (row, parsed, title_source, parent_folder_title, title_conflict_message,
+             template_type, template_version, template_updated_at, suggested_name, status, message) in prepared:
             existing = connection.execute(
                 "SELECT id, edited_name FROM rename_previews WHERE media_file_id = ?",
                 (row["id"],),
@@ -418,9 +431,11 @@ def generate_rename_previews(
                     now,
                 ),
             )
+        summary = PreviewGenerationSummary(generated_count, needs_review_count, edited_kept_count)
+        if publish is not None:
+            publish(connection, summary)
         connection.commit()
-
-    return PreviewGenerationSummary(generated_count, needs_review_count, edited_kept_count)
+    return summary
 
 
 def _previewReadFilters(
@@ -928,6 +943,7 @@ def _update_preview_metadata(
                 preview_id,
             ),
         )
+        checkExecutionGuard(connection, phase="metadata-published")
         connection.commit()
 
     return _preview_by_id(settings, preview_id)

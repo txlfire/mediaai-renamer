@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 
 import { getHealth, type HealthStatus } from "../api/client";
 import { isThemePalette, type ThemePalette } from "../config/themeRegistry";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 
 type ConnectionState = "idle" | "loading" | "online" | "offline";
 export type ThemeMode = "system" | "light" | "dark";
@@ -38,16 +38,25 @@ export const useAppStore = defineStore("app", {
     health: null as HealthStatus | null,
     errorMessage: "",
     sidebarCollapsed: false,
+    hasSidebarPreference: false,
     themeMode: "system" as ThemeMode,
     resolvedTheme: "light" as ResolvedTheme,
-    themePalette: "default" as ThemePalette,
+    themePalette: "forest" as ThemePalette,
   }),
   actions: {
     loadSidebarCollapsed() {
-      this.sidebarCollapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+      const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      this.hasSidebarPreference = stored === "true" || stored === "false";
+      this.sidebarCollapsed = stored === "true";
+    },
+
+    syncSidebarViewport(compact: boolean) {
+      // 自动适配不写入偏好；用户手动选择后以其选择为准。
+      if (!this.hasSidebarPreference) this.sidebarCollapsed = compact;
     },
 
     setSidebarCollapsed(collapsed: boolean) {
+      this.hasSidebarPreference = true;
       this.sidebarCollapsed = collapsed;
       localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
     },
@@ -56,7 +65,7 @@ export const useAppStore = defineStore("app", {
       const storedMode = localStorage.getItem(THEME_STORAGE_KEY);
       this.themeMode = isThemeMode(storedMode) ? storedMode : "system";
       const storedPalette = localStorage.getItem(PALETTE_STORAGE_KEY);
-      this.themePalette = isThemePalette(storedPalette) ? storedPalette : "default";
+      this.themePalette = storedPalette === null ? "forest" : isThemePalette(storedPalette) ? storedPalette : "default";
       this.applyThemeMode();
     },
 
@@ -96,7 +105,7 @@ export const useAppStore = defineStore("app", {
       } catch (error) {
         this.health = null;
         this.connectionState = "offline";
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.backendConnectionFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.backendConnectionFailed;
       }
     },
   },

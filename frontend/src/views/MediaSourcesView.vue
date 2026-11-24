@@ -32,12 +32,14 @@ import {
   type MediaSource,
 } from "../api/client";
 import ListPageLayout from "../components/ListPageLayout.vue";
+import FullscreenTablePanel from "../components/FullscreenTablePanel.vue";
 import TablePagination from "../components/TablePagination.vue";
 import TextCell from "../components/TextCell.vue";
 import { tableDisplayConfig } from "../config/tableDisplayConfig";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { useAuthStore } from "../stores/auth";
 import { usePaginationStore } from "../stores/pagination";
+import { useTableRowSelection } from "../utils/tableRowSelection";
 import {
   canGoToParentDirectory,
   directoryCurrentPathLabel,
@@ -45,7 +47,9 @@ import {
   parentDirectoryPath,
 } from "../utils/localDirectory";
 
-const pageText = messages.mediaSources;
+const { language, messages } = useInterfaceLanguage();
+
+const pageText = computed(() => messages.value.mediaSources);
 
 const authStore = useAuthStore();
 const paginationStore = usePaginationStore();
@@ -75,6 +79,7 @@ const editForm = reactive({
   enabled: true,
 });
 const selectedRows = ref<MediaSource[]>([]);
+const { table: mediaSourceTable, toggleByRowClick: toggleSourceRow } = useTableRowSelection<MediaSource>();
 const editDialogVisible = ref(false);
 const pathPopoverVisible = ref(false);
 const pathHelpVisible = ref(false);
@@ -91,8 +96,7 @@ const verifyingSourceIds = ref<Set<number>>(new Set());
 const cleanupDialog = reactive({
   visible: false,
   percentage: 0,
-  title: pageText.cleanupTitle,
-  message: "",
+  phase: null as "cleanupPreparing" | "cleanupRunning" | "cleanupFinished" | null,
   summary: null as CleanupSummary | null,
 });
 const directoryTarget = ref<"create" | "edit">("create");
@@ -131,29 +135,29 @@ async function loadSources() {
     if (version !== sourcesRequestVersion) return;
     pagedMediaSources.value = [];
     mediaSourceTotal.value = 0;
-    ElMessage.error(error instanceof Error ? error.message : pageText.loadFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.loadFailed);
   } finally {
     if (version === sourcesRequestVersion) sourcesLoading.value = false;
   }
 }
 const selectedIds = computed(() => selectedRows.value.map((row) => row.id));
 const canWriteSources = computed(() => authStore.hasPermission("source:write"));
-const sourcePermissionTitle = computed(() => (canWriteSources.value ? "" : messages.auth.permissionDenied));
+const sourcePermissionTitle = computed(() => (canWriteSources.value ? "" : messages.value.auth.permissionDenied));
 const directoryTip = computed(
-  () => pageText.directoryTips[directoryTipKey(directoryPicker.listing)],
+  () => pageText.value.directoryTips[directoryTipKey(directoryPicker.listing)],
 );
 const directoryPathLabel = computed(() =>
-  directoryCurrentPathLabel(directoryPicker.listing, pageText.fileSystemRoot),
+  directoryCurrentPathLabel(directoryPicker.listing, pageText.value.fileSystemRoot),
 );
 const pathTypeNotice = computed(() => {
   if (form.path_type === "unc") {
-    return pageText.smbNotice;
+    return pageText.value.smbNotice;
   }
   if (form.path_type === "mounted_nfs") {
-    return pageText.nfsNotice;
+    return pageText.value.nfsNotice;
   }
   if (form.path_type === "webdav") {
-    return pageText.webdavNotice;
+    return pageText.value.webdavNotice;
   }
   return "";
 });
@@ -163,9 +167,11 @@ function showPathPopoverIfNeeded() {
 }
 
 function connectionErrorMessage(message: string, suggestion?: string | null) {
+  // 连接测试结果没有结构化错误码，英文模式不从自由文本推断错误类型。
+  if (language.value === "en-US") return pageText.value.connectionFailed;
   const detail = suggestion ? `${message}；${suggestion}` : message;
   if (detail.includes("路径不存在") || detail.includes("目录不存在")) {
-    return `${detail}。${pageText.pathNotFoundSuggestion}`;
+    return `${detail}。${pageText.value.pathNotFoundSuggestion}`;
   }
   return detail;
 }
@@ -189,7 +195,7 @@ function warnUnsupportedPathProtocol(path: string): boolean {
   if (!protocol) {
     return false;
   }
-  ElMessage.warning(pageText.unsupportedProtocolPath.replace("{protocol}", protocol));
+  ElMessage.warning(pageText.value.unsupportedProtocolPath.replace("{protocol}", protocol));
   return true;
 }
 
@@ -210,11 +216,11 @@ watch(
 
 async function submitSource() {
   if (!form.name.trim()) {
-    ElMessage.warning(`${pageText.name}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.name}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (!form.path.trim()) {
-    ElMessage.warning(`${pageText.targetPath}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.targetPath}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (warnUnsupportedPathProtocol(form.path)) {
@@ -222,27 +228,27 @@ async function submitSource() {
   }
   if (form.path_type === "unc" && !form.path.trim().startsWith("\\\\")) {
     showPathPopoverIfNeeded();
-    ElMessage.warning(pageText.uncPathRequired);
+    ElMessage.warning(pageText.value.uncPathRequired);
     return;
   }
   if (form.path_type === "unc" && !form.username.trim()) {
     showPathPopoverIfNeeded();
-    ElMessage.warning(`${pageText.username}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.username}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (form.path_type === "webdav" && !form.path.trim().toLowerCase().startsWith("https://")) {
     showPathPopoverIfNeeded();
-    ElMessage.warning(pageText.webdavPathRequired);
+    ElMessage.warning(pageText.value.webdavPathRequired);
     return;
   }
   if (form.path_type === "mounted_nfs" && !form.nfs_host.trim()) {
     showPathPopoverIfNeeded();
-    ElMessage.warning(`${pageText.nfsHost}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.nfsHost}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (form.path_type === "mounted_nfs" && !form.nfs_export.trim()) {
     showPathPopoverIfNeeded();
-    ElMessage.warning(`${pageText.nfsExport}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.nfsExport}${messages.value.validation.requiredSuffix}`);
     return;
   }
 
@@ -257,12 +263,12 @@ async function submitSource() {
       nfs_host: form.path_type === "mounted_nfs" ? form.nfs_host : null,
       nfs_export: form.path_type === "mounted_nfs" ? form.nfs_export : null,
     });
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
     resetFormOnly();
     await loadSources();
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.saveFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.saveFailed);
   }
 }
 
@@ -280,28 +286,28 @@ function resetFormOnly() {
 
 function protocolLabel(row: MediaSource) {
   if (row.path_type === "unc") {
-    return pageText.pathTypes.unc;
+    return pageText.value.pathTypes.unc;
   }
   if (row.path_type === "mounted_nfs") {
-    return pageText.pathTypes.mountedNfs;
+    return pageText.value.pathTypes.mountedNfs;
   }
   if (row.path_type === "webdav") {
-    return pageText.pathTypes.webdav;
+    return pageText.value.pathTypes.webdav;
   }
-  return pageText.pathTypes.local;
+  return pageText.value.pathTypes.local;
 }
 
 function editPathTypeLabel() {
   if (editForm.path_type === "unc") {
-    return pageText.pathTypes.unc;
+    return pageText.value.pathTypes.unc;
   }
   if (editForm.path_type === "mounted_nfs") {
-    return pageText.pathTypes.mountedNfs;
+    return pageText.value.pathTypes.mountedNfs;
   }
   if (editForm.path_type === "webdav") {
-    return pageText.pathTypes.webdav;
+    return pageText.value.pathTypes.webdav;
   }
-  return pageText.pathTypes.local;
+  return pageText.value.pathTypes.local;
 }
 
 async function resetMediaSources() {
@@ -319,7 +325,7 @@ async function loadDirectories(path = "") {
     directoryPicker.selectedPath = directoryPicker.listing.current_path ?? "";
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    directoryPicker.errorMessage = error instanceof Error ? error.message : messages.mediaSources.loadDirectoryFailed;
+    directoryPicker.errorMessage = error instanceof Error ? error.message : messages.value.mediaSources.loadDirectoryFailed;
   } finally {
     directoryPicker.loading = false;
   }
@@ -348,7 +354,7 @@ function confirmDirectorySelection() {
 
 function viewScanJobs(row: MediaSource) {
   if (!row.enabled) {
-    ElMessage.warning(pageText.disabledScanTip);
+    ElMessage.warning(pageText.value.disabledScanTip);
     return;
   }
   void router.push({ name: "scan-jobs", query: { media_source_id: String(row.id) } });
@@ -359,13 +365,13 @@ async function testConnection(row: MediaSource) {
   try {
     const result = await testMediaSourceConnection(row.id);
     if (result.success) {
-      ElMessage.success(result.message || pageText.connectionSuccess);
+      ElMessage.success(language.value === "zh-CN" && result.message || pageText.value.connectionSuccess);
       return;
     }
     ElMessage.error(connectionErrorMessage(result.message, result.suggestion));
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.connectionFailed);
+    ElMessage.error(language.value === "zh-CN" && error instanceof Error ? error.message : pageText.value.connectionFailed);
   } finally {
     const next = new Set(testingSourceIds.value);
     next.delete(row.id);
@@ -394,7 +400,7 @@ function conditionalMoveStatus(row: MediaSource): "verified" | "unsupported" | "
 }
 
 function conditionalMoveLabel(row: MediaSource) {
-  return pageText.conditionalMoveStatus[conditionalMoveStatus(row)];
+  return pageText.value.conditionalMoveStatus[conditionalMoveStatus(row)];
 }
 
 function conditionalMoveTagType(row: MediaSource): "success" | "danger" | "warning" | "info" {
@@ -408,9 +414,9 @@ function conditionalMoveTagType(row: MediaSource): "success" | "danger" | "warni
 async function verifyConditionalMove(row: MediaSource) {
   try {
     await ElMessageBox.confirm(
-      pageText.verifyConditionalMoveConfirm,
-      pageText.verifyConditionalMoveTitle,
-      { type: "warning", confirmButtonText: pageText.verifyConditionalMove, cancelButtonText: messages.common.cancel },
+      pageText.value.verifyConditionalMoveConfirm,
+      pageText.value.verifyConditionalMoveTitle,
+      { type: "warning", confirmButtonText: pageText.value.verifyConditionalMove, cancelButtonText: messages.value.common.cancel },
     );
   } catch {
     return;
@@ -418,14 +424,16 @@ async function verifyConditionalMove(row: MediaSource) {
   verifyingSourceIds.value = new Set(verifyingSourceIds.value).add(row.id);
   try {
     const result = await verifyWebDavConditionalMove(row.id);
-    const message = result.suggestion ? `${result.message}；${result.suggestion}` : result.message;
+    const message = language.value === "en-US"
+      ? (result.status === "unknown" ? pageText.value.verifyConditionalMoveFailed : pageText.value.conditionalMoveStatus[result.status])
+      : (result.suggestion ? `${result.message}；${result.suggestion}` : result.message);
     if (result.status === "verified") ElMessage.success(message);
     else if (result.status === "unsupported") ElMessage.warning(message);
     else ElMessage.error(message);
     await loadSources();
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.verifyConditionalMoveFailed);
+    ElMessage.error(error instanceof Error ? error.message : pageText.value.verifyConditionalMoveFailed);
   } finally {
     const next = new Set(verifyingSourceIds.value);
     next.delete(row.id);
@@ -435,18 +443,18 @@ async function verifyConditionalMove(row: MediaSource) {
 
 async function testEditConnection() {
   if (!editForm.path.trim()) {
-    ElMessage.warning(`${pageText.targetPath}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.targetPath}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (warnUnsupportedPathProtocol(editForm.path)) {
     return;
   }
   if (editForm.path_type === "unc" && !editForm.path.trim().startsWith("\\\\")) {
-    ElMessage.warning(pageText.uncPathRequired);
+    ElMessage.warning(pageText.value.uncPathRequired);
     return;
   }
   if (editForm.path_type === "webdav" && !editForm.path.trim().toLowerCase().startsWith("https://")) {
-    ElMessage.warning(pageText.webdavPathRequired);
+    ElMessage.warning(pageText.value.webdavPathRequired);
     return;
   }
   testingEditSource.value = true;
@@ -460,13 +468,13 @@ async function testEditConnection() {
       nfs_export: editForm.path_type === "mounted_nfs" ? editForm.nfs_export : null,
     });
     if (result.success) {
-      ElMessage.success(result.message || pageText.connectionSuccess);
+      ElMessage.success(language.value === "zh-CN" && result.message || pageText.value.connectionSuccess);
       return;
     }
     ElMessage.error(connectionErrorMessage(result.message, result.suggestion));
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : pageText.connectionFailed);
+    ElMessage.error(language.value === "zh-CN" && error instanceof Error ? error.message : pageText.value.connectionFailed);
   } finally {
     testingEditSource.value = false;
   }
@@ -490,14 +498,14 @@ function openEditDialog(row: MediaSource) {
 async function showCleanupProgress<T>(work: () => Promise<T>): Promise<T> {
   cleanupDialog.visible = true;
   cleanupDialog.percentage = 15;
-  cleanupDialog.message = pageText.cleanupPreparing;
+  cleanupDialog.phase = "cleanupPreparing";
   cleanupDialog.summary = null;
   await new Promise((resolve) => window.setTimeout(resolve, 120));
   cleanupDialog.percentage = 55;
-  cleanupDialog.message = pageText.cleanupRunning;
+  cleanupDialog.phase = "cleanupRunning";
   const result = await work();
   cleanupDialog.percentage = 90;
-  cleanupDialog.message = pageText.cleanupFinished;
+  cleanupDialog.phase = "cleanupFinished";
   await new Promise((resolve) => window.setTimeout(resolve, 160));
   cleanupDialog.percentage = 100;
   return result;
@@ -509,31 +517,31 @@ function setCleanupSummary(summary?: CleanupSummary) {
 
 async function submitEditSource() {
   if (!editForm.name.trim()) {
-    ElMessage.warning(`${pageText.name}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.name}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (!editForm.path.trim()) {
-    ElMessage.warning(`${pageText.targetPath}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.targetPath}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (editForm.path_type === "unc" && !editForm.path.trim().startsWith("\\\\")) {
-    ElMessage.warning(pageText.uncPathRequired);
+    ElMessage.warning(pageText.value.uncPathRequired);
     return;
   }
   if (editForm.path_type === "unc" && !editForm.username.trim()) {
-    ElMessage.warning(`${pageText.username}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.username}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (editForm.path_type === "webdav" && !editForm.path.trim().toLowerCase().startsWith("https://")) {
-    ElMessage.warning(pageText.webdavPathRequired);
+    ElMessage.warning(pageText.value.webdavPathRequired);
     return;
   }
   if (editForm.path_type === "mounted_nfs" && !editForm.nfs_host.trim()) {
-    ElMessage.warning(`${pageText.nfsHost}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.nfsHost}${messages.value.validation.requiredSuffix}`);
     return;
   }
   if (editForm.path_type === "mounted_nfs" && !editForm.nfs_export.trim()) {
-    ElMessage.warning(`${pageText.nfsExport}${messages.validation.requiredSuffix}`);
+    ElMessage.warning(`${pageText.value.nfsExport}${messages.value.validation.requiredSuffix}`);
     return;
   }
 
@@ -541,12 +549,12 @@ async function submitEditSource() {
   try {
     if (pathChanged) {
       await ElMessageBox.confirm(
-        pageText.cleanupConfirm,
-        pageText.cleanupConfirmTitle,
+        pageText.value.cleanupConfirm,
+        pageText.value.cleanupConfirmTitle,
         {
           type: "warning",
-          confirmButtonText: messages.common.save,
-          cancelButtonText: messages.common.cancel,
+          confirmButtonText: messages.value.common.save,
+          cancelButtonText: messages.value.common.cancel,
         },
       );
     }
@@ -575,12 +583,12 @@ async function submitEditSource() {
         });
     setCleanupSummary(result.cleanup_summary);
     editDialogVisible.value = false;
-    ElMessage.success(pageText.saved);
+    ElMessage.success(pageText.value.saved);
     await loadSources();
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (error === "cancel" || error === "close") return;
-    ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+    ElMessage.error(error instanceof Error ? error.message : messages.value.errors.unknown);
     cleanupDialog.visible = false;
   } finally {
     window.setTimeout(() => {
@@ -592,24 +600,24 @@ async function submitEditSource() {
 async function toggleSource(row: MediaSource) {
   try {
     await setMediaSourceEnabled(row.id, !row.enabled);
-    ElMessage.success(pageText.statusUpdated);
+    ElMessage.success(pageText.value.statusUpdated);
     await loadSources();
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+    ElMessage.error(error instanceof Error ? error.message : messages.value.errors.unknown);
   }
 }
 
 async function removeSource(row: MediaSource) {
   try {
-    await ElMessageBox.confirm(pageText.deleteConfirm, pageText.deleteConfirmTitle, {
+    await ElMessageBox.confirm(pageText.value.deleteConfirm, pageText.value.deleteConfirmTitle, {
       type: "warning",
-      confirmButtonText: pageText.remove,
-      cancelButtonText: messages.common.cancel,
+      confirmButtonText: pageText.value.remove,
+      cancelButtonText: messages.value.common.cancel,
     });
     const result = await showCleanupProgress(() => deleteMediaSource(row.id));
     setCleanupSummary(result.cleanup_summary);
-    ElMessage.success(pageText.deleted);
+    ElMessage.success(pageText.value.deleted);
     await loadSources();
     window.setTimeout(() => {
       cleanupDialog.visible = false;
@@ -618,27 +626,27 @@ async function removeSource(row: MediaSource) {
     if (isSessionChangedError(error)) return;
     cleanupDialog.visible = false;
     if (error !== "cancel" && error !== "close") {
-      ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+      ElMessage.error(error instanceof Error ? error.message : messages.value.errors.unknown);
     }
   }
 }
 
 async function removeSelectedSources() {
   if (!selectedIds.value.length) {
-    ElMessage.warning(pageText.selectBeforeBatch);
+    ElMessage.warning(pageText.value.selectBeforeBatch);
     return;
   }
 
   try {
-    await ElMessageBox.confirm(pageText.batchDeleteConfirm, pageText.deleteConfirmTitle, {
+    await ElMessageBox.confirm(pageText.value.batchDeleteConfirm, pageText.value.deleteConfirmTitle, {
       type: "warning",
-      confirmButtonText: pageText.batchRemove,
-      cancelButtonText: messages.common.cancel,
+      confirmButtonText: pageText.value.batchRemove,
+      cancelButtonText: messages.value.common.cancel,
     });
     const result = await showCleanupProgress(() => bulkDeleteMediaSources(selectedIds.value));
     setCleanupSummary(result.cleanup_summary);
     selectedRows.value = [];
-    ElMessage.success(pageText.deleted);
+    ElMessage.success(pageText.value.deleted);
     await loadSources();
     window.setTimeout(() => {
       cleanupDialog.visible = false;
@@ -647,7 +655,7 @@ async function removeSelectedSources() {
     if (isSessionChangedError(error)) return;
     cleanupDialog.visible = false;
     if (error !== "cancel" && error !== "close") {
-      ElMessage.error(error instanceof Error ? error.message : messages.errors.unknown);
+      ElMessage.error(error instanceof Error ? error.message : messages.value.errors.unknown);
     }
   }
 }
@@ -668,8 +676,10 @@ onBeforeUnmount(() => {
 
 <template>
   <ListPageLayout
+    class="media-sources-page"
     :title="messages.mediaSources.title"
     :description="messages.mediaSources.description"
+    flat-table
   >
     <template #filters>
       <el-form class="source-form source-form-inline source-form-managed media-source-path-panel" :model="form" label-position="top">
@@ -802,7 +812,8 @@ onBeforeUnmount(() => {
     </template>
 
     <template #table>
-      <div class="media-source-table-panel">
+      <FullscreenTablePanel>
+      <template #actions>
         <div class="media-source-table-toolbar">
           <el-button
             :icon="Delete"
@@ -814,11 +825,14 @@ onBeforeUnmount(() => {
           </el-button>
           <el-button :icon="Refresh" :loading="sourcesLoading" @click="loadSources">{{ messages.common.refresh }}</el-button>
         </div>
+      </template>
         <el-table
+          ref="mediaSourceTable"
           :data="pagedMediaSources"
-          class="data-table"
+          class="data-table row-select-table"
           height="100%"
           table-layout="auto"
+          @row-click="toggleSourceRow"
           @selection-change="handleSelectionChange"
         >
         <el-table-column type="selection" width="44" align="center" fixed="left" />
@@ -921,12 +935,9 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
         </el-table>
-      </div>
-    </template>
-
-    <template #pagination>
       <TablePagination pagination-key="media-sources" :total="mediaSourceTotal" server
         @page-change="loadSources" @page-size-change="loadSources" />
+      </FullscreenTablePanel>
     </template>
 
     <el-dialog v-model="editDialogVisible" :title="pageText.editTitle" width="640px">
@@ -990,10 +1001,10 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="cleanupDialog.visible" :title="cleanupDialog.title" width="520px" :close-on-click-modal="false">
+    <el-dialog v-model="cleanupDialog.visible" :title="pageText.cleanupTitle" width="520px" :close-on-click-modal="false">
       <div class="cleanup-progress">
         <el-progress :percentage="cleanupDialog.percentage" />
-        <p>{{ cleanupDialog.message }}</p>
+        <p>{{ cleanupDialog.phase ? pageText[cleanupDialog.phase] : "" }}</p>
         <dl v-if="cleanupDialog.summary" class="cleanup-summary">
           <div>
             <dt>{{ pageText.invalidatedPending }}</dt>
@@ -1074,11 +1085,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .media-source-path-panel {
   display: block;
-  min-height: 6.75rem;
-  padding: clamp(0.75rem, 1.4vw, 1rem);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--panel-bg);
+  min-width: 0;
+  padding: 0;
 }
 
 .media-source-path-header {
@@ -1121,7 +1129,7 @@ onBeforeUnmount(() => {
   gap: clamp(0.5rem, 0.8vw, 0.75rem);
   height: auto;
   margin-left: 0;
-  min-width: max-content;
+  min-width: 0;
   padding-top: 0;
   white-space: nowrap;
 }
@@ -1245,20 +1253,13 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-.media-source-table-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 0.65rem;
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-}
-
 .media-source-table-toolbar {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: clamp(0.5rem, 1vw, 0.75rem);
+  flex-wrap: wrap;
+  padding-block: 2px 8px;
 }
 
 .media-source-dialog-status-inline {

@@ -3,14 +3,17 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Check, InfoFilled, Refresh } from "@element-plus/icons-vue";
 import { fetchCloudDriveSettings, saveCloudDriveSettings, type CloudDriveSettingsValues, type CloudDriveSettingsSnapshot } from "../api/cloudDriveSettings";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { useAuthStore } from "../stores/auth";
 import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
+import CloudConnectionManager from "./CloudConnectionManager.vue";
 
-const text = messages.cloudDriveSettings;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.cloudDriveSettings);
 const auth = useAuthStore();
 const allowed = computed(() => auth.hasPermission("settings:write"));
 const snapshot = ref<CloudDriveSettingsSnapshot | null>(null);
+const multiMode = ref(false);
 const busy = ref(false);
 const error = ref("");
 const form = reactive<CloudDriveSettingsValues>({ endpoint: "", approvedRoot: "", caCertificatePem: "",
@@ -25,9 +28,17 @@ function accept(result: CloudDriveSettingsSnapshot) { snapshot.value = result; O
 async function load() {
   if (!allowed.value || busy.value) return;
   const requestVersion = ++version, session = getSessionGeneration();
-  busy.value = true; error.value = ""; snapshot.value = null;
-  try { const result = await fetchCloudDriveSettings(); if (current(requestVersion, session)) accept(result); }
-  catch (cause) { if (current(requestVersion, session) && !isSessionChangedError(cause)) error.value = text.failed; }
+  busy.value = true; error.value = ""; snapshot.value = null; multiMode.value = false;
+  try {
+    const result = await fetchCloudDriveSettings();
+    if (!current(requestVersion, session)) return;
+    if (result.source === "database" && result.values && Number.isInteger(result.revision)) accept(result);
+    else if (result.source === "legacy" && result.migrationRequired === true && result.networkAccess === false
+      && result.reason === "multi_connection_required" && result.settingsUrl === "/api/settings/cloud-connections") {
+      form.caCertificatePem = ""; multiMode.value = true;
+    } else error.value = text.value.failed;
+  }
+  catch (cause) { if (current(requestVersion, session) && !isSessionChangedError(cause)) error.value = text.value.failed; }
   finally { if (current(requestVersion, session)) busy.value = false; }
 }
 async function save() {
@@ -36,19 +47,19 @@ async function save() {
   const revision = snapshot.value.revision;
   busy.value = true; error.value = "";
   try {
-    await ElMessageBox.confirm(text.confirm, text.confirmTitle, { type: "warning", confirmButtonText: text.save, cancelButtonText: text.cancel });
+    await ElMessageBox.confirm(text.value.confirm, text.value.confirmTitle, { type: "warning", confirmButtonText: text.value.save, cancelButtonText: text.value.cancel });
     if (!current(requestVersion, session)) return;
     const result = await saveCloudDriveSettings({ ...form }, revision);
-    if (current(requestVersion, session)) { accept(result); ElMessage.success(text.saved); }
+    if (current(requestVersion, session)) { accept(result); ElMessage.success(text.value.saved); }
   } catch (cause) {
     if (current(requestVersion, session) && cause !== "cancel" && cause !== "close" && !isSessionChangedError(cause)) {
-      error.value = cause instanceof Error ? cause.message : text.failed;
+      error.value = cause instanceof Error ? cause.message : text.value.failed;
       snapshot.value = null;
     }
   } finally { if (current(requestVersion, session)) busy.value = false; }
 }
 watch(() => [allowed.value, auth.currentUser?.id], () => {
-  version++; busy.value = false; snapshot.value = null; form.caCertificatePem = "";
+  version++; busy.value = false; snapshot.value = null; multiMode.value = false; form.caCertificatePem = "";
   if (allowed.value) void load();
 });
 onMounted(load);
@@ -61,6 +72,8 @@ onBeforeUnmount(() => { active = false; version++; form.caCertificatePem = ""; }
     <el-alert v-if="!allowed" :title="text.permission" type="warning" :closable="false" />
     <template v-else>
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+      <CloudConnectionManager v-if="multiMode" />
+      <template v-else>
       <el-alert v-if="snapshot?.changeBlocked" :title="text.blocked" type="warning" :closable="false" show-icon />
       <el-form label-position="top" :disabled="busy || !snapshot || snapshot.changeBlocked" @submit.prevent="save">
         <div class="cloud-settings-grid">
@@ -85,6 +98,7 @@ onBeforeUnmount(() => { active = false; version++; form.caCertificatePem = ""; }
         <el-button type="primary" :icon="Check" :loading="busy" :disabled="busy || !snapshot || snapshot.changeBlocked" @click="save">{{ text.save }}</el-button>
         <el-button :icon="Refresh" :disabled="busy" @click="load">{{ text.refresh }}</el-button>
       </div>
+      </template>
     </template>
   </div>
 </template>
@@ -100,7 +114,7 @@ onBeforeUnmount(() => { active = false; version++; form.caCertificatePem = ""; }
 .cloud-settings-switches { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .cloud-settings-switches :deep(.el-checkbox) { margin: 0; max-width: 100%; height: auto; min-height: 32px; }
 .cloud-settings-switches :deep(.el-checkbox__label) { white-space: normal; }
-.cloud-settings-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: var(--el-text-color-secondary); overflow-wrap: anywhere; min-width: 0; }
+.cloud-settings-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--el-text-color-secondary); overflow-wrap: anywhere; min-width: 0; }
 .cloud-settings-meta span { min-width: 0; }
 .cloud-settings-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 .cloud-settings-actions :deep(.el-button + .el-button) { margin-left: 0; }

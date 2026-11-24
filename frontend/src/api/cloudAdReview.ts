@@ -1,18 +1,20 @@
 import { apiClient } from "./client";
 import { inventoryRequestId, InventoryRequestError } from "./cloudInventory";
 import { isSessionChangedError } from "../utils/sessionGeneration";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
+import type { CloudTaskBinding } from "../utils/cloudTaskBinding";
+import { cloudHistoryQuery, validateCloudHistorySources, type CloudHistoryFilter } from "../utils/cloudHistorySource";
 
 export type AdDecision = "keep" | "review" | "suggest_quarantine" | "suggest_delete";
 export type AdReviewInput = { requestId: string; jobId: string; expectedRevision: number;
   items: { entryId: number; decision: AdDecision; reason: string }[]; confirmLocalOnly: true };
 export type AdReviewItem = AdReviewInput["items"][number] & { name: string; path: string; size: number;
   remoteId: string | null; generation: number; protection: string | null; evidence: string[]; evidenceLevel: "none" | "low" | "medium" };
-export type AdReview = { id: string; requestId: string; jobId: string; inventoryRevision: number; pathEpoch: number;
+export type AdReview = CloudTaskBinding & { id: string; requestId: string; jobId: string; inventoryRevision: number; pathEpoch: number;
   ruleVersion: string; items: AdReviewItem[]; createdAt: number; snapshotHash: string; sourceCurrent: boolean;
   staleReason: string | null; networkAccess: false; contentReadBytes: 0; writeAvailable: false; executionAuthorized: false };
-export type AdReviewHistory = { items: { id: string; requestId: string; jobId: string; createdAt: number;
-  itemCount: number; sourceCurrent: boolean }[]; page: number; pageSize: number; total: number; networkAccess: false; writeAvailable: false };
+export type AdReviewHistory = { items: (CloudTaskBinding & { id: string; requestId: string; jobId: string; createdAt: number;
+  itemCount: number; sourceCurrent: boolean })[]; page: number; pageSize: number; total: number; networkAccess: false; writeAvailable: false };
 
 function validRecord(value: AdReview, requestId: string) {
   if (!value || !inventoryRequestId(value.id) || value.requestId !== requestId || !inventoryRequestId(value.jobId)
@@ -35,10 +37,10 @@ async function safeRequest<T>(action: () => Promise<T>): Promise<T> {
     if (isSessionChangedError(error)) throw error;
     const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response;
     const detail = response?.data?.detail;
-    const known = messages.cloudInventory.adReview.errors;
+    const known = getInterfaceMessages().cloudInventory.adReview.errors;
     const code = response?.status === 404 ? "not_found" : typeof detail === "string"
       ? Object.keys(known).find(key => detail.includes(`：${key}；`)) : undefined;
-    throw new InventoryRequestError(code ? known[code as keyof typeof known] : messages.cloudInventory.adReview.failed, error);
+    throw new InventoryRequestError(code ? known[code as keyof typeof known] : getInterfaceMessages().cloudInventory.adReview.failed, error);
   }
 }
 
@@ -48,15 +50,16 @@ export async function saveAdReview(input: AdReviewInput): Promise<AdReview> {
 export async function findAdReview(requestId: string): Promise<AdReview> {
   return safeRequest(async () => validRecord((await apiClient.get<AdReview>(`/cloud-drive/ad-review-requests/${encodeURIComponent(requestId)}`)).data, requestId));
 }
-export async function listAdReviews(page = 1): Promise<AdReviewHistory> {
+export async function listAdReviews(page = 1, filter: CloudHistoryFilter = {}): Promise<AdReviewHistory> {
   return safeRequest(async () => {
-    const value = (await apiClient.get<AdReviewHistory>(`/cloud-drive/ad-reviews?page=${page}&pageSize=20`)).data;
+    const value = (await apiClient.get<AdReviewHistory>(`/cloud-drive/ad-reviews?page=${page}&pageSize=20${cloudHistoryQuery(filter)}`)).data;
     if (!value || value.networkAccess !== false || value.writeAvailable !== false || value.page !== page || value.pageSize !== 20
         || !Number.isSafeInteger(value.total) || value.total < 0 || value.total > 200 || !Array.isArray(value.items) || value.items.length > 20
         || new Set(value.items.map(item => item.id)).size !== value.items.length || value.items.some(item => !inventoryRequestId(item.id)
           || !inventoryRequestId(item.requestId) || !inventoryRequestId(item.jobId) || !Number.isInteger(item.itemCount)
           || typeof item.sourceCurrent !== "boolean" || !Number.isFinite(item.createdAt) || item.createdAt < 0 || item.createdAt > 253402300799
           || item.itemCount < 1 || item.itemCount > 100)) throw new Error("invalid_review_history");
+    validateCloudHistorySources(value.items, filter);
     return value;
   });
 }

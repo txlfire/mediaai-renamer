@@ -2,7 +2,8 @@ import { defineStore } from "pinia";
 import { acceptBackgroundJob, fetchBackgroundJob, fetchRecentBackgroundJobs, type BackgroundJob, type BackgroundJobKind, type BackgroundJobPayload } from "../api/client";
 import { useAuthStore } from "./auth";
 import { getSessionGeneration, sessionRequest, SessionChangedError } from "../utils/sessionGeneration";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
+import { formatMessage } from "../locales/zh-CN";
 
 const storageKey = "mediaai-background-requests";
 type PendingRequest = { owner: number; key: string; requestId: string; kind: BackgroundJobKind };
@@ -16,7 +17,7 @@ function savedRequests(): PendingRequest[] {
     if (!Array.isArray(value)) return [];
     return value.filter((item): item is PendingRequest => Boolean(item && Number.isSafeInteger(item.owner)
       && typeof item.key === "string" && typeof item.requestId === "string" && /^[\da-f-]{36}$/i.test(item.requestId)
-      && ["rename_dry_run", "rollback_dry_run", "metadata_batch", "ai_batch"].includes(item.kind)));
+      && ["rename_dry_run", "rollback_dry_run", "metadata_batch", "ai_batch", "tmdb_batch", "tmdb_ai_batch", "preview_generation"].includes(item.kind)));
   } catch {
     return [];
   }
@@ -27,7 +28,7 @@ function saveRequests(value: PendingRequest[]) {
     if (!globalThis.sessionStorage) throw new Error();
     globalThis.sessionStorage.setItem(storageKey, JSON.stringify(value));
   } catch {
-    throw new Error(messages.backgroundJobs.storageUnavailable);
+    throw new Error(getInterfaceMessages().backgroundJobs.storageUnavailable);
   }
 }
 
@@ -47,9 +48,10 @@ function requestId() {
 }
 
 export const useBackgroundJobsStore = defineStore("backgroundJobs", {
-  state: () => ({ jobs: {} as Record<string, BackgroundJob>, activeRequestId: "", resultRecord: null as BackgroundJob | null, errorMessage: "" }),
+  state: () => ({ jobs: {} as Record<string, BackgroundJob>, activeRequestId: "", submittedRequestId: "", resultRecord: null as BackgroundJob | null, errorMessage: "" }),
   getters: {
     activeJob: state => state.jobs[state.activeRequestId] ?? null,
+    submittedJob: state => state.jobs[state.submittedRequestId] ?? null,
     recent: state => Object.values(state.jobs).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 20),
   },
   actions: {
@@ -59,7 +61,9 @@ export const useBackgroundJobsStore = defineStore("backgroundJobs", {
       this.jobs = Object.fromEntries(rows.map(row => [row.request_id, row]));
       if (!this.activeRequestId) {
         const owner = useAuthStore().currentUser?.id;
-        this.activeRequestId = savedRequests().filter(item => item.owner === owner).slice(-1)[0]?.requestId || rows[0]?.request_id || "";
+        this.activeRequestId = savedRequests().filter(item => item.owner === owner).slice(-1)[0]?.requestId
+          || rows.find(row => row.status === "queued" || row.status === "running")?.request_id
+          || rows[0]?.request_id || "";
       }
     },
 
@@ -118,41 +122,51 @@ export const useBackgroundJobsStore = defineStore("backgroundJobs", {
     async run<T>(kind: BackgroundJobKind, payload: BackgroundJobPayload): Promise<T> {
       const generation = getSessionGeneration();
       const owner = useAuthStore().currentUser?.id;
-      if (!owner) throw new Error(messages.backgroundJobs.noPermission);
+      if (!owner) throw new Error(getInterfaceMessages().backgroundJobs.noPermission);
       const key = requestKey(kind, payload);
       const previous = savedRequests().find(item => item.owner === owner && item.key === key);
       const id = previous?.requestId || requestId();
+      const priorActiveRequestId = this.activeRequestId;
       this.activeRequestId = id;
+      this.submittedRequestId = id;
       this.resultRecord = null;
       this.errorMessage = "";
       if (!previous) {
-        if (savedRequests().length >= 50) throw new Error(messages.backgroundJobs.pendingLimit);
+        if (savedRequests().length >= 50) throw new Error(getInterfaceMessages().backgroundJobs.pendingLimit);
         saveRequests([...savedRequests(), { owner, key, requestId: id, kind }]);
         try {
           const accepted = await sessionRequest(acceptBackgroundJob(kind, id, payload), generation);
           this.jobs[id] = accepted;
         } catch (error) {
           if (generation !== getSessionGeneration()) throw new SessionChangedError();
-          const status = (error as { response?: { status?: number } }).response?.status;
+          const response = (error as { response?: { status?: number; data?: { code?: string; limit?: number } } }).response;
+          const status = response?.status;
           if (status && [400, 401, 403, 409, 422].includes(status)) {
             saveRequests(savedRequests().filter(item => item.requestId !== id || item.owner !== owner));
           }
-          this.errorMessage = `${messages.backgroundJobs.queryBeforeRetry} ${id}`;
+          const detail = response?.data;
+          if (status === 409 && detail?.code === "background_job_queue_full" && typeof detail.limit === "number" && Number.isSafeInteger(detail.limit)) {
+            if (this.activeRequestId === id) this.activeRequestId = priorActiveRequestId;
+            if (this.submittedRequestId === id) this.submittedRequestId = "";
+            this.errorMessage = formatMessage(getInterfaceMessages().backgroundJobs.queueFull, { count: detail.limit });
+            throw new Error(this.errorMessage);
+          }
+          this.errorMessage = `${getInterfaceMessages().backgroundJobs.queryBeforeRetry} ${id}`;
           throw error;
         }
       }
       try {
         const current = await this.observe(id);
         if (!["completed", "partial_completed"].includes(current.status)) {
-          throw new Error(current.error_message || messages.backgroundJobs.queryBeforeRetry);
+          throw new Error(current.error_message || getInterfaceMessages().backgroundJobs.queryBeforeRetry);
         }
-        if (!current.result_available) throw new Error(messages.backgroundJobs.resultCleared);
+        if (!current.result_available) throw new Error(getInterfaceMessages().backgroundJobs.resultCleared);
         const result = await this.refresh(id, true);
         if (!current.unknown_count) this.acknowledge(id);
         return result.result as T;
       } catch (error) {
         if (generation !== getSessionGeneration()) throw new SessionChangedError();
-        this.errorMessage = error instanceof Error ? error.message : messages.backgroundJobs.queryBeforeRetry;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().backgroundJobs.queryBeforeRetry;
         throw error;
       }
     },

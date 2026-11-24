@@ -28,6 +28,13 @@ describe("local inventory API contracts", () => {
     await expect(startInventoryJob("test-id", 0, "a".repeat(64), "synthetic-token")).rejects.toThrow(/HTTPS/);
     expect(http.post).not.toHaveBeenCalled();
   });
+  it("只保留明确多连接原因码，不按503或任意原文切换模式", async () => {
+    http.get.mockRejectedValueOnce({ response: { status: 409, data: { detail: { reasonCode: "multi_connection_required", endpoint: "unsafe" } } } });
+    const failure = await fetchInventoryPolicy().catch(error => error);
+    expect(failure.reasonCode).toBe("multi_connection_required"); expect(failure.message).not.toContain("unsafe"); expect(failure.endpoint).toBeUndefined();
+    http.get.mockRejectedValueOnce({ response: { status: 503, data: { detail: "multi_connection_required" } } });
+    await expect(fetchInventoryPolicy()).rejects.toMatchObject({ reasonCode: null });
+  });
   it("sends a secret once with a bounded timeout and clears the local request object", async () => {
     vi.stubGlobal("location", { protocol: "https:" });
     let sent: Record<string, unknown> = {};
@@ -55,6 +62,7 @@ describe("local inventory API contracts", () => {
     await expect(startInventoryJob("test-id", 0, "a".repeat(64), "synthetic-token")).rejects.toBe(changed);
   });
   it("uses the shared authenticated client for local query and analysis", async () => {
+    http.get.mockResolvedValueOnce({ data: { items: [], page: 2, pageSize: 20, total: 0, networkAccess: false } });
     await fetchInventoryJobs(2);
     expect(http.get).toHaveBeenLastCalledWith("/cloud-drive/inventory-jobs?page=2&pageSize=20");
     await fetchInventorySummary("test-id");
@@ -70,6 +78,8 @@ describe("local inventory API contracts", () => {
     expect(http.post).toHaveBeenLastCalledWith("/cloud-drive/inventory-jobs/test-id/clear-cache", { confirmClear: true, expectedRevision: 9 });
     await fetchInventoryDirectories("test-id", 50);
     expect(http.get).toHaveBeenLastCalledWith("/cloud-drive/inventory-jobs/test-id/directories?afterId=50&limit=50");
+    await fetchInventoryDirectories("test-id", 0, 3, 10);
+    expect(http.get).toHaveBeenLastCalledWith("/cloud-drive/inventory-jobs/test-id/directories?page=3&limit=10");
   });
   it("exposes cloud audit types in the existing settings filter dictionaries", () => {
     expect(messages.settings.audit.eventTypeLabels["cloud_drive.budget"]).toBe("CD2只读预算");

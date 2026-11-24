@@ -1,10 +1,13 @@
 # 文档索引
 
-类型：文档导航。更新日期：2026-11-22；当前稳定版：`v1.4.1`，数据库 schema 仍为 `55`。制品与校验入口见[发布说明](releases/v1.4.1.md)。
+类型：文档导航。数据库主 schema 为 `55`。`v1.5.0` 制品、变更与升级边界见[发布说明](releases/v1.5.0.md)。
 
-常用入口：[v1.4.1 说明](releases/v1.4.1.md)、[CD2配置](manuals/cd2-settings.md)、[盘点](manuals/cd2-inventory.md)、[目录改名](manuals/cd2-directory-rename.md)、[广告复核](manuals/cd2-ad-review.md)、[隔离恢复](manuals/cd2-quarantine.md)。v1.4.1 不改变 CD2、权限或云执行开关，不自动更新 fnOS。
+常用入口：[v1.5.0 说明](releases/v1.5.0.md)、[CD2 配置](manuals/cd2-settings.md)、[盘点](manuals/cd2-inventory.md)、[目录改名](manuals/cd2-directory-rename.md)、[广告复核](manuals/cd2-ad-review.md)、[隔离恢复](manuals/cd2-quarantine.md)。云执行默认关闭，发布不自动更新 fnOS。
 
 ## 使用与维护
+
+- [界面语言](manuals/interface-language.md)：当前开发版简体中文／英语切换、偏好保存与数据边界。
+- [服务端口](manuals/service-ports.md)：开发版从系统设置修改本地端口，手动重启生效；部署版只读。
 
 2026-10-23运维更新：fnOS已切换固定v1.4.0并验证一次容器重启，见[部署记录](work-logs/progress-2026-10-23-fnos-stable.md)；证书有效期检查及[人工维护规程](deployment/mediaai-certificate-maintenance.md)已补齐，不代表NAS整机开机或自动续期通过。下方较早NAS未升级表述为历史。
 
@@ -17,9 +20,16 @@
 | 为未发布 CD2 接入及升级准备安全通道、受限令牌与匹配备份 | [CD2 接入与升级准备](deployment/cd2-readonly-preflight.md) |
 | 准备真实广告线索人工标签及统计口径（尚无真实误判率） | [C4 广告线索标注验证](development/cloud-drive/c4-ad-label-validation.md) |
 | 查看后台任务接口、状态、容量和清理 | [后台任务接口及维护](development/background-jobs/api-and-maintenance.md) |
-| 查看本轮制品、校验值与发布状态 | [v1.4.1 发布说明](releases/v1.4.1.md) |
+| 查看本轮制品、校验值与发布状态 | [v1.5.0 发布说明](releases/v1.5.0.md) |
 
 ## 开发与设计
+
+- [当前后续任务队列](development/project-status.md#当前后续任务)：多连接收尾、全局搜索和页面方案准备的顺序、依赖及未验边界。
+- [全局搜索手册](manuals/global-search.md)、[实现与验收](development/global-search/implementation.md)、[开发计划](development/global-search/implementation-plan.md)：开发版五类本地搜索已实现，650项前端与7项后端定向、真实接口隔离浏览器和20万合成行验证；无云扫描，不是已发布v1.4.0能力。
+- [整体页面优化准备](development/ui-refresh/overall-ui-preparation.md)、[视觉语言v2评估](development/ui-refresh/visual-language-v2-assessment.md)、[修订目标](design/workbench-visual-v2.md)及[分批实施](development/ui-refresh/ui-v2-implementation-plan.md)：公共视觉基线已前置，后续业务按新标准开发；逐页细化仍在进行。
+- [10月29日搜索与服务记录](work-logs/progress-2026-10-29-global-search.md)：当前服务5173/9070/5443，原8970处于Windows保留区间；[MC6离线副本演练](development/cloud-drive/mc6-offline-rehearsal.md)仅面向独立副本，不是运行库迁移。
+- 2026-10-27[恢复开发记录](work-logs/progress-2026-10-27-resume-ui-mc5.md)：351文件后端完整1538项通过；[MC5设置接入](development/cloud-drive/mc5-web-implementation.md)539项单测、类型/构建及8视口480合成浏览器场景通过，任务整链仍待接。下一条“暂停”保留10月26日历史，不是当前状态；未迁移运行库或发布。
+- CD2多连接后续（开发按用户要求暂停，本地服务保留；原生最小摘要/停止及只读未知关系修复32项定向通过，351文件全量因暂停中止、尚未完成。前端146文件冻结、60文件507项及类型/构建通过；MC5只有API与草稿基础，页面尚未交付）：[需求与范围](development/cloud-drive/multi-connection-requirements.md)、[设计评估](development/cloud-drive/multi-connection-design-review.md)、[详细契约](development/cloud-drive/multi-connection-contract.md)、[演进与验收计划](development/cloud-drive/multi-connection-evolution-plan.md)、[本日记录](work-logs/progress-2026-10-26-cd2-multi-connection.md)、[边界决策](adr/0001-cd2-fixed-connection-context.md)及[领域术语](../CONTEXT.md)。当前用户操作仍按单配置手册，不根据默认选择改写历史任务来源。
 
 - [开发指南](development/development-guide.md)：环境、规范、隔离验证及提交流程。
 - [常用命令](development/common-tasks.md)：规范启停、测试、构建和发布命令入口。

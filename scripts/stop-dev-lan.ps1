@@ -1,6 +1,7 @@
 param(
     [int]$FrontendPort = 5173,
-    [int]$BackendPort = 8970
+    [int]$BackendPort = 8970,
+    [switch]$OwnedOnly
 )
 
 # Purpose: stop FastAPI backend and Vite frontend development services.
@@ -46,8 +47,12 @@ function Stop-ProjectDevProcesses {
         $WrittenAt = (Get-Item -LiteralPath $PidPath).LastWriteTimeUtc
         $CreatedAt = $Candidate.CreationDate.ToUniversalTime()
         if ($CreatedAt -gt $WrittenAt -or ($WrittenAt - $CreatedAt).TotalSeconds -gt 15) { continue }
-        if ($Candidate.CommandLine -match "vite[\\/]bin[\\/]vite\.js" -and
-            $Candidate.CommandLine -match "frontend[\\/]vite\.config\.ts") {
+        $IsFrontend = $Name -eq "frontend.pid" -and $Candidate.Name -eq "node.exe" -and
+            $Candidate.CommandLine -match "vite[\\/]bin[\\/]vite\.js" -and
+            $Candidate.CommandLine -match "frontend[\\/]vite\.config\.ts"
+        $IsBackend = $Name -eq "backend.pid" -and $Candidate.Name -eq "python.exe" -and
+            $Candidate.CommandLine -match $EscapedRoot -and $Candidate.CommandLine -match "uvicorn app\.main:app"
+        if ($IsFrontend -or $IsBackend) {
             $Selected[[int]$Candidate.ProcessId] = 0
         }
     }
@@ -79,6 +84,7 @@ Remove-PidFile -Path (Join-Path $LogDir "backend.pid")
 
 # Wait briefly for port release before the final listening-state check.
 Start-Sleep -Seconds 1
+if ($OwnedOnly) { return }
 $Listening = Get-NetTCPConnection -LocalPort $FrontendPort,$BackendPort -State Listen -ErrorAction SilentlyContinue
 if ($Listening) {
     Write-Warning "Some ports are still listening. Unknown owners were not stopped; inspect ownership or choose different ports:"

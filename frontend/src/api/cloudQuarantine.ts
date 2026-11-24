@@ -1,24 +1,26 @@
 import { apiClient } from "./client";
 import { inventoryRequestId, InventoryRequestError } from "./cloudInventory";
 import { isSessionChangedError } from "../utils/sessionGeneration";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
+import type { CloudTaskBinding } from "../utils/cloudTaskBinding";
+import { cloudHistoryQuery, validateCloudHistorySources, type CloudHistoryFilter } from "../utils/cloudHistorySource";
 
-const text = messages.cloudInventory.quarantine;
+const text = getInterfaceMessages().cloudInventory.quarantine;
 export type QuarantineItem = { entryId:number; generation:number; remoteId:string; sourceName:string; sourcePath:string; targetPath:string; size:number; reason:string; evidence:string[] };
-export type QuarantinePlan = { id:string; requestId:string; reviewId:string; inventoryJobId:string; kind:"forward"|"reverse";
+export type QuarantinePlan = CloudTaskBinding & { id:string; requestId:string; reviewId:string; inventoryJobId:string; kind:"forward"|"reverse";
   revision:number; status:"prepared"|"cancelled"; valid:boolean; invalidReason:string|null; policyHash:string; snapshotHash:string;
   parentPath:string; targetName:string; items:QuarantineItem[]; createdAt:number; expiresAt:number; executionRequestId:string|null;
   networkAccess:false; writeAvailable:false };
 export type QuarantinePolicy = { planAvailable:boolean; reason:string|null; policyHash:string; executionEnabled:boolean; executionImplemented:boolean;
   executionAvailable:boolean; executionReason:string|null; canExecute:boolean; targetName:string; controlledMode:true; atomicIdentityGuaranteed:false;
   limits:{items:number;seconds:number;executionSeconds:number;baseRpc:number;rpcPerItem:number;bytes:number;observeSeconds:number}; networkAccess:false;writeAvailable:false };
-export type QuarantineRun = { id:string; requestId:string; planId:string; kind:"move"|"observe"; originalRunId:string|null; latestObservationRequestId:string|null;
+export type QuarantineRun = CloudTaskBinding & { id:string; requestId:string; planId:string; kind:"move"|"observe"; originalRunId:string|null; latestObservationRequestId:string|null;
   status:"accepted"|"running"|"review"|"cancelled"|"completed"; reason:string|null; revision:number; cancelRequested:boolean;
   globalSlotHeld:boolean; workerSlotHeld:boolean; pollingRecommended:boolean; usedRpc:number;maxRpc:number;receivedBytes:number;maxBytes:number;
   createdAt:number;expiresAt:number;logId:number;logAvailable:boolean;committedEpoch:number|null;
   positions:{ordinal:number;position:string}[];items:{ordinal:number;state:string;reason:string|null}[];
   events:{ordinal:number;method:string;phase:string;responseCode:string|null;receivedBytes:number}[];networkAccess:false;replayed:false };
-export type QuarantineHistory = { items:{id:string;requestId:string;kind:"forward"|"reverse";status:string;itemCount:number;createdAt:number;expiresAt:number}[];page:number;pageSize:number;total:number;networkAccess:false;writeAvailable:false };
+export type QuarantineHistory = { items:(CloudTaskBinding & {id:string;requestId:string;kind:"forward"|"reverse";status:string;itemCount:number;createdAt:number;expiresAt:number})[];page:number;pageSize:number;total:number;networkAccess:false;writeAvailable:false };
 export type QuarantineStart = { requestId:string;expectedRevision:number;policyHash:string;confirmMaintenance:boolean;confirmGlobalFence:boolean;apiToken:string };
 export type QuarantineObserve = { requestId:string;expectedRevision:number;confirmMaintenance:boolean;confirmRemoteIdle:boolean;apiToken:string };
 export type QuarantineBudget = { state:"ready"|"paused";pauseReason:string|null;revision:number;cooldownUntil:number };
@@ -78,6 +80,11 @@ function validRun(v:QuarantineRun, requestId?:string) {
 }
 export const prepareQuarantinePlan = (input:{requestId:string;reviewId:string;entryIds:number[];targetEntryId:number}) => safe(async()=>validPlan((await apiClient.post<QuarantinePlan>("/cloud-drive/quarantine-plans",input)).data,input.requestId));
 export const findQuarantinePlan = (requestId:string) => safe(async()=>validPlan((await apiClient.get<QuarantinePlan>(`/cloud-drive/quarantine-plan-requests/${encodeURIComponent(requestId)}`)).data,requestId));
+export const fetchQuarantinePlan = (id:string) => safe(async()=>{
+  const value=validPlan((await apiClient.get<QuarantinePlan>(endpoint(id))).data);
+  if(value.id!==id)throw new Error("quarantine_plan_id_mismatch");
+  return value;
+});
 export const cancelQuarantinePlan = (id:string,expectedRevision:number) => safe(async()=>validPlan((await apiClient.post<QuarantinePlan>(endpoint(id)+"/cancel",{expectedRevision})).data));
 export const findQuarantineRun = (requestId:string) => safe(async()=>validRun((await apiClient.get<QuarantineRun>(`/cloud-drive/quarantine-run-requests/${encodeURIComponent(requestId)}`)).data,requestId));
 export const fetchQuarantineRun = (id:string) => safe(async()=>validRun((await apiClient.get<QuarantineRun>(runEndpoint(id))).data));
@@ -94,8 +101,7 @@ async function tokenRequest(path:string,input:QuarantineStart|QuarantineObserve)
     return validRun((await apiClient.post<QuarantineRun>(path,body,{timeout:15000})).data,input.requestId);
   }); } finally { body.apiToken=""; input.apiToken=""; }
 }
-export const fetchQuarantinePolicy = () => safe(async()=>{
-  const v = (await apiClient.get<QuarantinePolicy>("/cloud-drive/quarantine/policy")).data;
+export function validateQuarantinePolicy(v:QuarantinePolicy):QuarantinePolicy {
   if(!v || typeof v.planAvailable!=="boolean" || typeof v.executionEnabled!=="boolean" || typeof v.executionImplemented!=="boolean"
     || typeof v.canExecute!=="boolean" || typeof v.executionAvailable!=="boolean" || v.controlledMode!==true || v.atomicIdentityGuaranteed!==false
     || v.networkAccess!==false || v.writeAvailable!==false || !string(v.targetName,240) || (v.policyHash!=="" && !hash(v.policyHash))
@@ -103,12 +109,14 @@ export const fetchQuarantinePolicy = () => safe(async()=>{
     || v.limits.baseRpc!==3 || v.limits.rpcPerItem!==9 || !integer(v.limits.bytes,1,1048576)
     || !integer(v.limits.observeSeconds,1,90)) throw new Error("invalid_quarantine_policy");
   return v;
-});
-export const fetchQuarantineHistory = (page=1) => safe(async()=>{
-  const v = (await apiClient.get<QuarantineHistory>(`/cloud-drive/quarantine-plans?page=${page}&pageSize=20`)).data;
+}
+export const fetchQuarantinePolicy = () => safe(async()=>validateQuarantinePolicy((await apiClient.get<QuarantinePolicy>("/cloud-drive/quarantine/policy")).data));
+export const fetchQuarantineHistory = (page=1,filter:CloudHistoryFilter={}) => safe(async()=>{
+  const v = (await apiClient.get<QuarantineHistory>(`/cloud-drive/quarantine-plans?page=${page}&pageSize=20${cloudHistoryQuery(filter)}`)).data;
   if(!v || v.networkAccess!==false || v.writeAvailable!==false || v.page!==page || v.pageSize!==20 || !integer(v.total,0,1000)
     || !Array.isArray(v.items) || v.items.length>20 || v.items.some(i=>!uuid(i.id) || !uuid(i.requestId) || !integer(i.itemCount,1,5)
       || !["forward","reverse"].includes(i.kind) || !date(i.createdAt))) throw new Error("invalid_quarantine_history");
+  validateCloudHistorySources(v.items,filter);
   return v;
 });
 export const fetchQuarantineTargets = (reviewId:string,entryId:number) => safe(async()=>{

@@ -173,9 +173,9 @@ def _valid(connection, settings, row, snapshot, *, ignoreExecution=False):
     return None
 
 
-def _view(connection, settings, row):
+def _view(connection, settings, row, *, forceInvalidReason=None):
     snapshot = json.loads(row["snapshot_json"])
-    reason = _valid(connection, settings, row, snapshot)
+    reason = forceInvalidReason or _valid(connection, settings, row, snapshot)
     execution = connection.execute("SELECT request_id FROM cloud_quarantine_runs WHERE plan_id=? AND kind='move'", (row["id"],)).fetchone()
     return {**snapshot, "id": row["id"], "requestId": row["request_id"], "status": row["status"],
         "executionRequestId":execution[0] if execution else None,
@@ -184,16 +184,20 @@ def _view(connection, settings, row):
         "valid": reason is None, "invalidReason": reason, "networkAccess": False, "writeAvailable": False}
 
 
-def createQuarantinePlan(settings, *, requestId, reviewId, entryIds, targetEntryId, auditContext):
-    inventoryId(requestId)
-    inventoryId(reviewId)
+def normalizeQuarantinePlanInput(entryIds, targetEntryId):
     _limit(targetEntryId, 1, 2**63 - 1)
     if (not isinstance(entryIds, list) or not 1 <= len(entryIds) <= MAX_ITEMS
             or any(type(item) is not int or not 1 <= item <= 2**63 - 1 for item in entryIds)
             or len(set(entryIds)) != len(entryIds)):
         raise ValueError("须明确选择一至五个不同文件")
+    return sorted(entryIds)
+
+
+def createQuarantinePlan(settings, *, requestId, reviewId, entryIds, targetEntryId, auditContext):
+    inventoryId(requestId)
+    inventoryId(reviewId)
     actorId = auditContext.actor.id if auditContext.actor else None
-    normalized = sorted(entryIds)
+    normalized = normalizeQuarantinePlanInput(entryIds, targetEntryId)
     requestHash = reviews._digest([reviewId, normalized, targetEntryId])
     with inventoryDb(settings, write=True) as connection:
         _permissionForPlan(connection, actorId)
@@ -202,29 +206,40 @@ def createQuarantinePlan(settings, *, requestId, reviewId, entryIds, targetEntry
             if old["actor_id"] != actorId or old["request_hash"] != requestHash:
                 raise QuarantineError("request_conflict")
             return _view(connection, settings, old)
-        requireNoDirectoryExecution(connection)
-        policy = quarantinePolicyHash(settings)
-        snapshot = _snapshot(connection, settings, reviewId, actorId, normalized, targetEntryId)
-        serialized = reviews._json(snapshot)
-        logicalBytes = len(serialized.encode())
-        count, total = connection.execute("SELECT COUNT(*),COALESCE(SUM(logical_bytes),0) FROM cloud_quarantine_plans").fetchone()
-        if logicalBytes > MAX_SNAPSHOT_BYTES or count >= MAX_PLANS or total + logicalBytes > MAX_TOTAL_BYTES:
-            raise QuarantineError("plan_capacity")
-        now = time.time()
-        if not math.isfinite(now):
-            raise QuarantineError("clock_unavailable")
         planId = str(uuid4())
-        connection.execute("INSERT INTO cloud_quarantine_plans "
-            "(id,request_id,request_hash,actor_id,review_id,job_id,inventory_revision,path_epoch,policy_hash,rule_version,"
-            "item_count,snapshot_json,snapshot_hash,logical_bytes,created_at,expires_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (planId, requestId, requestHash, actorId, reviewId,
-                snapshot["inventoryJobId"], snapshot["inventoryRevision"], snapshot["pathEpoch"], policy, RULE_VERSION,
-                len(normalized), serialized, sha256(serialized.encode()).hexdigest(), logicalBytes, now, now + PLAN_SECONDS, now))
-        record_audit_event(settings, event_type="cloud_quarantine.plan", action="prepare", result="success",
-            summary="固定本地隔离计划；未发送云请求", target_type="cloud_quarantine_plan", target_id=planId,
-            actor=auditContext.actor, ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent,
-            detail={"itemCount": len(normalized), "logicalBytes": logicalBytes, "networkAccess": False}, connection=connection)
+        insertQuarantinePlanTx(settings, connection, planId=planId, requestId=requestId, requestHash=requestHash,
+            reviewId=reviewId, entryIds=normalized, targetEntryId=targetEntryId, now=time.time(), auditContext=auditContext)
         return _view(connection, settings, _owned(connection, planId, actorId))
+
+
+def insertQuarantinePlanTx(settings, connection, *, planId, requestId, requestHash, reviewId, entryIds,
+                            targetEntryId, now, auditContext, contextId=None):
+    normalized = normalizeQuarantinePlanInput(entryIds, targetEntryId)
+    actorId = auditContext.actor.id if auditContext.actor else None
+    _permissionForPlan(connection, actorId)
+    requireNoDirectoryExecution(connection)
+    policy = quarantinePolicyHash(settings)
+    snapshot = _snapshot(connection, settings, reviewId, actorId, normalized, targetEntryId)
+    serialized = reviews._json(snapshot)
+    logicalBytes = len(serialized.encode())
+    count, total = connection.execute('SELECT COUNT(*),COALESCE(SUM(logical_bytes),0) FROM cloud_quarantine_plans').fetchone()
+    if logicalBytes > MAX_SNAPSHOT_BYTES or count >= MAX_PLANS or total + logicalBytes > MAX_TOTAL_BYTES:
+        raise QuarantineError('plan_capacity')
+    if not math.isfinite(now):
+        raise QuarantineError('clock_unavailable')
+    columns = ('id,request_id,request_hash,actor_id,review_id,job_id,inventory_revision,path_epoch,policy_hash,rule_version,'
+               'item_count,snapshot_json,snapshot_hash,logical_bytes,created_at,expires_at,updated_at')
+    values = (planId, requestId, requestHash, actorId, reviewId, snapshot['inventoryJobId'], snapshot['inventoryRevision'],
+        snapshot['pathEpoch'], policy, RULE_VERSION, len(normalized), serialized, sha256(serialized.encode()).hexdigest(),
+        logicalBytes, now, now + PLAN_SECONDS, now)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_quarantine_plans({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    record_audit_event(settings, event_type='cloud_quarantine.plan', action='prepare', result='success',
+        summary='固定本地隔离计划；未发送云请求', target_type='cloud_quarantine_plan', target_id=planId,
+        actor=auditContext.actor, ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent,
+        detail={'itemCount': len(normalized), 'logicalBytes': logicalBytes, 'networkAccess': False}, connection=connection)
 
 
 def getQuarantinePlan(settings, planId, actorId, *, byRequest=False):
@@ -251,20 +266,23 @@ def listQuarantinePlans(settings, actorId, *, page=1, pageSize=20):
 
 
 def cancelQuarantinePlan(settings, planId, *, expectedRevision, auditContext):
-    _limit(expectedRevision, 0, 2**63 - 1)
     with inventoryDb(settings, write=True) as connection:
-        actorId = auditContext.actor.id if auditContext.actor else None
-        row = _owned(connection, planId, actorId)
-        if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE plan_id=? LIMIT 1", (planId,)).fetchone():
-            raise QuarantineError("execution_accepted")
-        if row["status"] != "prepared" or row["revision"] != expectedRevision:
-            raise QuarantineError("revision_conflict")
-        connection.execute("UPDATE cloud_quarantine_plans SET status='cancelled',revision=revision+1,updated_at=? WHERE id=?",
-            (time.time(), planId))
-        record_audit_event(settings, event_type="cloud_quarantine.plan", action="cancel", result="success",
-            summary="取消本地隔离计划；未发送云请求", target_type="cloud_quarantine_plan", target_id=planId,
-            actor=auditContext.actor, ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent, connection=connection)
-        return _view(connection, settings, _owned(connection, planId, actorId))
+        return cancelQuarantinePlanTx(settings, connection, planId, expectedRevision=expectedRevision, auditContext=auditContext)
+
+
+def cancelQuarantinePlanTx(settings, connection, planId, *, expectedRevision, auditContext):
+    _limit(expectedRevision, 0, 2**63 - 1)
+    actorId = auditContext.actor.id if auditContext.actor else None
+    row = _owned(connection, planId, actorId)
+    if connection.execute('SELECT 1 FROM cloud_quarantine_runs WHERE plan_id=? LIMIT 1', (planId,)).fetchone():
+        raise QuarantineError('execution_accepted')
+    if row['status'] != 'prepared' or row['revision'] != expectedRevision:
+        raise QuarantineError('revision_conflict')
+    connection.execute("UPDATE cloud_quarantine_plans SET status='cancelled',revision=revision+1,updated_at=? WHERE id=?", (time.time(), planId))
+    record_audit_event(settings, event_type='cloud_quarantine.plan', action='cancel', result='success',
+        summary='取消本地隔离计划；未发送云请求', target_type='cloud_quarantine_plan', target_id=planId,
+        actor=auditContext.actor, ip_address=auditContext.ipAddress, user_agent=auditContext.userAgent, connection=connection)
+    return _view(connection, settings, _owned(connection, planId, actorId))
 
 
 def quarantinePlanPolicy(settings, actorId):
@@ -293,26 +311,30 @@ def quarantinePlanPolicy(settings, actorId):
 
 
 def quarantineTargets(settings, reviewId, entryId, actorId):
+    with inventoryDb(settings) as connection:
+        connection.execute('BEGIN')
+        return quarantineTargetsTx(settings, connection, reviewId, entryId, actorId)
+
+
+def quarantineTargetsTx(settings, connection, reviewId, entryId, actorId):
     inventoryId(reviewId)
     _limit(entryId,1,2**63-1)
-    with inventoryDb(settings) as connection:
-        connection.execute("BEGIN")
-        _permissionForPlan(connection,actorId)
-        try:
-            review = reviews._owned(connection,reviewId,actorId)
-        except CloudInventoryError:
-            raise QuarantineError("not_found") from None
-        reason = reviews._currentReason(connection,settings,review)
-        if reason:
-            raise QuarantineError(reason)
-        source = _entry(connection,review["job_id"],entryId)
-        targetRows = connection.execute("SELECT id,name FROM cloud_drive_inventory_entries INDEXED BY idx_cloud_quarantine_target "
-            "WHERE job_id=? AND directory_id=? AND generation=? AND name=? AND is_directory=1 LIMIT 2",
-            (review["job_id"],source["directory_id"],source["generation"],settings.cloudDrive.quarantineFolderName)).fetchall()
-        if len(targetRows)>1:
-            raise QuarantineError("invalid_quarantine_target")
-        values = []
-        for target in targetRows:
-            _snapshot(connection,settings,reviewId,actorId,[entryId],target["id"])
-            values.append({"id":target["id"],"name":target["name"]})
-        return {"items":values,"reason":None if values else "quarantine_target_missing","networkAccess":False}
+    _permissionForPlan(connection, actorId)
+    try:
+        review = reviews._owned(connection, reviewId, actorId)
+    except CloudInventoryError:
+        raise QuarantineError('not_found') from None
+    reason = reviews._currentReason(connection, settings, review)
+    if reason:
+        raise QuarantineError(reason)
+    source = _entry(connection, review['job_id'], entryId)
+    targetRows = connection.execute('SELECT id,name FROM cloud_drive_inventory_entries INDEXED BY idx_cloud_quarantine_target '
+        'WHERE job_id=? AND directory_id=? AND generation=? AND name=? AND is_directory=1 LIMIT 2',
+        (review['job_id'], source['directory_id'], source['generation'], settings.cloudDrive.quarantineFolderName)).fetchall()
+    if len(targetRows) > 1:
+        raise QuarantineError('invalid_quarantine_target')
+    values = []
+    for target in targetRows:
+        _snapshot(connection, settings, reviewId, actorId, [entryId], target['id'])
+        values.append({'id': target['id'], 'name': target['name']})
+    return {'items': values, 'reason': None if values else 'quarantine_target_missing', 'networkAccess': False}

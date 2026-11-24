@@ -4,6 +4,7 @@ import type { DirectoryPlanHistoryItem } from "../api/cloudDirectory";
 import { invalidateSessionRequests } from "../utils/sessionGeneration";
 const api = vi.hoisted(() => ({ list: vi.fn() }));
 vi.mock("../api/cloudDirectory", () => ({ fetchDirectoryPlanHistory: api.list }));
+vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ hasPermission: () => true }) }));
 import DirectoryHistoryDialog from "./DirectoryHistoryDialog.vue";
 
 type Node = { children: Node[] };

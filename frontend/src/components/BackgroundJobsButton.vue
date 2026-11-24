@@ -5,8 +5,9 @@ import { ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { useBackgroundJobsStore } from "../stores/backgroundJobs";
 import { useAuthStore } from "../stores/auth";
-import { isSessionChangedError } from "../utils/sessionGeneration";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { formatMessage } from "../locales/zh-CN";
 import OperationLogDrawer from "./OperationLogDrawer.vue";
 
 const jobs = useBackgroundJobsStore();
@@ -17,17 +18,25 @@ const visible = ref(false);
 const autoRefresh = ref(true);
 const logVisible = ref(false);
 const resultView = ref("summary");
-const error = ref("");
+const error = ref<string | { fallback: "unknown" | "resultCleared" }>("");
 const timer = ref<ReturnType<typeof setTimeout> | null>(null);
-const text = messages.backgroundJobs;
+let mounted = false;
+let resumeInFlight: Promise<void> | undefined;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.backgroundJobs);
+const errorText = computed(() => {
+  const failure = error.value;
+  if (typeof failure === "string") return failure;
+  return failure.fallback === "resultCleared" ? text.value.resultCleared : messages.value.errors.unknown;
+});
 const current = computed(() => jobs.activeJob);
 const running = computed(() => jobs.recent.filter(job => ["queued", "running"].includes(job.status)).length);
 const resultText = computed(() => jobs.resultRecord?.request_id === jobs.activeRequestId
   ? JSON.stringify(resultView.value === "items" ? jobs.resultRecord.items : jobs.resultRecord.result ?? jobs.resultRecord.items, null, 2) : "");
-const kindLabel = (kind: string) => text.kinds[kind as keyof typeof text.kinds] || kind;
-const statusLabel = (status: string) => text.statuses[status as keyof typeof text.statuses] || status;
+const kindLabel = (kind: string) => text.value.kinds[kind as keyof typeof text.value.kinds] || kind;
+const statusLabel = (status: string) => text.value.statuses[status as keyof typeof text.value.statuses] || status;
 const linkedResult = computed(() => jobs.resultRecord?.request_id === jobs.activeRequestId
-  ? jobs.resultRecord.result as { operation_id?: number; plan_id?: number } | null : null);
+  ? jobs.resultRecord.result as { operation_id?: number; plan_id?: number; scan_job_id?: number; media_source_id?: number } | null : null);
 
 async function openLinkedResult() {
   const value = linkedResult.value;
@@ -35,7 +44,9 @@ async function openLinkedResult() {
   const query = current.value.kind === "rename_dry_run" && Number.isSafeInteger(value.operation_id)
     ? { operation_id: String(value.operation_id) }
     : current.value.kind === "rollback_dry_run" && Number.isSafeInteger(value.plan_id) && Number.isSafeInteger(value.operation_id)
-      ? { operation_id: String(value.operation_id), rollback_plan_id: String(value.plan_id) } : null;
+      ? { operation_id: String(value.operation_id), rollback_plan_id: String(value.plan_id) }
+      : current.value.kind === "preview_generation" && Number.isSafeInteger(value.scan_job_id) && Number.isSafeInteger(value.media_source_id)
+        ? { scan_job_id: String(value.scan_job_id), media_source_id: String(value.media_source_id) } : null;
   if (!query) return;
   visible.value = false;
   await router.push({ name: "rename-previews", query });
@@ -48,7 +59,7 @@ function clearTimer() {
 
 function schedule() {
   clearTimer();
-  if (!visible.value || !autoRefresh.value || !jobs.activeRequestId || !current.value
+  if (!mounted || !visible.value || !autoRefresh.value || !jobs.activeRequestId || !current.value
     || !["queued", "running"].includes(current.value.status)) return;
   timer.value = setTimeout(async () => {
     if (!jobs.isObserved(jobs.activeRequestId)) await refresh(false);
@@ -57,12 +68,18 @@ function schedule() {
 }
 
 async function refresh(loadRecent = true) {
+  const session = getSessionGeneration();
+  let requestId = jobs.activeRequestId;
   try {
     if (loadRecent) await jobs.loadRecent();
-    if (jobs.activeRequestId) await jobs.refresh(jobs.activeRequestId);
-    error.value = "";
+    if (!mounted || session !== getSessionGeneration()) return;
+    requestId = jobs.activeRequestId;
+    if (requestId) await jobs.refresh(requestId);
+    if (mounted && session === getSessionGeneration() && requestId === jobs.activeRequestId) error.value = "";
   } catch (failure) {
-    if (!isSessionChangedError(failure)) error.value = failure instanceof Error ? failure.message : messages.errors.unknown;
+    if (mounted && session === getSessionGeneration() && requestId === jobs.activeRequestId && !isSessionChangedError(failure)) {
+      error.value = failure instanceof Error ? failure.message : { fallback: "unknown" };
+    }
   }
 }
 
@@ -72,36 +89,64 @@ async function showResult() {
     resultView.value = (result.result as { result_truncated?: boolean } | null)?.result_truncated ? "items" : "summary";
     error.value = "";
   } catch (failure) {
-    if (!isSessionChangedError(failure)) error.value = failure instanceof Error ? failure.message : text.resultCleared;
+    if (!isSessionChangedError(failure)) error.value = failure instanceof Error ? failure.message : { fallback: "resultCleared" };
   }
 }
 
 async function acknowledge() {
   try {
-    await ElMessageBox.confirm(text.acknowledgeWarning, text.acknowledge, { type: "warning" });
+    await ElMessageBox.confirm(text.value.acknowledgeWarning, text.value.acknowledge, { type: "warning" });
     jobs.acknowledge(jobs.activeRequestId);
   } catch (failure) {
-    if (failure !== "cancel" && failure !== "close") error.value = failure instanceof Error ? failure.message : messages.errors.unknown;
+    if (failure !== "cancel" && failure !== "close") error.value = failure instanceof Error ? failure.message : { fallback: "unknown" };
     // 取消确认不改变任务及本浏览器的防重复记录。
   }
 }
 
-watch(() => [visible.value, autoRefresh.value, jobs.activeRequestId], async () => {
+function resumeObservation() {
   clearTimer();
-  if (!visible.value) logVisible.value = false;
+  return resumeInFlight ??= refresh().finally(() => {
+    resumeInFlight = undefined;
+    schedule();
+  });
+}
+
+function onVisibilityChange() {
+  if (!document.hidden && visible.value && autoRefresh.value) void resumeObservation();
+  else schedule();
+}
+
+watch(visible, async open => {
+  clearTimer();
+  if (open) await resumeObservation();
+  else logVisible.value = false;
+});
+watch(() => [autoRefresh.value, jobs.activeRequestId], async () => {
+  clearTimer();
   if (visible.value) {
     if (!jobs.isObserved(jobs.activeRequestId)) await refresh(false);
     schedule();
   }
 });
-watch(() => route.query.background_request_id, value => {
-  if (typeof value === "string" && /^[\da-f-]{36}$/i.test(value)) {
+function openRequest(value: unknown) {
+  if (typeof value === "string" && /^[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value)) {
     jobs.activeRequestId = value;
     visible.value = true;
   }
-}, { immediate: true });
-onMounted(() => { void refresh(); });
-onBeforeUnmount(clearTimer);
+}
+defineExpose({ openRequest });
+watch(() => route.query.background_request_id, openRequest, { immediate: true });
+onMounted(() => {
+  mounted = true;
+  if (visible.value) void resumeObservation();
+  else void refresh();
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibilityChange);
+});
+onBeforeUnmount(() => {
+  mounted = false;
+  clearTimer();
+  if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibilityChange);
+});
 </script>
 
 <template>
@@ -116,7 +161,7 @@ onBeforeUnmount(clearTimer);
         <el-button :icon="Refresh" :aria-label="text.refresh" :title="text.refresh" @click="refresh()" />
         <el-checkbox v-model="autoRefresh">{{ messages.operationLogs.autoRefresh }}</el-checkbox>
       </div>
-      <p v-if="error" class="background-job-error" role="alert">{{ error }}</p>
+      <p v-if="errorText" class="background-job-error" role="alert">{{ errorText }}</p>
       <p v-if="!current && jobs.activeRequestId" class="background-job-request">{{ text.requestId }}：{{ jobs.activeRequestId }}</p>
       <template v-if="current">
         <el-descriptions :column="1" border>
@@ -139,7 +184,7 @@ onBeforeUnmount(clearTimer);
           <el-radio-button value="items" :disabled="!jobs.resultRecord?.items?.length">{{ text.itemResults }}</el-radio-button>
         </el-radio-group>
         <pre v-if="resultText" class="background-job-result">{{ resultText }}</pre>
-        <el-button v-if="linkedResult?.operation_id || linkedResult?.plan_id" :icon="Document" @click="openLinkedResult">{{ text.viewLinkedResult }}</el-button>
+        <el-button v-if="linkedResult?.operation_id || linkedResult?.plan_id || linkedResult?.scan_job_id" :icon="Document" @click="openLinkedResult">{{ text.viewLinkedResult }}</el-button>
       </template>
       <el-empty v-else :description="text.empty" />
     </div>

@@ -51,7 +51,10 @@ def _worker(connection, planId, token):
     return row
 
 
-def _active(settings, connection, row, now):
+def _active(settings, connection, row, now, *, network=False):
+    from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+    if isinstance(settings, BoundNativeCloudSettings):
+        requireNativeSendTx(settings, connection, network=network)
     _permission(connection, row["actor_id"])
     _permission(connection, row["actor_id"], "cloud-directory:execute")
     if not settings.cloudDrive.directoryRenameEnabled or row["policy_hash"] != directoryPolicyHash(settings):
@@ -85,53 +88,68 @@ def approveDirectoryExecution(settings, planId, *, requestId, expectedRevision, 
     if not settings.cloudDrive.directoryRenameEnabled:
         raise CloudDirectoryError("directory_execution_disabled")
     with inventoryDb(settings, write=True) as connection:
-        plan = _owned(connection, planId, auditContext.actor.id)
-        _permission(connection, auditContext.actor.id, "cloud-directory:execute")
-        old = connection.execute("SELECT * FROM cloud_directory_executions WHERE request_id=? OR plan_id=?", (requestId, planId)).fetchone()
-        if old is not None:
-            # 批准响应不明时只能查询；不能通过重复POST取得新的工作进程令牌。
-            raise CloudDirectoryError("execution_already_accepted")
-        if plan["revision"] != expectedRevision:
-            raise CloudDirectoryError("revision_conflict")
-        items = _items(connection, planId)
-        reason = _valid(connection, settings, plan, items)
-        if reason is not None:
-            raise CloudDirectoryError(reason)
-        requireNoDirectoryExecution(connection)
-        assertFileTaskSlotFree(connection, "rename_operation", -1)
-        if connection.execute("SELECT 1 FROM scan_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1").fetchone():
-            raise CloudDirectoryError("scan_slot_busy")
-        if connection.execute("SELECT 1 FROM cloud_drive_inventory_jobs WHERE worker_token IS NOT NULL LIMIT 1").fetchone():
-            raise CloudDirectoryError("inventory_slot_busy")
-        if connection.execute("SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1").fetchone():
-            raise CloudDirectoryError("read_rpc_unresolved")
-        if connection.execute("SELECT 1 FROM cloud_directory_probe_leases LIMIT 1").fetchone():
-            raise CloudDirectoryError("file_probe_unresolved")
-        if (connection.execute("SELECT 1 FROM local_file_actions WHERE status IN ('prepared','applied','recovery_required') LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM remote_operation_items WHERE status NOT IN ('completed','failed') LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM remote_operation_locks WHERE status='active' LIMIT 1").fetchone()):
-            raise CloudDirectoryError("file_action_unresolved")
-        if connection.execute("SELECT 1 FROM background_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1").fetchone():
-            raise CloudDirectoryError("background_work_busy")
-        now = _wallNow()
-        pool = _pool(settings, connection, now)
-        if pool["state"] != "ready" or now < pool["cooldown_until"]:
-            raise CloudDirectoryError("pool_not_ready")
-        expiresAt = min(now + DURATION_SECONDS, plan["expires_at"])
-        initialWait = max(0, pool["last_started_at"] + pool["min_interval"] - now) if pool["last_started_at"] is not None else 0
-        requiredSeconds = initialWait + (3 + 7 * len(items) - 1) * pool["min_interval"] + 15
-        if requiredSeconds > expiresAt - now:
-            raise CloudDirectoryError("batch_exceeds_time_budget")
-        token = str(uuid4())
-        logId = connection.execute("SELECT COALESCE(MAX(log_id),0)+1 FROM cloud_directory_executions").fetchone()[0]
-        connection.execute("INSERT INTO cloud_directory_executions "
-            "(plan_id,request_id,actor_id,policy_hash,status,worker_token,owner_pid,owner_host,max_rpc,max_bytes,created_at,expires_at,updated_at,log_id) "
-            "VALUES(?,?,?,?,'accepted',?,?,?,?,?,?,?,?,?)", (planId, requestId, auditContext.actor.id, plan["policy_hash"], token,
-                os.getpid(), cloudDriveHostKey(), 3 + 7 * len(items), MAX_BYTES, now, expiresAt, now, logId))
-        _audit(settings, connection, _row(connection, planId), "approve", context=auditContext,
-               detail={"maintenanceConfirmed": True, "globalOldPlanFenceConfirmed": True, "automaticRescan": False,
-                       "atomicIdentityGuaranteed": False, "itemCount": len(items)})
-        return token
+        return approveDirectoryExecutionTx(settings, connection, planId, requestId=requestId,
+            expectedRevision=expectedRevision, confirmMaintenance=confirmMaintenance, confirmGlobalFence=confirmGlobalFence,
+            auditContext=auditContext)
+
+
+def approveDirectoryExecutionTx(settings, connection, planId, *, requestId, expectedRevision, confirmMaintenance,
+                                confirmGlobalFence, auditContext, contextId=None, approvedAt=None):
+    """共用原生批准事务；不提交、不启动进程、不把worker能力返回给HTTP。"""
+    inventoryId(requestId)
+    _revision(expectedRevision)
+    if confirmMaintenance is not True or confirmGlobalFence is not True or auditContext.actor is None:
+        raise ValueError('须确认维护窗口及其他客户端不修改的受控边界')
+    if not settings.cloudDrive.directoryRenameEnabled:
+        raise CloudDirectoryError('directory_execution_disabled')
+    plan = _owned(connection, planId, auditContext.actor.id)
+    _permission(connection, auditContext.actor.id, 'cloud-directory:execute')
+    if connection.execute('SELECT 1 FROM cloud_directory_executions WHERE request_id=? OR plan_id=?', (requestId, planId)).fetchone():
+        raise CloudDirectoryError('execution_already_accepted')
+    if plan['revision'] != expectedRevision:
+        raise CloudDirectoryError('revision_conflict')
+    items = _items(connection, planId)
+    reason = _valid(connection, settings, plan, items)
+    if reason is not None:
+        raise CloudDirectoryError(reason)
+    requireNoDirectoryExecution(connection)
+    assertFileTaskSlotFree(connection, 'rename_operation', -1)
+    checks = (
+        ('scan_slot_busy', "SELECT 1 FROM scan_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1"),
+        ('inventory_slot_busy', 'SELECT 1 FROM cloud_drive_inventory_jobs WHERE worker_token IS NOT NULL OR worker_pid IS NOT NULL LIMIT 1'),
+        ('read_rpc_unresolved', 'SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1'),
+        ('file_probe_unresolved', 'SELECT 1 FROM cloud_directory_probe_leases LIMIT 1'),
+        ('file_action_unresolved', "SELECT 1 FROM local_file_actions WHERE status IN ('prepared','applied','recovery_required') LIMIT 1"),
+        ('file_action_unresolved', "SELECT 1 FROM remote_operation_items WHERE status NOT IN ('completed','failed') LIMIT 1"),
+        ('file_action_unresolved', "SELECT 1 FROM remote_operation_locks WHERE status='active' LIMIT 1"),
+        ('background_work_busy', "SELECT 1 FROM background_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1"),
+    )
+    for code, query in checks:
+        if connection.execute(query).fetchone():
+            raise CloudDirectoryError(code)
+    now = _wallNow() if approvedAt is None else approvedAt
+    pool = _pool(settings, connection, now)
+    if pool['state'] != 'ready' or now < pool['cooldown_until']:
+        raise CloudDirectoryError('pool_not_ready')
+    expiresAt = min(now + DURATION_SECONDS, plan['expires_at'])
+    initialWait = max(0, pool['last_started_at'] + pool['min_interval'] - now) if pool['last_started_at'] is not None else 0
+    requiredSeconds = initialWait + (3 + 7 * len(items) - 1) * pool['min_interval'] + 15
+    if requiredSeconds > expiresAt - now:
+        raise CloudDirectoryError('batch_exceeds_time_budget')
+    token = str(uuid4())
+    logId = connection.execute('SELECT COALESCE(MAX(log_id),0)+1 FROM cloud_directory_executions').fetchone()[0]
+    columns = ('plan_id,request_id,actor_id,policy_hash,status,worker_token,owner_pid,owner_host,max_rpc,max_bytes,'
+               'created_at,expires_at,updated_at,log_id')
+    values = (planId, requestId, auditContext.actor.id, plan['policy_hash'], 'accepted', token, os.getpid(),
+              cloudDriveHostKey(), 3 + 7 * len(items), MAX_BYTES, now, expiresAt, now, logId)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_directory_executions({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    _audit(settings, connection, _row(connection, planId), 'approve', context=auditContext,
+        detail={'maintenanceConfirmed': True, 'globalOldPlanFenceConfirmed': True, 'automaticRescan': False,
+                'atomicIdentityGuaranteed': False, 'itemCount': len(items)})
+    return token
 
 
 def bindDirectoryWorker(settings, planId, token, pid):
@@ -158,7 +176,7 @@ def reserveDirectoryRpc(settings, planId, token, method, *, itemOrdinal=None, re
     with inventoryDb(settings, write=True) as connection:
         row = _worker(connection, planId, token)
         now = _wallNow()
-        _active(settings, connection, row, now)
+        _active(settings, connection, row, now, network=True)
         pool = _pool(settings, connection, now)
         if pool["state"] != "ready" or now < pool["cooldown_until"]:
             raise CloudDirectoryError("pool_not_ready")

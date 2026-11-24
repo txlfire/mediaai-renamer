@@ -12,7 +12,7 @@ import {
   type RenameOperation,
   type RenameRollbackPlan,
 } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 
 export const useRenameOperationStore = defineStore("renameOperation", {
   state: () => ({
@@ -58,7 +58,7 @@ export const useRenameOperationStore = defineStore("renameOperation", {
         this.currentRollbackPlan = null;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        if (version === this.executionVersion) this.errorMessage = error instanceof Error ? error.message : messages.errors.renameConflictFailed;
+        if (version === this.executionVersion) this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.renameConflictFailed;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.executionVersion) this.loading = false;
@@ -86,7 +86,7 @@ if (sessionGeneration === getSessionGeneration()) {
         await sessionRequest(this.pollCurrentOperation(operationId, version, onProgress), sessionGeneration);
       } catch {
         if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
-        if (version === this.executionVersion) this.errorMessage = messages.renamePreviews.operationDialog.queryBeforeRetry;
+        if (version === this.executionVersion) this.errorMessage = getInterfaceMessages().renamePreviews.operationDialog.queryBeforeRetry;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.executionVersion) this.loading = false;
@@ -129,7 +129,7 @@ if (sessionGeneration === getSessionGeneration()) {
         await sessionRequest(this.pollCurrentOperation(targetId, version, onProgress), sessionGeneration);
       } catch {
         if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
-        if (version === this.executionVersion) this.errorMessage = messages.renamePreviews.operationDialog.queryBeforeRetry;
+        if (version === this.executionVersion) this.errorMessage = getInterfaceMessages().renamePreviews.operationDialog.queryBeforeRetry;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.executionVersion) this.loading = false;
@@ -150,7 +150,7 @@ if (sessionGeneration === getSessionGeneration()) {
         if (this.currentRollbackPlan) await sessionRequest(this.pollRollbackPlan(this.currentRollbackPlan.id, version), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        if (version === this.rollbackVersion) this.rollbackErrorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        if (version === this.rollbackVersion) this.rollbackErrorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.rollbackVersion) this.rollbackLoading = false;
@@ -172,7 +172,7 @@ if (sessionGeneration === getSessionGeneration()) {
         if (version === this.rollbackVersion && this.currentOperation?.id === operationId) this.currentRollbackPlan = plan;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        if (version === this.rollbackVersion) this.rollbackErrorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        if (version === this.rollbackVersion) this.rollbackErrorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.rollbackVersion) this.rollbackLoading = false;
@@ -193,7 +193,7 @@ if (sessionGeneration === getSessionGeneration()) {
         if (version === this.rollbackVersion && this.currentRollbackPlan?.id === planId) this.currentRollbackPlan = plan;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        if (version === this.rollbackVersion) this.rollbackErrorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        if (version === this.rollbackVersion) this.rollbackErrorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.rollbackVersion) this.rollbackLoading = false;
@@ -219,7 +219,7 @@ if (sessionGeneration === getSessionGeneration()) {
         await sessionRequest(this.pollRollbackPlan(planId, version, onProgress), sessionGeneration);
       } catch {
         if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
-        if (version === this.rollbackVersion) this.rollbackErrorMessage = messages.renamePreviews.operationDialog.rollbackQueryBeforeRetry;
+        if (version === this.rollbackVersion) this.rollbackErrorMessage = getInterfaceMessages().renamePreviews.operationDialog.rollbackQueryBeforeRetry;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.rollbackVersion) this.rollbackLoading = false;
@@ -252,14 +252,14 @@ if (sessionGeneration === getSessionGeneration()) {
       try {
         const plan = await sessionRequest(fetchRenameRollbackPlan(targetId), sessionGeneration);
         if (version !== this.rollbackVersion || this.currentOperation?.id !== operationId) return;
-        if (plan.operation_id !== operationId) throw new Error(messages.errors.unknown);
+        if (plan.operation_id !== operationId) throw new Error(getInterfaceMessages().errors.unknown);
         this.currentRollbackPlan = plan;
         this.rollbackUncertain = false;
         onProgress?.(plan);
         await sessionRequest(this.pollRollbackPlan(targetId, version, onProgress), sessionGeneration);
       } catch {
         if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
-        if (version === this.rollbackVersion) this.rollbackErrorMessage = messages.renamePreviews.operationDialog.rollbackQueryBeforeRetry;
+        if (version === this.rollbackVersion) this.rollbackErrorMessage = getInterfaceMessages().renamePreviews.operationDialog.rollbackQueryBeforeRetry;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.rollbackVersion) this.rollbackLoading = false;

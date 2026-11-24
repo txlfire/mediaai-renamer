@@ -4,14 +4,22 @@ import { CircleCheck, InfoFilled, Refresh, Search } from "@element-plus/icons-vu
 import { ElMessage, ElMessageBox } from "element-plus";
 import { fetchInventoryPolicy, findInventoryRequest, inventoryRequestId, InventoryRequestError,
   prepareInventoryJob, startInventoryJob, type InventoryPolicy, type InventorySummary } from "../api/cloudInventory";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { formatFileSize } from "../utils/displayFormat";
 import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
+import CloudSourcePicker from "./CloudSourcePicker.vue";
+import { fetchBoundInventoryPolicy, prepareBoundInventory, startBoundInventory, fetchBoundInventory,
+  findBoundInventoryRequest, type BoundInventoryPolicy, type BoundInventoryReceipt, type BoundInventorySummary } from "../api/cloudBoundInventory";
+import type { CloudSourceTicket } from "../utils/cloudSourceDraft";
 
 const props = defineProps<{ visible: boolean; requestId: string; persistRequestId: (id: string) => Promise<void> }>();
 const emit = defineEmits<{ "update:visible": [value: boolean]; observed: [summary: InventorySummary] }>();
-const text = messages.cloudInventory.startFlow;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.cloudInventory.startFlow);
 const policy = ref<InventoryPolicy | null>(null);
+const multiMode = ref(false), boundPolicy = ref<BoundInventoryPolicy | null>(null);
+const sourceTicket = ref<CloudSourceTicket | null>(null);
+const sourcePicker = ref<{ isCurrent: (ticket: CloudSourceTicket) => boolean } | null>(null);
 const policyLoading = ref(false);
 const selectedPath = ref("");
 const tokenValue = ref("");
@@ -40,9 +48,10 @@ const validPath = computed(() => {
     && path.slice(1).split("/").every(part => part && part !== "." && part !== ".."));
 });
 const canSubmit = computed(() => Boolean(secure.value && policy.value?.available && !policyLoading.value && !busy.value
-  && !querying.value && !requestId.value && phase.value === "idle" && validPath.value && validToken.value && confirmed.value));
-const disabledReason = computed(() => !secure.value ? text.httpsRequired : policy.value?.reason === "trust_unavailable"
-  ? text.trustUnavailable : policy.value?.reason === "directory_execution_held" ? text.directoryBusy : !policy.value?.available ? text.disabled : "");
+  && !querying.value && !requestId.value && phase.value === "idle" && validPath.value && validToken.value && confirmed.value
+  && (!multiMode.value || boundPolicy.value && sourceTicket.value && sourcePicker.value?.isCurrent(sourceTicket.value))));
+const disabledReason = computed(() => !secure.value ? text.value.httpsRequired : policy.value?.reason === "trust_unavailable"
+  ? text.value.trustUnavailable : policy.value?.reason === "directory_execution_held" ? text.value.directoryBusy : !policy.value?.available ? text.value.disabled : "");
 
 function current(token: number) {
   if (active && flowSequence === token && getSessionGeneration() !== ownerSession) expireSession();
@@ -58,6 +67,25 @@ function purgeSensitive() {
   policyLoading.value = false;
   querying.value = false;
   if (busy.value || requestId.value) phase.value = "unknown";
+  if (multiMode.value) { boundPolicy.value = null; sourceTicket.value = null; policy.value = null; }
+}
+
+function sourceChanged(ticket: CloudSourceTicket | null) {
+  purgeSensitive(); sourceTicket.value = ticket; selectedPath.value = ticket?.source.selectedPath ?? "";
+}
+function sameSource(value: { connectionId: string; directoryProfileId: string; selectedPath: string } | null | undefined, ticket: CloudSourceTicket) {
+  return value?.connectionId === ticket.source.connectionId && value?.directoryProfileId === ticket.source.directoryProfileId
+    && value?.selectedPath === ticket.source.selectedPath;
+}
+function fixedLimits(limits: BoundInventoryPolicy["limits"] | undefined) {
+  return limits?.rpc === 4 && limits.seconds === 30 && limits.entries === 100 && limits.bytes === 1048576 && limits.directories === 1 && limits.depth === 0;
+}
+function validBoundReceipt(value: BoundInventoryReceipt, ticket: CloudSourceTicket, id: string) {
+  return inventoryRequestId(value.id) && inventoryRequestId(value.contextId) && value.id === value.jobId
+    && value.id === value.resourceId && value.requestId === id && value.resourceKind === "inventory"
+    && value.bindingState === "bound" && value.status === "queued" && value.revision === 0 && value.replayed === false
+    && value.networkAccess === false && value.executionAvailable === false && value.writeAvailable === false
+    && sameSource(value.source, ticket) && fixedLimits(value.limits);
 }
 
 function closeDialog() {
@@ -68,7 +96,7 @@ function closeDialog() {
 function sessionValid() {
   if (getSessionGeneration() === ownerSession) return true;
   purgeSensitive();
-  errorText.value = text.sessionChanged;
+  errorText.value = text.value.sessionChanged;
   return false;
 }
 
@@ -83,22 +111,41 @@ async function loadPolicy() {
   if (!props.visible || busy.value || querying.value || !sessionValid()) return;
   tokenValue.value = ""; confirmed.value = false;
   const token = ++policySequence;
+  const selected = sourceTicket.value;
+  if (multiMode.value && (!selected || !sourcePicker.value?.isCurrent(selected))) {
+    policy.value = null; boundPolicy.value = null; errorText.value = messages.value.cloudSourcePicker.missingSource; return;
+  }
   policyLoading.value = true; errorText.value = "";
   try {
-    const result = await fetchInventoryPolicy();
+    let result: InventoryPolicy;
+    if (multiMode.value && selected) {
+      const value = await fetchBoundInventoryPolicy(selected.source);
+      if (!active || !props.visible || token !== policySequence || !sessionValid() || !sourcePicker.value?.isCurrent(selected)) return;
+      if (!sameSource(value, selected) || value.networkAccess !== false || !fixedLimits(value.limits)
+        || !Object.keys(selected.revisions).every(key => value.revisions?.[key as keyof typeof selected.revisions] === selected.revisions[key as keyof typeof selected.revisions])) {
+        policy.value = null; boundPolicy.value = null; errorText.value = text.value.policyFailed; return;
+      }
+      boundPolicy.value = value;
+      result = { approvedRoot: selected.source.selectedPath, available: value.available, reason: value.reasonCode,
+        policyHash: value.policyHash, limits: value.limits, networkAccess: false, writeAvailable: false };
+    } else result = await fetchInventoryPolicy();
     if (!active || !props.visible || token !== policySequence || !sessionValid()) return;
     const limits = result.limits;
     if (result.available && (!/^[a-f0-9]{64}$/.test(result.policyHash) || !result.approvedRoot?.startsWith("/")
       || limits?.rpc !== 4 || limits?.seconds !== 30 || limits?.entries !== 100 || limits?.bytes !== 1048576
       || limits?.directories !== 1 || limits?.depth !== 0 || result.networkAccess !== false || result.writeAvailable !== false)) {
-      policy.value = null; errorText.value = text.policyFailed; return;
+      policy.value = null; errorText.value = text.value.policyFailed; return;
     }
     policy.value = result;
     selectedPath.value = result.approvedRoot;
   } catch (error) {
     if (active && props.visible && token === policySequence) {
       policy.value = null;
-      errorText.value = isSessionChangedError(error) ? text.sessionChanged : text.policyFailed;
+      boundPolicy.value = null;
+      if (error instanceof InventoryRequestError && error.reasonCode === "multi_connection_required" && sessionValid()) {
+        multiMode.value = true; errorText.value = ""; return;
+      }
+      errorText.value = isSessionChangedError(error) ? text.value.sessionChanged : text.value.policyFailed;
     }
   } finally { if (token === policySequence) policyLoading.value = false; }
 }
@@ -107,6 +154,7 @@ async function submit() {
   if (!sessionValid() || !canSubmit.value || !policy.value) return;
   const token = ++flowSequence;
   const selected = pathValue.value, hash = policy.value.policyHash;
+  const bound = multiMode.value ? sourceTicket.value : null;
   handoffToken = tokenValue.value; tokenValue.value = "";
   confirmed.value = false; errorText.value = ""; queriedJob.value = null; missingRequest.value = false;
   phase.value = "preparing";
@@ -116,6 +164,25 @@ async function submit() {
     // 编号先可靠留在URL；即使受理响应丢失，也只核对原意图，不重新生成任务。
     await props.persistRequestId(requestId.value);
     if (!current(token)) return;
+    if (bound) {
+      const prepared = await prepareBoundInventory({ ...bound.source, revisions: bound.revisions, requestId: requestId.value, policyHash: hash, confirmRead: true });
+      if (!current(token) || !sourcePicker.value?.isCurrent(bound)) return;
+      if (!validBoundReceipt(prepared, bound, requestId.value)) { phase.value = "unknown"; errorText.value = text.value.invalidPrepared; return; }
+      phase.value = "starting";
+      const pending = startBoundInventory(prepared.id, prepared.revision, hash, handoffToken);
+      handoffToken = "";
+      const accepted = await pending;
+      if (!current(token)) return;
+      if (accepted.id !== prepared.id || accepted.contextId !== prepared.contextId || accepted.requestId !== requestId.value
+        || accepted.operationState !== "accepted" || accepted.retryAutomatically !== false) throw new Error("invalid_bound_acceptance");
+      const result = await fetchBoundInventory(prepared.id);
+      if (!current(token)) return;
+      if (result.id !== prepared.id || result.contextId !== prepared.contextId || result.requestId !== requestId.value
+        || result.bindingState !== "bound" || !sameSource(result.source, bound)
+        || !["running", "completed", "cancelled", "interrupted", "paused"].includes(result.status)) throw new Error("invalid_bound_summary");
+      await releaseRequest(); if (!current(token)) return;
+      phase.value = "idle"; emit("observed", result); ElMessage.info(text.value.accepted); closeDialog(); return;
+    }
     const prepared = await prepareInventoryJob({ requestId: requestId.value, selectedPath: selected, policyHash: hash, confirmRead: true });
     if (!current(token)) return;
     if (!inventoryRequestId(prepared.id) || prepared.status !== "queued" || prepared.workerSlotHeld !== false
@@ -126,7 +193,7 @@ async function submit() {
       || prepared.approvedRoot !== selected || prepared.excludedPaths?.length !== 0 || prepared.budget?.expired
       || prepared.budget?.expiresAt <= Date.now() / 1000 || prepared.limits?.entries !== 100
       || prepared.limits?.bytes !== 1048576 || prepared.limits?.directories !== 1 || prepared.limits?.depth !== 0) {
-      phase.value = "unknown"; errorText.value = text.invalidPrepared; return;
+      phase.value = "unknown"; errorText.value = text.value.invalidPrepared; return;
     }
     phase.value = "starting";
     const pending = startInventoryJob(prepared.id, prepared.revision, hash, handoffToken);
@@ -138,12 +205,12 @@ async function submit() {
     if (!current(token)) return;
     phase.value = "idle";
     emit("observed", result);
-    ElMessage.info(text.accepted);
+    ElMessage.info(text.value.accepted);
     closeDialog();
   } catch (error) {
     if (active && flowSequence === token) {
       phase.value = requestId.value ? "unknown" : "idle";
-      errorText.value = isSessionChangedError(error) || getSessionGeneration() !== ownerSession ? text.sessionChanged : text.unknown;
+      errorText.value = isSessionChangedError(error) || getSessionGeneration() !== ownerSession ? text.value.sessionChanged : text.value.unknown;
     }
   } finally { handoffToken = ""; }
 }
@@ -153,19 +220,20 @@ async function lookup() {
   const token = ++flowSequence;
   querying.value = true; errorText.value = ""; missingRequest.value = false; tokenValue.value = "";
   try {
-    const result = await findInventoryRequest(requestId.value);
+    const result = multiMode.value ? await findBoundInventoryRequest(requestId.value) : await findInventoryRequest(requestId.value);
     if (!current(token)) return;
+    if (multiMode.value && (result as BoundInventorySummary).requestId !== requestId.value) throw new Error("invalid_original_request");
     queriedJob.value = result;
-    if (result.status === "queued") { phase.value = "unknown"; errorText.value = text.queued; return; }
+    if (result.status === "queued") { phase.value = "unknown"; errorText.value = text.value.queued; return; }
     await releaseRequest();
     if (!current(token)) return;
     requestId.value = ""; phase.value = "idle";
-    emit("observed", result); ElMessage.info(text.resolved); closeDialog();
+    emit("observed", result); ElMessage.info(text.value.resolved); closeDialog();
   } catch (error) {
     if (current(token)) {
       if (isSessionChangedError(error)) { expireSession(); return; }
       missingRequest.value = error instanceof InventoryRequestError && error.status === 404;
-      errorText.value = missingRequest.value ? text.notFound : text.lookupFailed;
+      errorText.value = missingRequest.value ? text.value.notFound : text.value.lookupFailed;
     }
   } finally { if (token === flowSequence) querying.value = false; }
 }
@@ -179,19 +247,19 @@ async function acknowledgeMissing() {
   if (!missingRequest.value || querying.value || busy.value || !sessionValid()) return;
   const id = requestId.value, token = flowSequence;
   try {
-    await ElMessageBox.confirm(text.acknowledgeWarning, text.acknowledge, { type: "warning",
-      confirmButtonText: messages.common.confirm, cancelButtonText: messages.common.cancel });
+    await ElMessageBox.confirm(text.value.acknowledgeWarning, text.value.acknowledge, { type: "warning",
+      confirmButtonText: messages.value.common.confirm, cancelButtonText: messages.value.common.cancel });
     if (!current(token) || id !== requestId.value) return;
     await releaseRequest();
     if (!current(token)) return;
     requestId.value = ""; phase.value = "idle"; missingRequest.value = false; errorText.value = "";
   } catch (error) {
-    if (current(token) && error !== "cancel" && error !== "close") errorText.value = text.lookupFailed;
+    if (current(token) && error !== "cancel" && error !== "close") errorText.value = text.value.lookupFailed;
   }
 }
 
 function leaveSensitivePage() { if (typeof document === "undefined" || document.hidden) purgeSensitive(); }
-function expireSession() { purgeSensitive(); errorText.value = text.sessionChanged; }
+function expireSession() { purgeSensitive(); errorText.value = text.value.sessionChanged; }
 watch(() => props.requestId, value => {
   const id = inventoryRequestId(value);
   if (id === requestId.value) return;
@@ -225,6 +293,10 @@ onBeforeUnmount(() => {
     <div class="inventory-start-content">
       <p class="inventory-start-notice"><el-icon><InfoFilled /></el-icon><span>{{ text.safety }}</span></p>
       <p v-if="errorText" class="inventory-start-error" role="alert">{{ errorText }}</p>
+      <div v-if="multiMode" v-show="!requestId || busy">
+        <el-form label-position="top"><CloudSourcePicker ref="sourcePicker" :disabled="Boolean(requestId) || busy || querying" @change="sourceChanged" /></el-form>
+        <el-button :icon="Refresh" :disabled="!sourceTicket || policyLoading || busy || querying || Boolean(requestId)" @click="loadPolicy">{{ messages.cloudSourcePicker.policy }}</el-button>
+      </div>
       <template v-if="requestId">
         <dl class="inventory-start-request"><dt>{{ text.requestId }}</dt><dd>{{ requestId }}</dd></dl>
         <p class="inventory-start-muted" role="status">{{ busy ? text[phase as 'preparing' | 'starting'] : text.unknown }}</p>
@@ -238,7 +310,7 @@ onBeforeUnmount(() => {
         </div>
         <p v-if="disabledReason" class="inventory-start-muted" role="status">{{ disabledReason }}</p>
         <el-form v-if="secure && policy?.available" label-position="top" @submit.prevent="submit">
-          <el-form-item :label="text.selectedPath" :error="selectedPath && !validPath ? text.invalidPath : ''">
+          <el-form-item v-if="!multiMode" :label="text.selectedPath" :error="selectedPath && !validPath ? text.invalidPath : ''">
             <el-input v-model="selectedPath" :aria-label="text.selectedPath" maxlength="4096" autocomplete="off" />
           </el-form-item>
           <el-form-item :label="text.token" :error="tokenValue && !validToken ? text.invalidToken : ''">

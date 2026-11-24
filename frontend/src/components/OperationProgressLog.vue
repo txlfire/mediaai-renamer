@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+
+const { messages } = useInterfaceLanguage();
 
 defineProps<{
   visible: boolean;

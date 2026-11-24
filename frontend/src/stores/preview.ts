@@ -1,6 +1,7 @@
 import { getSessionGeneration, sessionRequest } from "../utils/sessionGeneration";
 import { defineStore } from "pinia";
-import { matchRenamePreviewsMultiSourceBackground as matchRenamePreviewsMultiSource, parseRenamePreviewsWithAiBackground as parseRenamePreviewsWithAi } from "../api/backgroundJobs";
+import { matchRenamePreviewsMultiSourceBackground as matchRenamePreviewsMultiSource, parseRenamePreviewsWithAiBackground as parseRenamePreviewsWithAi,
+  matchTmdbBatchBackground, matchTmdbWithAiBackground, generateScannedPreviewsBackground } from "../api/backgroundJobs";
 
 import {
   applyRenamePreviewMetadataCandidate,
@@ -14,8 +15,6 @@ import {
   matchAllUnmatchedMetadata,
   matchRenamePreviewMultiSource,
   matchRenamePreviewMetadata,
-  matchRenamePreviewsMetadataWithAiFallback,
-  matchRenamePreviewsMetadata,
   parseRenamePreviewWithAi,
   updateRenamePreview,
   type AiParseCandidate,
@@ -34,7 +33,7 @@ import {
   type RenamePreviewFilters,
   type MetadataAiFallbackResult,
 } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
 
 export const usePreviewStore = defineStore("preview", {
   state: () => ({
@@ -74,7 +73,7 @@ export const usePreviewStore = defineStore("preview", {
         if (refreshHistory) await sessionRequest(this.loadPreviews(), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.previewGenerationFailed;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.previewGenerationFailed;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           this.loading = false;
@@ -87,6 +86,21 @@ if (sessionGeneration === getSessionGeneration()) {
       const updated = await sessionRequest(updateRenamePreview(previewId, targetName), sessionGeneration);
       this.replacePreview(updated);
       return updated;
+    },
+
+    async generateFromScan(scanJobId: number, sourceId?: number) {
+      const sessionGeneration = getSessionGeneration();
+      this.loading = true;
+      this.errorMessage = "";
+      this.generationSummary = null;
+      try {
+        this.generationSummary = await sessionRequest(generateScannedPreviewsBackground(scanJobId, sourceId), sessionGeneration);
+      } catch (error) {
+        if (sessionGeneration !== getSessionGeneration()) throw error;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.previewGenerationFailed;
+      } finally {
+        if (sessionGeneration === getSessionGeneration()) this.loading = false;
+      }
     },
 
     async excludePreview(previewId: number, reason = "manual_excluded") {
@@ -106,7 +120,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -132,7 +146,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return updated;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -149,12 +163,12 @@ if (sessionGeneration === getSessionGeneration()) {
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await sessionRequest(matchRenamePreviewsMetadata(previewIds, metadataMatchSource), sessionGeneration);
+        const result = await sessionRequest(matchTmdbBatchBackground(previewIds, metadataMatchSource), sessionGeneration);
         result.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -181,7 +195,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -204,7 +218,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -227,7 +241,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -244,12 +258,12 @@ if (sessionGeneration === getSessionGeneration()) {
       this.loading = true;
       this.errorMessage = "";
       try {
-        const result = await sessionRequest(matchRenamePreviewsMetadataWithAiFallback(previewIds, metadataMatchSource), sessionGeneration);
+        const result = await sessionRequest(matchTmdbWithAiBackground(previewIds, metadataMatchSource), sessionGeneration);
         result.metadata.items.forEach((item) => this.replacePreview(item));
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -276,7 +290,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return result;
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -311,7 +325,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return await sessionRequest(parseRenamePreviewWithAi(previewId, metadataMatchSource), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -331,7 +345,7 @@ if (sessionGeneration === getSessionGeneration()) {
         return await sessionRequest(parseRenamePreviewsWithAi(previewIds, metadataMatchSource), sessionGeneration);
       } catch (error) {
         if (sessionGeneration !== getSessionGeneration()) throw error;
-        this.errorMessage = error instanceof Error ? error.message : messages.errors.unknown;
+        this.errorMessage = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
         throw error;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {

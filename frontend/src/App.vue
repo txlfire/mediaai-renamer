@@ -4,63 +4,70 @@ import {
   FolderOpened,
   Notebook,
   Operation,
-  Search,
   Setting,
   SwitchButton,
   VideoCamera,
   Loading,
+  Lock,
   FolderChecked,
 } from "@element-plus/icons-vue";
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 
 import LogDrawer from "./components/LogDrawer.vue";
-import { zhCnMessages as messages } from "./locales/zh-CN";
+import { useInterfaceLanguage } from "./locales/interfaceLanguage";
 import { useAppStore } from "./stores/app";
 import { useAuthStore } from "./stores/auth";
 import { routeLoading } from "./router";
 
 import BackgroundJobsButton from "./components/BackgroundJobsButton.vue";
 import ThemePreferences from "./components/ThemePreferences.vue";
+import CloudProtectionDialog from "./components/CloudProtectionDialog.vue";
+import GlobalSearch from "./components/GlobalSearch.vue";
+import InterfaceLanguageSelect from "./components/InterfaceLanguageSelect.vue";
 
+const { messages } = useInterfaceLanguage();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const protectionVisible = ref(false);
+const backgroundJobsControl = ref<{ openRequest: (requestId: string) => void }>();
 const systemThemeQuery = typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
 const menuItems = computed(() =>
   [
-    { path: "/media-sources", label: messages.app.menu.mediaSources, icon: FolderOpened, visible: true },
-    { path: "/scan-jobs", label: messages.app.menu.scanJobs, icon: Operation, visible: true },
-    { path: "/scan-results", label: messages.app.menu.scanResults, icon: VideoCamera, visible: true },
-    { path: "/rename-previews", label: messages.app.menu.renamePreviews, icon: EditPen, visible: true },
-    { path: "/cloud-inventory", label: messages.app.menu.cloudInventory, icon: FolderChecked, visible: authStore.hasPermission("scan:run") },
-    { path: "/tasks", label: messages.app.menu.tasks, icon: Notebook, visible: authStore.hasPermission("task:manage") },
-    { path: "/settings", label: messages.app.menu.settings, icon: Setting, visible: authStore.hasPermission("settings:write") },
+    { path: "/media-sources", label: messages.value.app.menu.mediaSources, icon: FolderOpened, visible: true },
+    { path: "/scan-jobs", label: messages.value.app.menu.scanJobs, icon: Operation, visible: true },
+    { path: "/scan-results", label: messages.value.app.menu.scanResults, icon: VideoCamera, visible: true },
+    { path: "/rename-previews", label: messages.value.app.menu.renamePreviews, icon: EditPen, visible: true },
+    { path: "/cloud-inventory", label: messages.value.app.menu.cloudInventory, icon: FolderChecked, visible: authStore.hasPermission("scan:run") },
+    { path: "/tasks", label: messages.value.app.menu.tasks, icon: Notebook, visible: authStore.hasPermission("task:manage") },
+    { path: "/settings", label: messages.value.app.menu.settings, icon: Setting, visible: authStore.hasPermission("settings:write") },
   ].filter((item) => item.visible),
 );
 
 const isPublicPage = computed(() => route.matched.length === 0 || Boolean(route.meta.public));
+const currentMenuItem = computed(() => menuItems.value.find(item => item.path === route.path));
 const currentUserName = computed(() => authStore.currentUser?.displayName || authStore.currentUser?.username || "");
 const versionText = computed(() => appStore.health?.version
-  ? `v${appStore.health.version}` : messages.app.versionPending);
+  ? `v${appStore.health.version}` : messages.value.app.versionPending);
 
 const connectionLabel = computed(() => {
   if (appStore.connectionState === "online") {
-    return messages.app.connection.online;
+    return messages.value.app.connection.online;
   }
 
   if (appStore.connectionState === "loading") {
-    return messages.app.connection.loading;
+    return messages.value.app.connection.loading;
   }
 
-  return messages.app.connection.offline;
+  return messages.value.app.connection.offline;
 });
 
 const sidebarToggleLabel = computed(() =>
-  appStore.sidebarCollapsed ? messages.app.sidebar.expandTooltip : messages.app.sidebar.collapseTooltip,
+  appStore.sidebarCollapsed ? messages.value.app.sidebar.expandTooltip : messages.value.app.sidebar.collapseTooltip,
 );
 
 function updateSystemTheme() {
@@ -69,36 +76,43 @@ function updateSystemTheme() {
   }
 }
 
+function updateSidebarViewport() {
+  appStore.syncSidebarViewport(window.innerWidth < 1400);
+}
+
 async function logout() {
   await authStore.logout();
   await router.replace("/login");
 }
 
 function handleAuthExpired() {
-  authStore.clearSession(messages.auth.sessionExpired);
+  authStore.clearSession(messages.value.auth.sessionExpired);
   if (route.path !== "/login") {
     void router.replace({ path: "/login", query: { redirect: route.fullPath } });
   }
 }
 
 function handleAuditPending() {
-  ElMessage.warning({ message: messages.app.auditPending, grouping: true, duration: 6000 });
+  ElMessage.warning({ message: messages.value.app.auditPending, grouping: true, duration: 6000 });
 }
 
 onMounted(() => {
   appStore.loadSidebarCollapsed();
+  updateSidebarViewport();
   appStore.loadThemeMode();
   void appStore.refreshHealth();
   void authStore.loadStoredSession();
   window.addEventListener("mediaai:auth-expired", handleAuthExpired);
   window.addEventListener("mediaai:audit-pending", handleAuditPending);
   systemThemeQuery?.addEventListener("change", updateSystemTheme);
+  window.addEventListener("resize", updateSidebarViewport);
 });
 
 onUnmounted(() => {
   window.removeEventListener("mediaai:auth-expired", handleAuthExpired);
   window.removeEventListener("mediaai:audit-pending", handleAuditPending);
   systemThemeQuery?.removeEventListener("change", updateSystemTheme);
+  window.removeEventListener("resize", updateSidebarViewport);
 });
 </script>
 
@@ -127,7 +141,7 @@ onUnmounted(() => {
           :disabled="!appStore.sidebarCollapsed"
           placement="right"
         >
-          <RouterLink :class="{ active: route.path === item.path }" :to="item.path" :aria-label="item.label">
+          <RouterLink :class="{ active: route.path === item.path }" :to="item.path" :aria-label="item.label" :aria-current="route.path === item.path ? 'page' : undefined">
             <el-icon><component :is="item.icon" /></el-icon>
             <span v-if="!appStore.sidebarCollapsed">{{ item.label }}</span>
           </RouterLink>
@@ -144,15 +158,11 @@ onUnmounted(() => {
               <span v-if="!appStore.sidebarCollapsed">{{ connectionLabel }}</span>
             </div>
           </el-tooltip>
-          <el-select
+          <InterfaceLanguageSelect
             v-if="!appStore.sidebarCollapsed"
-            model-value="zh-CN"
             class="language-select"
-            size="small"
-            disabled
-          >
-            <el-option :label="messages.app.languageName" value="zh-CN" />
-          </el-select>
+            show-single
+          />
         </div>
 
         <div class="version-theme-row">
@@ -171,17 +181,28 @@ onUnmounted(() => {
 
     <main class="app-workbench" :aria-busy="routeLoading">
       <div class="workbench-topbar">
-        <BackgroundJobsButton />
-        <el-input class="global-search" :aria-label="messages.app.globalSearchPlaceholder" :placeholder="messages.app.globalSearchPlaceholder" :prefix-icon="Search" clearable />
+        <div v-if="currentMenuItem" class="workbench-location">
+          <el-icon><component :is="currentMenuItem.icon" /></el-icon>
+          <span>{{ currentMenuItem.label }}</span>
+        </div>
+        <GlobalSearch v-if="authStore.currentUser" @open-background="backgroundJobsControl?.openRequest($event)" />
+        <el-button v-if="authStore.currentUser" :icon="Lock" @click="protectionVisible = true">{{ messages.cloudProtections.open }}</el-button>
+        <BackgroundJobsButton ref="backgroundJobsControl" />
       </div>
       <RouterView />
+      <div class="workbench-fullscreen-host" />
     </main>
 
     <LogDrawer />
+    <CloudProtectionDialog v-if="protectionVisible" v-model:visible="protectionVisible" />
   </div>
 </template>
 
 <style scoped>
+.workbench-fullscreen-host {
+  display: contents;
+}
+
 .route-loading-indicator {
   position: fixed;
   top: 16px;

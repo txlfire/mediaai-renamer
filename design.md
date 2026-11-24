@@ -2,6 +2,8 @@
 
 文档类型：界面设计执行入口。目标确认日期：2026-10-13；六主题扩展原型确认日期：2026-10-15。
 
+2026-10-27增量目标：用户已接受视觉v2评估建议并要求修订后推进，新增[工作台视觉v2规范](docs/design/workbench-visual-v2.md)为本轮目标；冲突时按该规范保留业务边界、完整六主题、双重缩放及现有组件。实施顺序见[接续计划](docs/development/ui-refresh/ui-v2-implementation-plan.md)：先完成既定多连接功能，再做视觉修正。本入口下方为原基础规则，不代表v2页面已经实现。
+
 品类为数据密集型媒体整理工作台，不是营销页。详细目标以[完整主题设计](docs/design/workbench-theme-design.md)为准；系统与业务边界见[系统设计](docs/design/project-design.md)。本文件约束目标设计，不证明源码已经实现；当前差异、兼容与进度见[实施计划](docs/development/ui-refresh/implementation-plan.md)，测试与实际缩放见[验收清单](docs/development/ui-refresh/acceptance-checklist.md)。
 
 ## System

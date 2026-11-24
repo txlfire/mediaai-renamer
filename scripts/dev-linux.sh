@@ -4,9 +4,8 @@
 set -euo pipefail
 
 ACTION="${1:-status}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-BACKEND_PORT="${BACKEND_PORT:-8970}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/dev-port-config.sh"
 
 is_listening() {
   # 仅检查端口监听状态，不读取业务数据。
@@ -36,19 +35,24 @@ show_status() {
 
 case "$ACTION" in
   start)
-    FRONTEND_PORT="$FRONTEND_PORT" BACKEND_PORT="$BACKEND_PORT" bash "$ROOT/scripts/start-dev-lan.sh"
+    bash "$ROOT/scripts/start-dev-lan.sh"
+    unset FRONTEND_PORT BACKEND_PORT
+    read_last_dev_ports
     show_status
     ;;
   stop)
+    read_last_dev_ports || read_configured_dev_ports
     FRONTEND_PORT="$FRONTEND_PORT" BACKEND_PORT="$BACKEND_PORT" bash "$ROOT/scripts/stop-dev-lan.sh"
     show_status
     ;;
   restart)
-    FRONTEND_PORT="$FRONTEND_PORT" BACKEND_PORT="$BACKEND_PORT" bash "$ROOT/scripts/stop-dev-lan.sh"
-    FRONTEND_PORT="$FRONTEND_PORT" BACKEND_PORT="$BACKEND_PORT" bash "$ROOT/scripts/start-dev-lan.sh"
+    bash "$ROOT/scripts/start-dev-lan.sh"
+    unset FRONTEND_PORT BACKEND_PORT
+    read_last_dev_ports
     show_status
     ;;
   status)
+    read_last_dev_ports || read_configured_dev_ports
     show_status
     ;;
   *)

@@ -4,6 +4,8 @@
 
 目标设计：[完整主题设计](../../design/workbench-theme-design.md)。门禁：[验收清单](acceptance-checklist.md)。过程记录：[本轮工作日志](../../work-logs/progress-2026-10-14-review-themes.md)；[前期文档准备](../../work-logs/progress-2026-10-13-ui-theme-docs.md)保留历史。
 
+后续准备（2026-10-25）：用户正在制定整体页面优化方案，见[准备清单](overall-ui-preparation.md)；[全局搜索](../global-search/implementation-plan.md)已单独排入后续任务。此处不重开原主题阶段、不改变已批准六主题或历史证据，新视觉与交互待新方案确认后另行同步目标设计。当前实现与排期统一见[项目状态](../project-status.md#当前后续任务)。
+
 ## 1. 起始状态与差异（历史基线）
 
 | 项目 | 当前事实 | 目标与兼容要求 |

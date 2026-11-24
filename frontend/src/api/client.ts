@@ -1,6 +1,7 @@
 import axios from "axios";
 
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
+import { localizedRequestError } from "../locales/requestErrorText";
 import { getSessionGeneration, invalidateSessionRequests, isSessionChangedError, SessionChangedError } from "../utils/sessionGeneration";
 
 export type HealthStatus = {
@@ -1231,35 +1232,35 @@ export async function getHealth(httpClient: ApiHttpClient = apiClient): Promise<
     const response = await httpClient.get<HealthStatus>("/health");
     return response.data;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : messages.errors.unknown;
-    throw new Error(`${messages.errors.healthCheckFailed}: ${reason}`);
+    const reason = error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
+    throw new Error(`${getInterfaceMessages().errors.healthCheckFailed}: ${reason}`);
   }
 }
 
 function requirePost(httpClient: ApiHttpClient) {
   if (!httpClient.post) {
-    throw new Error(messages.errors.missingPost);
+    throw new Error(getInterfaceMessages().errors.missingPost);
   }
   return httpClient.post.bind(httpClient);
 }
 
 function requirePut(httpClient: ApiHttpClient) {
   if (!httpClient.put) {
-    throw new Error(messages.errors.missingPut);
+    throw new Error(getInterfaceMessages().errors.missingPut);
   }
   return httpClient.put.bind(httpClient);
 }
 
 function requirePatch(httpClient: ApiHttpClient) {
   if (!httpClient.patch) {
-    throw new Error(messages.errors.missingPatch);
+    throw new Error(getInterfaceMessages().errors.missingPatch);
   }
   return httpClient.patch.bind(httpClient);
 }
 
 function requireDelete(httpClient: ApiHttpClient) {
   if (!httpClient.delete) {
-    throw new Error(messages.errors.missingDelete);
+    throw new Error(getInterfaceMessages().errors.missingDelete);
   }
   return httpClient.delete.bind(httpClient);
 }
@@ -1270,13 +1271,15 @@ function apiRequestError(error: unknown): Error {
 }
 
 function apiErrorMessage(error: unknown) {
+  const localized = localizedRequestError(error);
+  if (localized) return localized;
   if (typeof error === "object" && error !== null && "response" in error) {
     const response = (error as { response?: { data?: { detail?: unknown } } }).response;
     if (typeof response?.data?.detail === "string" && response.data.detail.trim()) {
       return response.data.detail;
     }
   }
-  return error instanceof Error ? error.message : messages.errors.unknown;
+  return error instanceof Error ? error.message : getInterfaceMessages().errors.unknown;
 }
 
 export async function fetchMediaSources(
@@ -1479,7 +1482,7 @@ export async function fetchMediaFilesPage(filters: MediaFilePageFilters = {},
 export async function fetchLogs(httpClient: ApiHttpClient = apiClient): Promise<LogItem[]> {
   const response = await httpClient.get<{ items: LogItem[]; message?: string | null }>("/logs");
   return response.data.message
-    ? [{ file: messages.logs.notice, message: response.data.message }, ...response.data.items]
+    ? [{ file: getInterfaceMessages().logs.notice, message: response.data.message }, ...response.data.items]
     : response.data.items;
 }
 
@@ -2016,7 +2019,7 @@ export async function applyAiParseCandidate(
   }
 }
 
-export type BackgroundJobKind = "rename_dry_run" | "rollback_dry_run" | "metadata_batch" | "ai_batch";
+export type BackgroundJobKind = "rename_dry_run" | "rollback_dry_run" | "metadata_batch" | "ai_batch" | "tmdb_batch" | "tmdb_ai_batch" | "preview_generation";
 export type BackgroundJob = {
   id: number;
   request_id: string;
@@ -2039,6 +2042,8 @@ export type BackgroundJob = {
 export type BackgroundJobPayload = {
   rename_preview_ids?: number[];
   plan_id?: number;
+  scan_job_id?: number;
+  media_source_id?: number;
   metadata_match_source?: MetadataMatchSource;
   mode?: MultiSourceMatchMode;
 };

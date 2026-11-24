@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import FullscreenTablePanel from "./FullscreenTablePanel.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CircleCheck, CircleClose, InfoFilled, Search, RefreshLeft } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
@@ -6,13 +7,18 @@ import { startDirectoryRecovery, findDirectoryRecovery, cancelDirectoryRecovery,
   type DirectoryPlan, type DirectoryExecution, type DirectoryRecovery } from "../api/cloudDirectory";
 import { inventoryRequestId, InventoryRequestError } from "../api/cloudInventory";
 import { useAuthStore } from "../stores/auth";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { formatMessage } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { getSessionGeneration, isSessionChangedError } from "../utils/sessionGeneration";
+import { startBoundDirectoryRecovery, type BoundNativeReceipt } from "../api/cloudBoundActions";
+import { resolveCloudTaskBinding, sameCloudTaskSource } from "../utils/cloudTaskBinding";
+import CloudTaskSourceSummary from "./CloudTaskSourceSummary.vue";
 
 const props = defineProps<{ visible: boolean; plan: DirectoryPlan; execution: DirectoryExecution;
   requestId: string; persistRequestId: (id: string) => Promise<void> }>();
 const emit = defineEmits<{ "update:visible": [value: boolean]; resolved: [] }>();
-const text = messages.cloudInventory.directoryRecovery;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.cloudInventory.directoryRecovery);
 const auth = useAuthStore();
 const requestId = ref("");
 const recovery = ref<DirectoryRecovery | null>(null);
@@ -24,9 +30,18 @@ const ownerSession = getSessionGeneration();
 let active = true, sequence = 0, handoffToken = "";
 let timer: ReturnType<typeof setTimeout> | undefined;
 const secure = computed(() => typeof location !== "undefined" && location.protocol === "https:");
-const permitted = computed(() => auth.hasPermission("cloud-directory:plan") && auth.hasPermission("cloud-directory:execute"));
-const disabledReason = computed(() => !secure.value ? text.https : !permitted.value ? text.permission
-  : !props.execution.globalSlotHeld || props.execution.pollingRecommended ? text.blocked : "");
+const sourceBinding = computed(() => { try { return resolveCloudTaskBinding(props.plan); } catch { return null; } });
+const permitted = computed(() => auth.hasPermission("cloud-directory:plan") && auth.hasPermission("cloud-directory:execute")
+  && sourceBinding.value !== null && sourceBinding.value.mode !== "legacy_unbound");
+const originalSourceCurrent = computed(() => {
+  const binding = sourceBinding.value;
+  if (!binding || binding.mode === "legacy_unbound") return false;
+  if (binding.mode === "bound") return sameCloudTaskSource(props.execution, binding.source);
+  try { return resolveCloudTaskBinding(props.execution).mode === "single"; } catch { return false; }
+});
+const disabledReason = computed(() => !secure.value ? text.value.https : !sourceBinding.value ? messages.value.cloudTaskSource.invalid
+  : sourceBinding.value.mode === "legacy_unbound" ? messages.value.cloudTaskSource.unbound : !permitted.value ? text.value.permission
+  : !originalSourceCurrent.value || !props.execution.globalSlotHeld || props.execution.pollingRecommended ? text.value.blocked : "");
 const canStart = computed(() => !disabledReason.value && !busy.value && !requestId.value && maintenance.value && remoteIdle.value
   && /^[\x21-\x7e]{1,8192}$/.test(tokenValue.value));
 const canCommit = computed(() => permitted.value && positionsConfirmed.value && !busy.value && recovery.value?.status === "ready"
@@ -44,18 +59,22 @@ function purge() {
 }
 function sessionValid() {
   if (getSessionGeneration() === ownerSession) return true;
-  purge(); recovery.value = null; errorText.value = text.sessionChanged; return false;
+  purge(); recovery.value = null; errorText.value = text.value.sessionChanged; return false;
 }
 function current(id: number) { return active && props.visible && id === sequence && sessionValid(); }
 function fail(error: unknown, id: number) {
   if (!active || !props.visible || id !== sequence) return;
   stopPolling();
-  if (isSessionChangedError(error) || !sessionValid()) { purge(); recovery.value = null; errorText.value = text.sessionChanged; return; }
-  errorText.value = error instanceof InventoryRequestError && error.status === 404 ? text.missing : text.failed;
+  if (isSessionChangedError(error) || !sessionValid()) { purge(); recovery.value = null; errorText.value = text.value.sessionChanged; return; }
+  errorText.value = error instanceof InventoryRequestError && error.status === 404 ? text.value.missing : text.value.failed;
 }
 function valid(value: DirectoryRecovery) {
   const bounded = (n: number, max: number) => Number.isSafeInteger(n) && n >= 0 && n <= max;
-  return value && Boolean(inventoryRequestId(value.id)) && value.requestId === requestId.value && value.planId === props.plan.id
+  const binding = sourceBinding.value;
+  let responseBinding;
+  try { responseBinding = resolveCloudTaskBinding(value); } catch { return false; }
+  return binding && (binding.mode === "bound" ? sameCloudTaskSource(value, binding.source) : responseBinding.mode === binding.mode)
+    && value && Boolean(inventoryRequestId(value.id)) && value.requestId === requestId.value && value.planId === props.plan.id
     && bounded(value.attempt, 5) && value.attempt >= 1 && bounded(value.revision, Number.MAX_SAFE_INTEGER)
     && ["accepted", "running", "ready", "review", "committed"].includes(value.status)
     && [value.workerSlotHeld, value.recoverySlotHeld, value.pollingRecommended, value.cancelRequested].every(flag => typeof flag === "boolean")
@@ -64,7 +83,7 @@ function valid(value: DirectoryRecovery) {
     && Number.isFinite(value.createdAt) && Number.isFinite(value.expiresAt) && value.expiresAt > value.createdAt && value.expiresAt - value.createdAt <= 90
     && Array.isArray(value.items) && value.items.length === props.plan.items.length
     && value.items.every((item, index) => item.ordinal === index + 1 && item.sourceName === props.plan.items[index]?.sourceName
-      && item.targetName === props.plan.items[index]?.targetName && Object.prototype.hasOwnProperty.call(text.positions, item.position))
+      && item.targetName === props.plan.items[index]?.targetName && Object.prototype.hasOwnProperty.call(text.value.positions, item.position))
     && Array.isArray(value.events) && value.events.length === value.usedRpc && value.events.length <= 14
     && value.events.every((event, index) => event.ordinal === index + 1 && ["GetApiTokenInfo", "GetRuntimeInfo", "FindFileByPath"].includes(event.method)
       && ["sending", "responded", "unknown"].includes(event.phase) && bounded(event.receivedBytes, Number.MAX_SAFE_INTEGER)
@@ -73,7 +92,7 @@ function valid(value: DirectoryRecovery) {
 }
 function accept(value: DirectoryRecovery) {
   if (!valid(value) || (recovery.value && value.id === recovery.value.id && value.revision < recovery.value.revision)) {
-    recovery.value = null; errorText.value = text.invalid; stopPolling(); return;
+    recovery.value = null; errorText.value = text.value.invalid; stopPolling(); return;
   }
   recovery.value = value;
   if (value.status === "committed") emit("resolved");
@@ -83,6 +102,8 @@ function accept(value: DirectoryRecovery) {
 
 async function start() {
   if (!sessionValid() || !canStart.value) return;
+  const binding = sourceBinding.value;
+  if (!binding || binding.mode === "legacy_unbound") return;
   const id = ++sequence, planId = props.plan.id, revision = props.execution.revision;
   busy.value = true; errorText.value = ""; handoffToken = tokenValue.value; tokenValue.value = "";
   maintenance.value = false; remoteIdle.value = false;
@@ -91,11 +112,20 @@ async function start() {
     if (!requestId.value) throw new Error("request_id_unavailable");
     await props.persistRequestId(requestId.value);
     if (!current(id)) return;
-    const pending = startDirectoryRecovery(planId, { requestId: requestId.value, expectedRevision: revision,
-      confirmMaintenance: true, confirmRemoteIdle: true, apiToken: handoffToken });
+    const input = { requestId: requestId.value, expectedRevision: revision,
+      confirmMaintenance: true as const, confirmRemoteIdle: true as const, apiToken: handoffToken };
+    const pending = binding.mode === "bound" ? startBoundDirectoryRecovery(planId, binding.source, input) : startDirectoryRecovery(planId, input);
     handoffToken = "";
-    const value = await pending;
-    if (current(id)) accept(value);
+    let value;
+    try { value = await pending; } finally { input.apiToken = ""; }
+    if (!current(id)) return;
+    if (binding.mode === "bound") {
+      const receipt = value as BoundNativeReceipt;
+      const result = await findDirectoryRecovery(requestId.value);
+      if (!current(id)) return;
+      if (result.id !== receipt.id || result.contextId !== receipt.contextId) throw new Error("directory_recovery_context_mismatch");
+      accept(result);
+    } else accept(value as DirectoryRecovery);
   } catch (error) { fail(error, id); }
   finally { if (id === sequence) { handoffToken = ""; busy.value = false; } }
 }
@@ -109,6 +139,7 @@ async function lookup() {
 }
 async function act(kind: "cancel" | "commit") {
   if (!recovery.value || busy.value || !sessionValid() || (kind === "commit" && !canCommit.value)) return;
+  if (!sourceBinding.value || sourceBinding.value.mode === "legacy_unbound") return;
   if (kind === "cancel" && (!recovery.value.recoverySlotHeld || recovery.value.cancelRequested)) return;
   const previous = recovery.value, id = ++sequence;
   busy.value = true; errorText.value = ""; stopPolling(); positionsConfirmed.value = false;
@@ -123,8 +154,8 @@ async function prepareNext() {
   const id = ++sequence;
   busy.value = true; stopPolling();
   try {
-    await ElMessageBox.confirm(text.newBudgetHint, text.newBudget, { type: "warning",
-      confirmButtonText: messages.common.confirm, cancelButtonText: messages.common.cancel });
+    await ElMessageBox.confirm(text.value.newBudgetHint, text.value.newBudget, { type: "warning",
+      confirmButtonText: messages.value.common.confirm, cancelButtonText: messages.value.common.cancel });
     if (!current(id)) return;
     const previous = requestId.value;
     requestId.value = "";
@@ -152,14 +183,17 @@ async function reviewWorker() {
 }
 function close() { purge(); recovery.value = null; emit("update:visible", false); }
 function hidden() { if (typeof document === "undefined" || document.hidden) purge(); }
-function expired() { purge(); recovery.value = null; errorText.value = text.sessionChanged; }
+function expired() { purge(); recovery.value = null; errorText.value = text.value.sessionChanged; }
 watch(() => props.requestId, value => { const next = inventoryRequestId(value); if (next !== requestId.value) { purge(); requestId.value = next; recovery.value = null; } }, { flush: "sync" });
 watch(permitted, value => { if (!value) purge(); }, { flush: "sync" });
 watch(() => auth.hasPermission("settings:write"), value => { if (!value) purge(); }, { flush: "sync" });
 watch(() => props.plan.id, () => { purge(); recovery.value = null; });
-watch(() => props.visible, value => {
+watch(() => props.visible, (value, wasVisible) => {
   purge(); recovery.value = null; errorText.value = "";
-  if (value) requestId.value = inventoryRequestId(props.requestId) || inventoryRequestId(props.execution.latestRecovery?.requestId);
+  if (value) {
+    requestId.value = inventoryRequestId(props.requestId) || inventoryRequestId(props.execution.latestRecovery?.requestId);
+    if (wasVisible === false && requestId.value && permitted.value && (typeof document === "undefined" || !document.hidden)) void lookup();
+  }
 }, { immediate: true, flush: "sync" });
 onMounted(() => {
   if (typeof window !== "undefined") { window.addEventListener("pagehide", purge); window.addEventListener("mediaai:auth-expired", expired); }
@@ -176,6 +210,7 @@ onBeforeUnmount(() => {
   <el-dialog :model-value="visible" :title="text.title" width="min(800px, 94vw)" append-to-body destroy-on-close
     @update:model-value="(value: boolean) => { if (!value) close(); }">
     <div class="directory-recovery-content">
+      <CloudTaskSourceSummary :value="plan" />
       <p class="directory-recovery-notice"><el-icon><InfoFilled /></el-icon><span>{{ text.scope }}</span></p>
       <p class="directory-recovery-muted">{{ plan.parentPath }}</p>
       <p v-if="errorText" class="directory-recovery-error" role="alert">{{ errorText }}</p>
@@ -202,11 +237,11 @@ onBeforeUnmount(() => {
           <span>{{ formatMessage(text.attempt, { attempt: recovery.attempt, used: recovery.usedRpc, max: recovery.maxRpc }) }}</span></div>
         <p class="directory-recovery-muted">{{ recovery.status === 'committed' ? text.committed : text.causalWarning }}</p>
         <p v-if="recovery.reason && messages.cloudInventory.directoryExecution.reasons[recovery.reason]" class="directory-recovery-muted">{{ messages.cloudInventory.directoryExecution.reasons[recovery.reason] }}</p>
-        <el-table :data="recovery.items" border class="data-table" max-height="300">
+        <FullscreenTablePanel variant="embedded"><el-table :data="recovery.items" border class="data-table" max-height="300">
           <el-table-column prop="sourceName" :label="messages.cloudInventory.directoryPlan.source" min-width="190" show-overflow-tooltip />
           <el-table-column prop="targetName" :label="messages.cloudInventory.directoryPlan.target" min-width="190" show-overflow-tooltip />
           <el-table-column :label="text.position" width="150" fixed="right"><template #default="{ row }">{{ text.positions[row.position] }}</template></el-table-column>
-        </el-table>
+        </el-table></FullscreenTablePanel>
         <el-checkbox v-if="recovery.status === 'ready' && !recovery.workerSlotHeld && !recovery.recoverySlotHeld" v-model="positionsConfirmed" class="directory-recovery-check">{{ text.positionConfirm }}</el-checkbox>
         <p v-else-if="recovery.status === 'review'" class="directory-recovery-muted">{{ text.frozen }}</p>
       </template>

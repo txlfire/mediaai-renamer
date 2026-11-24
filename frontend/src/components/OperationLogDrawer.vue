@@ -9,7 +9,8 @@ import {
   fetchOperationLogs,
   type OperationLogItem,
 } from "../api/client";
-import { formatMessage, zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { formatMessage } from "../locales/zh-CN";
 import { formatDateTime } from "../utils/displayFormat";
 import { useAuthStore } from "../stores/auth";
 import { createScopedRequestGate } from "../utils/scopedRequestGate";
@@ -39,17 +40,18 @@ const total = ref(0);
 const loading = ref(false);
 const autoRefresh = ref(true);
 const levelFilter = ref("all");
-const statusMessage = ref("");
+const statusMessage = ref<string | null>("");
 const foldedCount = ref(0);
 const pollTimer = ref<number | null>(null);
 const requestGate = createScopedRequestGate();
 const consecutiveFailures = ref(0);
 
-const pageText = messages.operationLogs;
+const { messages } = useInterfaceLanguage();
+const pageText = computed(() => messages.value.operationLogs);
 const authStore = useAuthStore();
 const canReadLogs = computed(() => authStore.hasPermission("audit:read"));
 
-const drawerTitle = computed(() => props.title || pageText.title);
+const drawerTitle = computed(() => props.title || pageText.value.title);
 const canQuery = computed(() => Boolean(props.taskType && props.taskId && canReadLogs.value));
 const visibleLogs = computed(() => {
   if (levelFilter.value === "all") {
@@ -57,7 +59,8 @@ const visibleLogs = computed(() => {
   }
   return logs.value.filter((item) => item.level === levelFilter.value);
 });
-const emptyDescription = computed(() => !canReadLogs.value ? messages.auth.permissionDenied : statusMessage.value || pageText.empty);
+const logStatusText = computed(() => statusMessage.value ?? pageText.value.loadFailed);
+const emptyDescription = computed(() => !canReadLogs.value ? messages.value.auth.permissionDenied : logStatusText.value || pageText.value.empty);
 
 function clearTimer() {
   if (pollTimer.value !== null) {
@@ -76,7 +79,7 @@ function trimLogs() {
 }
 
 function levelLabel(level: string) {
-  return pageText.levels[level as keyof typeof pageText.levels] || level;
+  return pageText.value.levels[level as keyof typeof pageText.value.levels] || level;
 }
 
 function levelTagType(level: string) {
@@ -136,7 +139,7 @@ async function loadLogs({ reset = false, silent = false } = {}) {
   } catch (error) {
     if (isSessionChangedError(error)) return;
     if (requestGate.isCurrent(token)) {
-      statusMessage.value = pageText.loadFailed;
+      statusMessage.value = null;
       consecutiveFailures.value += 1;
     }
   } finally {
@@ -173,11 +176,11 @@ function formatLogText(item: OperationLogItem) {
 async function copyLogs() {
   const text = visibleLogs.value.map(formatLogText).join("\n");
   if (!text) {
-    ElMessage.warning(pageText.empty);
+    ElMessage.warning(pageText.value.empty);
     return;
   }
   await navigator.clipboard.writeText(text);
-  ElMessage.success(pageText.copySuccess);
+  ElMessage.success(pageText.value.copySuccess);
 }
 
 async function downloadLogs() {

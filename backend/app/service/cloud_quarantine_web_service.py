@@ -30,6 +30,44 @@ class CloudQuarantineRunner:
     def startObservation(self, runId, *, apiToken, **values):
         return self._start(runId, apiToken, True, values)
 
+    def startBound(self, planId, *, apiToken, **values):
+        return self._startBound(planId, apiToken, False, values)
+
+    def startBoundObservation(self, runId, *, apiToken, **values):
+        return self._startBound(runId, apiToken, True, values)
+
+    def _startBound(self, targetId, apiToken, observation, values):
+        from app.service import cloud_connection_store as store
+        from app.service.cloud_bound_native_runtime_service import nativeRuntimeTx
+        from app.service.cloud_bound_quarantine_service import _acceptBoundQuarantineMove
+        from app.service.cloud_bound_quarantine_recovery_service import _acceptBoundQuarantineObservation
+        if not isinstance(apiToken, str) or not 1 <= len(apiToken) <= 8192 or any(not 33 <= ord(c) <= 126 for c in apiToken):
+            raise store.CloudConnectionError('invalid_fields')
+        with self._lock:
+            if not self._opened or self._stop.is_set():
+                raise actions.QuarantineError('web_runner_unavailable')
+            if self._thread is not None:
+                raise actions.QuarantineError('worker_slot_busy')
+            approve = _acceptBoundQuarantineObservation if observation else _acceptBoundQuarantineMove
+            receipt, token = approve(self.settings, targetId, **values)
+            if token is None:
+                return receipt
+            # 受理之后的任何交接失败都必须归还新worker槽，不改原未知事实或冻结。
+            try:
+                with store.connectionDb(self.settings) as connection:
+                    settings = nativeRuntimeTx(self.settings, connection, receipt['contextId'], token)
+                thread = threading.Thread(target=self._execute, args=(settings, receipt['id'], token, apiToken),
+                    name='cloud-bound-quarantine-supervisor', daemon=False)
+                self._thread = thread
+                thread.start()
+            except Exception:
+                self._thread = None
+                from app.service.cloud_quarantine_worker_service import finishQuarantineWorkerTx
+                with store.connectionDb(self.settings, write=True) as connection:
+                    finishQuarantineWorkerTx(self.settings, connection, receipt['id'], token, None, stopReason='worker_start_failed')
+                raise actions.QuarantineError('worker_start_failed') from None
+            return receipt | {'networkAccess': None}
+
     def _start(self, targetId, apiToken, observation, values):
         settings = resolveCloudDriveSettings(self.settings)
         if not isinstance(apiToken,str) or not 1 <= len(apiToken) <= 8192 or any(not 33 <= ord(c) <= 126 for c in apiToken):

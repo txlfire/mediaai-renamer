@@ -65,7 +65,10 @@ def _snapshot(connection, row):
     return plan, json.loads(plan["snapshot_json"])
 
 
-def _active(settings, connection, row, now):
+def _active(settings, connection, row, now, *, network=False):
+    from app.service.cloud_bound_native_runtime_service import BoundNativeCloudSettings, requireNativeSendTx
+    if isinstance(settings, BoundNativeCloudSettings):
+        requireNativeSendTx(settings, connection, network=network)
     _executePermission(connection, row["actor_id"])
     if row["kind"] == "observe":
         from app.service.cloud_quarantine_recovery_service import requireObservationActive
@@ -102,7 +105,7 @@ def _requireOtherWorkIdle(connection):
             raise QuarantineError("file_task_busy")
     checks = (
         ("scan_slot_busy", "SELECT 1 FROM scan_jobs WHERE status IN ('queued','running') OR execution_token IS NOT NULL LIMIT 1"),
-        ("inventory_slot_busy", "SELECT 1 FROM cloud_drive_inventory_jobs WHERE worker_token IS NOT NULL LIMIT 1"),
+        ("inventory_slot_busy", "SELECT 1 FROM cloud_drive_inventory_jobs WHERE worker_token IS NOT NULL OR worker_pid IS NOT NULL LIMIT 1"),
         ("read_rpc_unresolved", "SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1"),
         ("file_probe_unresolved", "SELECT 1 FROM cloud_directory_probe_leases LIMIT 1"),
         ("file_action_unresolved", "SELECT 1 FROM local_file_actions WHERE status IN ('prepared','applied','recovery_required') LIMIT 1"),
@@ -116,6 +119,13 @@ def _requireOtherWorkIdle(connection):
 
 def approveQuarantineRun(settings, planId, *, requestId, expectedRevision, policyHash,
                          confirmMaintenance, confirmGlobalFence, auditContext):
+    with inventoryDb(settings, write=True) as connection:
+        return approveQuarantineRunTx(settings, connection, planId, requestId=requestId, expectedRevision=expectedRevision,
+            policyHash=policyHash, confirmMaintenance=confirmMaintenance, confirmGlobalFence=confirmGlobalFence, auditContext=auditContext)
+
+
+def approveQuarantineRunTx(settings, connection, planId, *, requestId, expectedRevision, policyHash,
+                           confirmMaintenance, confirmGlobalFence, auditContext, runId=None, contextId=None, approvedAt=None):
     inventoryId(requestId)
     _limit(expectedRevision, 0, 2**63-1)
     if confirmMaintenance is not True or confirmGlobalFence is not True or auditContext.actor is None:
@@ -123,37 +133,38 @@ def approveQuarantineRun(settings, planId, *, requestId, expectedRevision, polic
     if not settings.cloudDrive.quarantineEnabled:
         raise QuarantineError("execution_disabled")
     actorId = auditContext.actor.id
-    with inventoryDb(settings, write=True) as connection:
-        plan = plans._owned(connection, planId, actorId)
-        _executePermission(connection, actorId)
-        if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE request_id=? OR (plan_id=? AND kind='move')",
-                              (requestId, planId)).fetchone():
-            raise QuarantineError("execution_already_accepted")
-        if plan["revision"] != expectedRevision or policyHash != plan["policy_hash"]:
-            raise QuarantineError("revision_or_policy_changed")
-        snapshot = json.loads(plan["snapshot_json"])
-        reason = plans._valid(connection, settings, plan, snapshot)
-        if reason:
-            raise QuarantineError(reason)
-        requireNoDirectoryExecution(connection)
-        _requireOtherWorkIdle(connection)
-        now = _wallNow()
-        pool = _pool(settings, connection, now)
-        if pool["state"] != "ready" or now < pool["cooldown_until"]:
-            raise QuarantineError("pool_not_ready")
-        maxRpc = 3 + 9 * len(snapshot["items"])
-        expires = min(now + DURATION_SECONDS, plan["expires_at"])
-        if maxRpc * pool["min_interval"] + 15 > expires - now:
-            raise QuarantineError("batch_exceeds_time_budget")
-        runId, token = str(uuid4()), str(uuid4())
-        logId = connection.execute("SELECT COALESCE(MAX(log_id),0)+1 FROM cloud_quarantine_runs").fetchone()[0]
-        connection.execute("INSERT INTO cloud_quarantine_runs "
-            "(id,request_id,plan_id,actor_id,kind,policy_hash,status,worker_token,owner_pid,owner_host,max_rpc,max_bytes,log_id,created_at,expires_at,updated_at) "
-            "VALUES(?,?,?,?,'move',?,'accepted',?,?,?,?,?,?,?,?,?)",
-            (runId, requestId, planId, actorId, policyHash, token, os.getpid(), cloudDriveHostKey(), maxRpc, MAX_BYTES, logId, now, expires, now))
-        _audit(settings, connection, _row(connection, runId), "approve", auditContext,
-            {"itemCount": len(snapshot["items"]), "maxRpc": maxRpc, "atomicIdentityGuaranteed": False})
-        return runId, token
+    plan = plans._owned(connection, planId, actorId)
+    _executePermission(connection, actorId)
+    if connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE request_id=? OR (plan_id=? AND kind='move')", (requestId, planId)).fetchone():
+        raise QuarantineError('execution_already_accepted')
+    if plan['revision'] != expectedRevision or policyHash != plan['policy_hash']:
+        raise QuarantineError('revision_or_policy_changed')
+    snapshot = json.loads(plan['snapshot_json'])
+    reason = plans._valid(connection, settings, plan, snapshot)
+    if reason:
+        raise QuarantineError(reason)
+    requireNoDirectoryExecution(connection)
+    _requireOtherWorkIdle(connection)
+    now = _wallNow() if approvedAt is None else approvedAt
+    pool = _pool(settings, connection, now)
+    if pool['state'] != 'ready' or now < pool['cooldown_until']:
+        raise QuarantineError('pool_not_ready')
+    maxRpc = 3 + 9 * len(snapshot['items'])
+    expires = min(now + DURATION_SECONDS, plan['expires_at'])
+    if maxRpc * pool['min_interval'] + 15 > expires - now:
+        raise QuarantineError('batch_exceeds_time_budget')
+    runId, token = runId or str(uuid4()), str(uuid4())
+    logId = connection.execute('SELECT COALESCE(MAX(log_id),0)+1 FROM cloud_quarantine_runs').fetchone()[0]
+    columns = 'id,request_id,plan_id,actor_id,kind,policy_hash,status,worker_token,owner_pid,owner_host,max_rpc,max_bytes,log_id,created_at,expires_at,updated_at'
+    values = (runId, requestId, planId, actorId, 'move', policyHash, 'accepted', token, os.getpid(), cloudDriveHostKey(),
+              maxRpc, MAX_BYTES, logId, now, expires, now)
+    if contextId is not None:
+        columns += ',context_id,binding_state'
+        values += (contextId, 'bound')
+    connection.execute(f'INSERT INTO cloud_quarantine_runs({columns}) VALUES(' + ','.join('?' for _ in values) + ')', values)
+    _audit(settings, connection, _row(connection, runId), 'approve', auditContext,
+        {'itemCount': len(snapshot['items']), 'maxRpc': maxRpc, 'atomicIdentityGuaranteed': False})
+    return runId, token
 
 
 def bindQuarantineWorker(settings, runId, token, pid):
@@ -190,7 +201,7 @@ def reserveQuarantineRpc(settings, runId, token, method, *, itemOrdinal=None, re
     with inventoryDb(settings, write=True) as connection:
         row = _worker(connection, runId, token)
         now = _wallNow()
-        _active(settings, connection, row, now)
+        _active(settings, connection, row, now, network=True)
         if row["kind"] == "observe" and method == "MoveFile":
             raise QuarantineError("rpc_not_allowed")
         pool = _pool(settings, connection, now)
@@ -334,12 +345,17 @@ def getQuarantineRun(settings, runId, actorId, *, byRequest=False):
 
 
 def requestQuarantineCancel(settings, runId, *, expectedRevision, actorId, auditContext=None):
-    _limit(expectedRevision, 0, 2**63-1)
     with inventoryDb(settings, write=True) as connection:
-        row = _owned(connection, runId, actorId)
-        if row["revision"] != expectedRevision or (row["status"] not in {"accepted", "running"}
-                and not (row["kind"] == "observe" and row["reason"] == "positions_observed" and row["committed_epoch"] is None)):
-            raise QuarantineError("revision_conflict")
-        connection.execute("UPDATE cloud_quarantine_runs SET cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (time.time(), runId))
-        _audit(settings, connection, row, "cancel_requested",auditContext)
-        return _view(connection, _row(connection, runId))
+        return requestQuarantineCancelTx(settings, connection, runId, expectedRevision=expectedRevision,
+            actorId=actorId, auditContext=auditContext)
+
+
+def requestQuarantineCancelTx(settings, connection, runId, *, expectedRevision, actorId, auditContext=None):
+    _limit(expectedRevision, 0, 2**63-1)
+    row = _owned(connection, runId, actorId)
+    if row["revision"] != expectedRevision or (row["status"] not in {"accepted", "running"}
+            and not (row["kind"] == "observe" and row["reason"] == "positions_observed" and row["committed_epoch"] is None)):
+        raise QuarantineError("revision_conflict")
+    connection.execute("UPDATE cloud_quarantine_runs SET cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (time.time(), runId))
+    _audit(settings, connection, row, "cancel_requested", auditContext)
+    return _view(connection, _row(connection, runId))

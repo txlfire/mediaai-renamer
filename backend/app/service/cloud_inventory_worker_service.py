@@ -53,7 +53,12 @@ def runCloudInventoryJob(settings, jobId, *, endpoint, apiToken, trustedCaPem=No
 
 
 def _requireConfiguredConnection(settings, endpoint, trustedCaPem):
-    cloudConfigurationReference(settings)
+    from app.service.cloud_bound_runtime_service import BoundCloudSettings, requireBoundRuntimeTx
+    if isinstance(settings, BoundCloudSettings):
+        with inventoryDb(settings) as connection:
+            requireBoundRuntimeTx(settings, connection)
+    else:
+        cloudConfigurationReference(settings)
     config = settings.cloudDrive
     if (canonicalCd2Target(endpoint) != canonicalCd2Target(config.endpoint)
             or trustedCaPem is not None and trustedCaPem.replace(b"\r\n", b"\n") != config.caCertificatePem.encode("ascii")):
@@ -68,13 +73,19 @@ def superviseClaimedCloudInventoryJob(settings, jobId, token, *, endpoint, apiTo
         if stop is not None and stop.is_set():
             return
         with inventoryDb(settings) as connection:
-            expiresAt = _row(connection, jobId)["expires_at"]
+            job = _row(connection, jobId)
+            from app.service.cloud_bound_runtime_service import BoundCloudSettings, requireBoundSend
+            requireBoundSend(settings, connection, job['session_id'])
+            expiresAt = job["expires_at"]
         remaining = expiresAt - time.time()
         if not math.isfinite(remaining) or remaining <= 0:
             raise CloudInventoryError("deadline_exceeded")
         deadline = time.monotonic() + min(remaining, 900)
-        payload = {"job_id": jobId, "worker_token": token, "api_token": apiToken,
-            "configuration_revision": cloudConfigurationReference(settings)}
+        payload = {"job_id": jobId, "worker_token": token, "api_token": apiToken}
+        if isinstance(settings, BoundCloudSettings):
+            payload['context_id'] = settings.contextId
+        else:
+            payload['configuration_revision'] = cloudConfigurationReference(settings)
         try:
             process = startTaskProcess(settings, "app.cloud_inventory_worker", payload,
                 lambda pid: persistCloudInventoryPid(settings, jobId, token, pid))
@@ -90,6 +101,7 @@ def superviseClaimedCloudInventoryJob(settings, jobId, token, *, endpoint, apiTo
                 row = _row(connection, jobId)
                 try:
                     requireCloudActor(connection, row["actor_id"])
+                    requireBoundSend(settings, connection, row['session_id'])
                     permitted = True
                 except CloudBudgetError:
                     permitted = False

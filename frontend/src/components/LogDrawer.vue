@@ -5,10 +5,11 @@ import { ElMessage } from "element-plus";
 import { ref } from "vue";
 import { exportRuntimeLogs } from "../api/client";
 
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
 import { useMediaStore } from "../stores/media";
 
 const mediaStore = useMediaStore();
+const { messages } = useInterfaceLanguage();
 const exporting = ref(false);
 
 async function exportLogs() {
@@ -24,7 +25,7 @@ async function exportLogs() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
     if (isSessionChangedError(error)) return;
-    ElMessage.error(messages.logs.exportFailed);
+    ElMessage.error(messages.value.logs.exportFailed);
   } finally {
     exporting.value = false;
   }

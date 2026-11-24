@@ -2,22 +2,24 @@
 import { Brush } from "@element-plus/icons-vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { isThemePalette, themeDefinitions } from "../config/themeRegistry";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { useInterfaceLanguage } from "../locales/interfaceLanguage";
+import { formatMessage } from "../locales/zh-CN";
 import { useAppStore } from "../stores/app";
 import ThemePreferenceOptions from "./ThemePreferenceOptions.vue";
 
 const appStore = useAppStore();
-const text = messages.app.theme;
+const { messages } = useInterfaceLanguage();
+const text = computed(() => messages.value.app.theme);
 const open = ref(false);
 const body = ref<{ focusSelected: () => Promise<void> }>();
 const trigger = ref<{ $el: HTMLButtonElement }>();
 const height = ref(typeof window === "undefined" ? 768 : window.innerHeight);
 const compact = computed(() => height.value < 400);
-const options = themeDefinitions.map(theme => ({ value: theme.id, palette: theme.id, label: text[theme.labelKey] }));
+const options = computed(() => themeDefinitions.map(theme => ({ value: theme.id, palette: theme.id, label: text.value[theme.labelKey] })));
 const description = computed(() => {
-  const current = options.find(option => option.value === appStore.themePalette)!;
-  const mode = appStore.themeMode === "system" ? text.system : appStore.resolvedTheme === "dark" ? text.dark : text.light;
-  return `${text.settings}：${current.label} · ${mode}`;
+  const current = options.value.find(option => option.value === appStore.themePalette)!;
+  const mode = appStore.themeMode === "system" ? text.value.system : appStore.resolvedTheme === "dark" ? text.value.dark : text.value.light;
+  return formatMessage(text.value.summary, { settings: text.value.settings, label: current.label, mode });
 });
 const popperOptions = {
   strategy: "fixed" as const,

@@ -1,6 +1,6 @@
 # 常用脚本和任务
 
-类型：命令手册。适用 v1.3.0；命令在项目根目录执行。环境与工程约束见[开发指南](development-guide.md)，安装更新见[部署说明](../deployment/fnos-ghcr-docker.md)。
+类型：命令手册。稳定版命令适用v1.4.0；命令在项目根目录执行。环境与工程约束见[开发指南](development-guide.md)，安装更新见[部署说明](../deployment/fnos-ghcr-docker.md)。多连接开发版的[离线副本演练](cloud-drive/mc6-offline-rehearsal.md)不迁移或替换运行实例，不作为开发服务启动步骤。
 
 ## 1. 开发服务
 
@@ -16,10 +16,11 @@ npm.cmd run dev:windows -- status
 npm.cmd run dev:windows -- start
 ```
 
-显式需要改端口且目标端口空闲时：
+使用自定义端口时，状态和启动须传同一组端口。只在两个服务都停止、目标端口空闲且未被系统保留时执行下面的 `start`：
 
 ```powershell
-npm.cmd run dev:windows -- start -FrontendPort 5174 -BackendPort 8972
+npm.cmd run dev:windows -- status -FrontendPort 6061 -BackendPort 9070
+npm.cmd run dev:windows -- start -FrontendPort 6061 -BackendPort 9070
 ```
 
 仅经明确停服/重启要求执行，不能当成每次验证的准备步骤：
@@ -40,7 +41,9 @@ npm run dev:linux -- start
 
 Linux 自定义端口用 `FRONTEND_PORT=5174 BACKEND_PORT=8972 npm run dev:linux -- start`；stop/restart 同样需明确意图。Windows 的 `dev:start/dev:stop/dev:lan` 及 Linux 的旧启停别名保留兼容，新文档统一用带动作的管理入口。
 
-预期：前端5173、后端8970及前端 `/api/health` 代理均可达；健康接口返回 `status=ok` 和实际版本。日志/PID 在 `.codex/run-logs/`。端口监听不等于服务健康，脚本报告 running 后仍核对：
+当前开发版可在[服务端口设置](../manuals/service-ports.md)保存下次启动使用的端口。无参数启动优先读取应用设置；本节显示的显式参数及 Linux 环境变量为单次覆盖，不保存到数据库。状态查询优先查看上次启动记录，不把待重启配置当成当前监听。
+
+预期：当前前端、后端及前端 `/api/health` 代理均可达；两处健康接口返回 `status=ok` 和实际版本。日志/PID 在 `.codex/run-logs/`。端口监听不等于服务健康，以下为默认端口核对；自定义时替换两处端口：
 
 ```powershell
 (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173 -TimeoutSec 5).StatusCode

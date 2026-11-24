@@ -1,7 +1,4 @@
-"""FastAPI 应用入口模块。
-
-负责加载配置、初始化日志和数据库，并注册 API 路由。
-"""
+"""FastAPI 应用入口模块；导入工厂不初始化默认实例。"""
 
 from pathlib import Path
 import asyncio
@@ -17,6 +14,7 @@ from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.auth import require_authenticated_user
 from app.api.health import router as health_router
+from app.api.global_search import router as global_search_router
 from app.api.external_submission_blocks import router as external_submission_blocks_router
 from app.api.logs import router as logs_router
 from app.api.media_sources import router as media_sources_router
@@ -33,6 +31,9 @@ from app.api.tasks import router as tasks_router
 from app.api.users import router as users_router
 from app.api.background_jobs import router as background_jobs_router
 from app.api.cloud_drive import router as cloud_drive_router
+from app.api.cloud_connections import router as cloud_connections_router
+from app.api.cloud_diagnostics import router as cloud_diagnostics_router
+from app.api.cloud_read_protections import router as cloud_read_protections_router
 from app.core.config import AppSettings
 from app.core.config import load_settings
 from app.core.database import ensure_database
@@ -49,6 +50,7 @@ from app.service.settings_service import resolveRuntimeLogging
 from app.service.cloud_inventory_web_service import CloudInventoryWebRunner
 from app.service.cloud_directory_web_service import CloudDirectoryRunner
 from app.service.cloud_quarantine_web_service import CloudQuarantineRunner
+from app.service.cloud_diagnostic_worker_service import CloudDiagnosticRunner
 from app.web import mount_frontend
 
 logger = get_logger(__name__)
@@ -119,6 +121,7 @@ def create_app(
     cloudInventoryRunner = CloudInventoryWebRunner(settings)
     cloudDirectoryRunner = CloudDirectoryRunner(settings)
     cloudQuarantineRunner = CloudQuarantineRunner(settings)
+    cloudDiagnosticRunner = CloudDiagnosticRunner(settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -126,6 +129,7 @@ def create_app(
         cloudInventoryRunner.open()
         cloudDirectoryRunner.open()
         cloudQuarantineRunner.open()
+        cloudDiagnosticRunner.open()
         maintenance = asyncio.create_task(runMaintenanceLoop(settings, stop))
         scans = asyncio.create_task(runScanWorkerLoop(settings, stop))
         renames = asyncio.create_task(runRenameWorkerLoop(settings, stop))
@@ -136,6 +140,7 @@ def create_app(
             yield
         finally:
             stop.set()
+            await asyncio.to_thread(cloudDiagnosticRunner.close)
             await asyncio.to_thread(cloudInventoryRunner.close)
             await asyncio.to_thread(cloudDirectoryRunner.close)
             await asyncio.to_thread(cloudQuarantineRunner.close)
@@ -148,15 +153,20 @@ def create_app(
     app.state.cloudInventoryRunner = cloudInventoryRunner
     app.state.cloudDirectoryRunner = cloudDirectoryRunner
     app.state.cloudQuarantineRunner = cloudQuarantineRunner
+    app.state.cloudDiagnosticRunner = cloudDiagnosticRunner
     app.add_exception_handler(RequestValidationError, _validationExceptionHandler)
     app.add_exception_handler(StarletteHTTPException, _httpExceptionHandler)
     app.add_exception_handler(Exception, _unexpectedExceptionHandler)
     app.include_router(auth_router)
     private_dependencies = [Depends(require_authenticated_user())]
+    app.include_router(global_search_router, dependencies=private_dependencies)
     app.include_router(audit_router, dependencies=private_dependencies)
     app.include_router(users_router, dependencies=private_dependencies)
     app.include_router(background_jobs_router, dependencies=private_dependencies)
     app.include_router(cloud_drive_router, dependencies=private_dependencies)
+    app.include_router(cloud_connections_router, dependencies=private_dependencies)
+    app.include_router(cloud_diagnostics_router, dependencies=private_dependencies)
+    app.include_router(cloud_read_protections_router, dependencies=private_dependencies)
     app.include_router(health_router)
     app.include_router(media_sources_router, dependencies=private_dependencies)
     app.include_router(shared_protocols_router, dependencies=private_dependencies)
@@ -177,4 +187,10 @@ def create_app(
     return app
 
 
-app = create_app()
+def __getattr__(name: str) -> FastAPI:
+    if name != "app":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    # Uvicorn 解析 app.main:app 时才初始化，直接导入工厂的测试不会访问默认库。
+    application = create_app()
+    globals()["app"] = application
+    return application

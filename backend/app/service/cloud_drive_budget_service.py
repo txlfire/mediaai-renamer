@@ -214,6 +214,24 @@ def _session(connection, sessionId, now, *, active=True):
     return row
 
 
+def insertCloudReadSessionTx(settings, connection, *, requestId, requestHash, endpointHash, rootPath,
+                             actorId, maxRpc, durationSeconds, now, auditContext, contextId=None):
+    """仅写入调用者事务；来源、权限及全局准入由上层受理校验。"""
+    if connection.execute("SELECT COUNT(*) FROM cloud_drive_read_sessions").fetchone()[0] >= 1000:
+        raise CloudBudgetError("session_capacity_reached")
+    sessionId = str(uuid4())
+    columns = "id,request_id,request_hash,endpoint_hash,root_path,actor_id,max_rpc,status,expires_at,created_at,updated_at"
+    values = (sessionId, requestId, requestHash, endpointHash, rootPath, actorId, maxRpc, 'active',
+              now + durationSeconds, now, now)
+    if contextId is not None:
+        columns += ",context_id"
+        values += (contextId,)
+    connection.execute(f"INSERT INTO cloud_drive_read_sessions ({columns}) VALUES({','.join('?' for _ in values)})", values)
+    _audit(settings, connection, "approve_session", context=auditContext, targetId=sessionId,
+           detail={"maxRpc": maxRpc, "durationSeconds": durationSeconds, "networkAccess": False})
+    return dict(connection.execute("SELECT * FROM cloud_drive_read_sessions WHERE id=?", (sessionId,)).fetchone())
+
+
 def createCloudReadSession(settings, *, requestId, endpoint, rootPath, maxRpc, durationSeconds,
                            auditContext: AuditWriteContext):
     """仅内部批准记录；不连接远端、不保存端点明文或凭据，不创建扫描任务。"""
@@ -242,23 +260,20 @@ def createCloudReadSession(settings, *, requestId, endpoint, rootPath, maxRpc, d
         pool = _pool(settings, connection, now)
         if pool["state"] != "ready":
             raise CloudBudgetError("pool_paused")
-        if connection.execute("SELECT COUNT(*) FROM cloud_drive_read_sessions").fetchone()[0] >= 1000:
-            raise CloudBudgetError("session_capacity_reached")
-        sessionId = str(uuid4())
-        connection.execute("INSERT INTO cloud_drive_read_sessions "
-            "(id,request_id,request_hash,endpoint_hash,root_path,actor_id,max_rpc,status,expires_at,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,'active',?,?,?)", (sessionId, requestId, requestHash, endpointHash, rootPath,
-                actorId, maxRpc, now + durationSeconds, now, now))
-        _audit(settings, connection, "approve_session", context=auditContext, targetId=sessionId,
-               detail={"maxRpc": maxRpc, "durationSeconds": durationSeconds, "networkAccess": False})
-        return dict(connection.execute("SELECT * FROM cloud_drive_read_sessions WHERE id=?", (sessionId,)).fetchone())
+        return insertCloudReadSessionTx(settings, connection, requestId=requestId, requestHash=requestHash,
+            endpointHash=endpointHash, rootPath=rootPath, actorId=actorId, maxRpc=maxRpc,
+            durationSeconds=durationSeconds, now=now, auditContext=auditContext)
 
 
 def cloudBudgetStatus(settings, *, includeLeaseIdentity=False):
     with _connection(settings) as connection:
-        row = connection.execute("SELECT * FROM cloud_drive_budget_pool WHERE id=1").fetchone()
-        lease = connection.execute("SELECT * FROM cloud_drive_rpc_lease WHERE pool_id=1").fetchone()
-        directoryHeld = directoryExecutionHeld(connection)
+        return cloudBudgetStatusTx(settings, connection, includeLeaseIdentity=includeLeaseIdentity)
+
+
+def cloudBudgetStatusTx(settings, connection, *, includeLeaseIdentity=False):
+    row = connection.execute("SELECT * FROM cloud_drive_budget_pool WHERE id=1").fetchone()
+    lease = connection.execute("SELECT * FROM cloud_drive_rpc_lease WHERE pool_id=1").fetchone()
+    directoryHeld = directoryExecutionHeld(connection)
     if row is not None:
         _validatePool(row)
     if lease is not None:
@@ -320,42 +335,45 @@ def resumeCloudBudget(settings, *, expectedRevision, confirmRemoteIdle, auditCon
 
 def releaseDirectoryManualPause(settings, *, expectedRevision, confirmClientsStopped, confirmRemoteIdle, auditContext):
     """仅撤销目录维护期间的手动暂停意图；不释放目录保护、不发RPC。"""
+    with _connection(settings, write=True) as connection:
+        releaseDirectoryManualPauseTx(settings, connection, expectedRevision=expectedRevision,
+            confirmClientsStopped=confirmClientsStopped, confirmRemoteIdle=confirmRemoteIdle, auditContext=auditContext)
+    return cloudBudgetStatus(settings)
+
+
+def releaseDirectoryManualPauseTx(settings, connection, *, expectedRevision, confirmClientsStopped, confirmRemoteIdle, auditContext):
     _integer(expectedRevision, 0, 2**63 - 1)
     if confirmClientsStopped is not True or confirmRemoteIdle is not True:
         raise ValueError("须明确确认目录工作进程已退出且相关远端静止；原未知请求和保护槽继续保留")
-    with _connection(settings, write=True) as connection:
-        if auditContext.actor is None:
-            raise ValueError("管理预算必须关联用户")
-        _requireActor(connection, auditContext.actor.id, "settings:write")
-        now = _wallNow()
-        pool = _pool(settings, connection, now)
-        if pool["revision"] != expectedRevision:
-            raise CloudBudgetError("revision_conflict")
-        if pool["state"] != "paused" or pool["pause_reason"] != "manual_pause":
-            raise CloudBudgetError("manual_pause_required")
-        if now < pool["cooldown_until"]:
-            raise CloudBudgetError("cooldown_not_finished")
-        if connection.execute("SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1").fetchone():
-            raise CloudBudgetError("lease_requires_local_review")
-        originals = connection.execute("SELECT * FROM cloud_directory_executions WHERE slot_held=1").fetchall()
-        quarantine = connection.execute("SELECT * FROM cloud_quarantine_runs WHERE kind='move' AND slot_held=1").fetchall()
-        candidates = [(r, r["plan_id"]) for r in originals] + [(r, r["id"]) for r in quarantine]
-        if (len(candidates) != 1 or candidates[0][0]["worker_pid"] is not None
-                or candidates[0][0]["owner_host"] != cloudDriveHostKey() or candidates[0][0]["status"] != "review"
-                or connection.execute("SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 OR worker_pid IS NOT NULL LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM cloud_directory_rpc_intents WHERE phase='sending' LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM cloud_directory_recovery_rpcs WHERE phase='sending' LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE kind='observe' AND (slot_held=1 OR worker_pid IS NOT NULL) LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE phase='sending' LIMIT 1").fetchone()):
-            raise CloudBudgetError("directory_clients_require_review")
-        # 仍是paused，仅恢复申请可以在独立确认后取得新只读预算。
-        connection.execute("UPDATE cloud_drive_budget_pool SET pause_reason='request_incomplete',"
-            "revision=revision+1,updated_at=? WHERE id=1", (now,))
-        _audit(settings, connection, "release_directory_manual_pause", context=auditContext,
-            detail={"clientsStoppedConfirmed": True, "remoteIdleConfirmed": True,
-                "directorySlotsPreserved": True, "originalRpcChanged": False, "networkAccess": False},
-            targetId=candidates[0][1])
-    return cloudBudgetStatus(settings)
+    if auditContext.actor is None:
+        raise ValueError('管理预算必须关联用户')
+    _requireActor(connection, auditContext.actor.id, 'settings:write')
+    now = _wallNow()
+    pool = _pool(settings, connection, now)
+    if pool['revision'] != expectedRevision:
+        raise CloudBudgetError('revision_conflict')
+    if pool['state'] != 'paused' or pool['pause_reason'] != 'manual_pause':
+        raise CloudBudgetError('manual_pause_required')
+    if now < pool['cooldown_until']:
+        raise CloudBudgetError('cooldown_not_finished')
+    if connection.execute('SELECT 1 FROM cloud_drive_rpc_lease LIMIT 1').fetchone():
+        raise CloudBudgetError('lease_requires_local_review')
+    originals = connection.execute('SELECT * FROM cloud_directory_executions WHERE slot_held=1').fetchall()
+    quarantine = connection.execute("SELECT * FROM cloud_quarantine_runs WHERE kind='move' AND slot_held=1").fetchall()
+    candidates = [(r, r['plan_id']) for r in originals] + [(r, r['id']) for r in quarantine]
+    if (len(candidates) != 1 or candidates[0][0]['worker_pid'] is not None
+            or candidates[0][0]['owner_host'] != cloudDriveHostKey() or candidates[0][0]['status'] != 'review'
+            or connection.execute('SELECT 1 FROM cloud_directory_recoveries WHERE slot_held=1 OR worker_pid IS NOT NULL LIMIT 1').fetchone()
+            or connection.execute("SELECT 1 FROM cloud_directory_rpc_intents WHERE phase='sending' LIMIT 1").fetchone()
+            or connection.execute("SELECT 1 FROM cloud_directory_recovery_rpcs WHERE phase='sending' LIMIT 1").fetchone()
+            or connection.execute("SELECT 1 FROM cloud_quarantine_runs WHERE kind='observe' AND (slot_held=1 OR worker_pid IS NOT NULL) LIMIT 1").fetchone()
+            or connection.execute("SELECT 1 FROM cloud_quarantine_rpcs WHERE phase='sending' LIMIT 1").fetchone()):
+        raise CloudBudgetError('directory_clients_require_review')
+    # 仍是paused，仅恢复申请可以在独立确认后取得新只读预算。
+    connection.execute("UPDATE cloud_drive_budget_pool SET pause_reason='request_incomplete',revision=revision+1,updated_at=? WHERE id=1", (now,))
+    _audit(settings, connection, 'release_directory_manual_pause', context=auditContext,
+        detail={'clientsStoppedConfirmed': True, 'remoteIdleConfirmed': True, 'directorySlotsPreserved': True,
+                'originalRpcChanged': False, 'networkAccess': False}, targetId=candidates[0][1])
 
 
 def resumeCloudReadSession(settings, sessionId, *, auditContext, confirmContinue):
@@ -391,6 +409,8 @@ class CloudDriveAdmission:
 
     def _take(self, deadline):
         with _connection(self.settings, deadline=deadline, write=True, allowBusy=True) as connection:
+            from app.service.cloud_bound_runtime_service import requireBoundSend
+            requireBoundSend(self.settings, connection, self.sessionId, network=True)
             if directoryExecutionHeld(connection):
                 raise CloudBudgetError("directory_execution_held")
             now = _wallNow()
@@ -463,6 +483,8 @@ class CloudRpcPermit:
             raise CloudBudgetError("rpc_not_allowed")
         owner = self.admission
         with _connection(owner.settings, deadline=self.deadline, write=True) as connection:
+            from app.service.cloud_bound_runtime_service import requireBoundSend
+            requireBoundSend(owner.settings, connection, owner.sessionId, network=True, method=method)
             now = _wallNow()
             pool = _pool(owner.settings, connection, now)
             row = self._lease(connection)
@@ -475,10 +497,34 @@ class CloudRpcPermit:
                 raise CloudBudgetError("wait_timeout")
             connection.execute("UPDATE cloud_drive_rpc_lease SET phase='sending',rpc_method=? WHERE id=?", (method, self.leaseId))
             connection.execute("UPDATE cloud_drive_read_sessions SET used_rpc=used_rpc+1,updated_at=? WHERE id=?", (now, owner.sessionId))
+            from app.service.cloud_connection_diagnostic_service import BoundDiagnosticSettings
+            if isinstance(owner.settings, BoundDiagnosticSettings):
+                connection.execute('UPDATE cloud_connection_diagnostics SET used_rpc=used_rpc+1,updated_at=? WHERE id=?',
+                                   (now, owner.settings.resourceId))
             connection.execute("UPDATE cloud_drive_budget_pool SET last_started_at=? WHERE id=1", (now,))
 
     def markSucceeded(self):
         self.succeeded = True
+
+    def markTransport(self):
+        """TLS本地握手占同一槽并遵守间隔，但不伪记应用RPC。"""
+        owner = self.admission
+        from app.service.cloud_connection_diagnostic_service import BoundDiagnosticSettings
+        if not isinstance(owner.settings, BoundDiagnosticSettings):
+            raise CloudBudgetError('rpc_not_allowed')
+        with _connection(owner.settings, deadline=self.deadline, write=True) as connection:
+            from app.service.cloud_bound_runtime_service import requireBoundSend
+            requireBoundSend(owner.settings, connection, owner.sessionId, network=True)
+            now = _wallNow()
+            pool, lease = _pool(owner.settings, connection, now), self._lease(connection)
+            _session(connection, owner.sessionId, now)
+            if lease['phase'] != 'reserved' or pool['state'] != 'ready':
+                raise CloudBudgetError('pool_or_lease_not_ready')
+            if pool['last_started_at'] is not None and now < pool['last_started_at'] + pool['min_interval']:
+                raise CloudBudgetError('spacing_changed_before_send')
+            if time.monotonic() >= self.deadline:
+                raise CloudBudgetError('wait_timeout')
+            connection.execute('UPDATE cloud_drive_budget_pool SET last_started_at=? WHERE id=1', (now,))
 
     def markIncomplete(self, reason):
         self.succeeded = False
@@ -554,6 +600,8 @@ def cloudDriveHostKey():
 
 def requireCloudSessionForWork(settings, connection, sessionId):
     """任务创建/领取前核对批准；不刷新期限、计数或自动回收租约。"""
+    from app.service.cloud_bound_runtime_service import requireBoundSend
+    requireBoundSend(settings, connection, sessionId)
     row = _session(connection, sessionId, _wallNow(), active=False)
     now = _wallNow()
     if row["status"] != "active" or now >= row["expires_at"] or row["used_rpc"] >= row["max_rpc"]:

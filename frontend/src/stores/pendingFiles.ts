@@ -13,7 +13,8 @@ import {
   type PendingFile,
   type PendingFileFilters,
 } from "../api/client";
-import { zhCnMessages as messages } from "../locales/zh-CN";
+import { getInterfaceMessages } from "../locales/interfaceLanguage";
+import { localizedRequestError } from "../locales/requestErrorText";
 
 export const usePendingFileStore = defineStore("pendingFiles", {
   state: () => ({
@@ -66,10 +67,11 @@ export const usePendingFileStore = defineStore("pendingFiles", {
         if (!submitted || (!this.currentMoveTask && [400, 401, 403, 404, 422].includes(response?.status ?? 0))) {
           this.moveUncertain = false;
           this.moveRequestId = null;
-          this.moveError = typeof response?.data?.detail === "string" ? response.data.detail : messages.errors.unknown;
+          this.moveError = localizedRequestError(error)
+            ?? (typeof response?.data?.detail === "string" ? response.data.detail : getInterfaceMessages().errors.unknown);
         } else {
           this.moveUncertain = true;
-          this.moveError = messages.renamePreviews.pendingFiles.queryBeforeRetry;
+          this.moveError = getInterfaceMessages().renamePreviews.pendingFiles.queryBeforeRetry;
         }
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
@@ -126,7 +128,7 @@ if (sessionGeneration === getSessionGeneration()) {
         await sessionRequest(this.pollPendingMove(task.id, version, onProgress), sessionGeneration);
       } catch {
         if (sessionGeneration !== getSessionGeneration()) throw new SessionChangedError();
-        if (version === this.moveVersion) this.moveError = messages.renamePreviews.pendingFiles.queryBeforeRetry;
+        if (version === this.moveVersion) this.moveError = getInterfaceMessages().renamePreviews.pendingFiles.queryBeforeRetry;
       } finally {
 if (sessionGeneration === getSessionGeneration()) {
           if (version === this.moveVersion) this.moveLoading = false;
